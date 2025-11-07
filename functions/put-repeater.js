@@ -1,21 +1,21 @@
 export async function onRequest(context) {
   const request = context.request;
   const data = await request.json();
-  const store = context.env.SAMPLES;
+  const store = context.env.REPEATERS;
 
-  const time = Date.now();
+  const id = data.id;
+  const name = data.name;
   const lat = parseFloat(data.lat);
   const lon = parseFloat(data.lon);
   const path = data.path ?? [];
 
-  if (isNaN(lat) || isNaN(lon)) {
+  if (isNaN(lat) || isNaN(lon) || id.length !== 2) {
     throw new Error(`Invalid data ${JSON.stringify(data)}`);
   }
 
-  const key = `${time}|${lat}|${lon}`;
+  const key = `${id}|${lat}|${lon}`;
   await store.put(key, "", {
-    metadata: { time: time, lat: lat, lon: lon, path: path },
-    expirationTtl: 15552000  // 180 days
+    metadata: { id: id, name: name, lat: lat, lon: lon, path: path }
   });
 
   return new Response('OK');

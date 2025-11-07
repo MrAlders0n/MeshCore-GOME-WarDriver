@@ -2,12 +2,20 @@
 <html lang="en">
 
 <head>
-  <title>Add Sample</title>
+  <title>Add Repeater</title>
   <link rel="stylesheet" type="text/css" href="content/forms.css" />
 </head>
 
 <body>
   <div>
+    <div class="form-item">
+      <label for="id">Id:</label>
+      <input type="text" id="id" name="id">
+    </div>
+    <div class="form-item">
+      <label for="name">Name:</label>
+      <input type="text" id="name" name="name">
+    </div>
     <div class="form-item">
       <label for="lat">Lat:</label>
       <input type="text" id="lat" name="lat">
@@ -21,7 +29,7 @@
       <input type="text" id="path" name="path">
     </div>
     <div class="form-item">
-      <button tabindex="0" id="submit" name="submit" onclick="putSample()">Submit</button>
+      <button tabindex="0" id="submit" name="submit" onclick="putRepeater()">Submit</button>
     </div>
   </div>
   <div id="status">
@@ -29,6 +37,8 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const idTxt = $('id');
+    const nameTxt = $('name');
     const latTxt = $('lat');
     const lonTxt = $('lon');
     const pathTxt = $('path');
@@ -43,16 +53,22 @@
     }
 
     function clearForm() {
+      idTxt.value = '';
+      nameTxt.value = '';
       latTxt.value = '';
       lonTxt.value = '';
       pathTxt.value = '';
     }
 
-    async function putSample() {
+    async function putRepeater() {
+      const idVal = idTxt.value;
+      const nameVal = nameTxt.value;
       const latVal = latTxt.value;
       const lonVal = lonTxt.value;
       const pathVal = pathTxt.value;
       const payload = {
+        id: idVal,
+        name: nameVal,
         lat: parseFloat(latVal),
         lon: parseFloat(lonVal),
         path: pathVal !== "" ? pathVal.split(',') : []
@@ -63,10 +79,15 @@
         return;
       }
 
+      if (idVal.length !== 2) {
+        setStatus("Invalid id");
+        return;
+      }
+
       console.log(`putting ${payload}`);
       setStatus('');
 
-      const resp = await fetch('/put-sample', {
+      const resp = await fetch('/put-repeater', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -77,7 +98,7 @@
       if (!resp.ok) {
         setStatus('HTTP error ' + resp.status);
       } else {
-        setStatus('Sample saved!');
+        setStatus('Repeater saved!');
         clearForm();
       }
     }
