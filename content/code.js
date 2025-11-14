@@ -1,4 +1,4 @@
-import { ageInDays, getNearest } './shared.js'
+import { ageInDays, getNearest } from './shared.js'
 
 // Global Init
 const map = L.map('map', { worldCopyJump: true }).setView([47.76837, -122.06078], 10);
