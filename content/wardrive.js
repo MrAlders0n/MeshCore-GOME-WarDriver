@@ -30,9 +30,10 @@ function setStatus(text, color = null) {
 }
 
 function log(msg) {
-  const entry = document.createElement('pre');
-  entry.textContent = msg;
-  debugConsole.appendChild(entry);
+  // const entry = document.createElement('pre');
+  // entry.textContent = msg;
+  // debugConsole.appendChild(entry);
+
   console.log(msg);
 }
 
@@ -160,8 +161,9 @@ function getCurrentPosition() {
 async function acquireWakeLock() {
   // Bluefy-specfic -- it's a bit better when available.
   if ('setScreenDimEnabled' in navigator.bluetooth) {
-    navigator.bluetooth.setScreenDimEnabled(false);
-    log('setScreenDimEnabled(false)');
+    // This name is bad. setScreenDimEnabled(true) prevents screen locking.
+    navigator.bluetooth.setScreenDimEnabled(true);
+    log('setScreenDimEnabled(true)');
   } else {
     try {
       if ('wakeLock' in navigator) {
@@ -182,8 +184,8 @@ async function acquireWakeLock() {
 
 async function releaseWakeLock() {
   if ('setScreenDimEnabled' in navigator.bluetooth) {
-    navigator.bluetooth.setScreenDimEnabled(true);
-    log('setScreenDimEnabled(true)');
+    navigator.bluetooth.setScreenDimEnabled(false);
+    log('setScreenDimEnabled(false)');
   } else {
     if (state.wakeLock !== null) {
       state.wakeLock.release();
@@ -555,8 +557,8 @@ if ('bluetooth' in navigator) {
   navigator.bluetooth.addEventListener('backgroundstatechanged',
     (e) => {
       log(JSON.stringify(e, 2));
-      const isBackground = e.detail && e.detail.isBackground;
-      if (isBackground && state.autoMode) {
+      const isBackground = e.target.value;
+      if (isBackground == true && state.autoMode) {
         stopAutoMode();
         setStatus('Lost focus, Stopped');
       }
@@ -564,7 +566,6 @@ if ('bluetooth' in navigator) {
 }
 
 export async function onLoad() {
-  log('Loading...');
   loadLog();
   updateLastSampleInfo();
   updateAutoButton();
