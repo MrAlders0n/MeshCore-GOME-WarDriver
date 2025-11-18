@@ -113,7 +113,7 @@ function renderLog() {
       entry.mode ?? "",
       entry.distanceMiles != null ? entry.distanceMiles.toFixed(1) : "",
       entry.sentToMesh ? "✅" : skipped ? "⊗" : "❌",
-      entry.sentToService ? "✅" : skipped ? "⊗" : ❌",
+      entry.sentToService ? "✅" : skipped ? "⊗" : "❌",
       entry.notes ?? "",
     ];
 
