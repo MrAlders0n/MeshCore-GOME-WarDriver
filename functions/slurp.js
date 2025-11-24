@@ -1,5 +1,3 @@
-import { sampleKey } from '../content/shared.js'
-
 // Pull all the live KV data into the local emulator.
 export async function onRequest(context) {
   const url = new URL(context.request.url);
@@ -14,8 +12,8 @@ export async function onRequest(context) {
   const repeaterStore = context.env.REPEATERS;
 
   let work = data.samples.map(async s => {
-    const key = sampleKey(s.lat, s.lon);
-    const metadata = { time: s.time, lat: s.lat, lon: s.lon, path: s.path };
+    const key = s.hash;
+    const metadata = { time: s.time, path: s.path };
     await sampleStore.put(key, "", {
       metadata: metadata
     });

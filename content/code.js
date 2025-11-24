@@ -226,7 +226,7 @@ function updateSampleMarkerVisibility(s) {
   }
 }
 
-function updateRepeaterMarkerVisibility(m, forceVisible = false) {
+function updateRepeaterMarkerVisibility(m, forceVisible = false, highlight = false) {
   const el = m.getElement();
   if (forceVisible || shouldShowRepeater(m.repeater)) {
     el.classList.remove("hidden");
@@ -235,28 +235,55 @@ function updateRepeaterMarkerVisibility(m, forceVisible = false) {
     el.classList.add("hidden");
     el.classList.remove("leaflet-interactive");
   }
+
+  if (highlight) {
+    el.querySelector(".repeater-dot").classList.add("highlighted");
+  } else {
+    el.querySelector(".repeater-dot").classList.remove("highlighted");
+  }
 }
 
 function updateAllRepeaterMarkers() {
   repeaterLayer.eachLayer(m => updateRepeaterMarkerVisibility(m));
 }
 
+function updateCoverageMarkerHighlight(m, highlight = false) {
+  const el = m.getElement();
+  if (highlight) {
+    el.classList.add("highlighted-path");
+  } else {
+    el.classList.remove("highlighted-path");
+  }
+}
+
+function updateAllCoverageMarkers() {
+  coverageLayer.eachLayer(m => updateCoverageMarkerHighlight(m));
+}
+
 function updateAllEdgeVisibility(end) {
   const markersToOverride = [];
-  updateAllRepeaterMarkers(); // Reset visiblity to default.
+  const coverageToHighlight = [];
+
+  // Reset markers to default.
+  updateAllRepeaterMarkers();
+  updateAllCoverageMarkers();
 
   edgeLayer.eachLayer(e => {
     if (end !== undefined && e.ends.includes(end)) {
       // e.ends is [repeater, coverage]
       markersToOverride.push(e.ends[0].marker);
-      e.setStyle({ opacity: 0.8 });
+      coverageToHighlight.push(e.ends[1].marker);
+      e.setStyle({ opacity: 0.6 });
     } else {
       e.setStyle({ opacity: 0 });
     }
   });
 
   // Force connected repeaters to be shown.
-  markersToOverride.forEach(m => updateRepeaterMarkerVisibility(m, true));
+  markersToOverride.forEach(m => updateRepeaterMarkerVisibility(m, true, true));
+
+  // Highlight connected coverage markers.
+  coverageToHighlight.forEach(m => updateCoverageMarkerHighlight(m, true));
 }
 
 function renderNodes(nodes) {

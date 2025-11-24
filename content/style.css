@@ -10,6 +10,18 @@ body,
   pointer-events: none;
 }
 
+.highlighted {
+  border-color: #f09f2f !important;
+  background-color: #e37304  !important;
+  color: white !important;
+}
+
+.highlighted-path {
+  stroke: #f09f2f !important;
+  fill: #e37304 !important;
+  fill-opacity: 0.7 !important;
+}
+
 #map {
   position: absolute;
   inset: 0;
