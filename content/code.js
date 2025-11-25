@@ -107,7 +107,7 @@ function coverageMarker(coverage) {
   const color = coverage.heard > 0 ? '#398821' : '#E04748';
   const totalSamples = coverage.heard + coverage.lost;
   const heardRatio = coverage.heard / totalSamples;
-  const date = new Date(coverage.time);
+  const date = new Date(coverage.lastHeard);
   const opacity = 0.75 * sigmoid(totalSamples, 1.2, 2) * (heardRatio > 0 ? heardRatio : 1);
   const style = {
     color: color,
