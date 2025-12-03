@@ -164,6 +164,7 @@ function promptIgnoredId() {
 
   if (id && id.length !== 2) {
     alert(`Invalid id '${id}'. Must be 2 hex digits.`);
+    return;
   }
 
   state.ignoredId = id ? id : null;
