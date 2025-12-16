@@ -53,12 +53,19 @@
         <div class="flex flex-wrap items-center gap-2">
           <button id="connectBtn"
             class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-40">
-            Connect via BLE
+            Connect
           </button>
-          <button id="disconnectBtn" disabled
-            class="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-sm font-medium disabled:opacity-40">
-            Disconnect
-          </button>
+          <div id="pingButtons" class="ml-auto flex items-center gap-2">
+            <button id="sendPingBtn"
+              disabled
+              class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium disabled:opacity-40">
+              Send Ping
+            </button>
+            <button id="autoToggleBtn"
+              disabled
+              class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium disabled:opacity-40">
+              Start Auto Ping
+            </button>
         </div>
         <div class="text-xs italic text-slate-400">
           <span>Requires Bluetooth &amp; Location permissions.</span>
