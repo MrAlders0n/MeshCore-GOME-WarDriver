@@ -291,5 +291,5 @@ export async function onLoad() {
     }
   });
 
-   // Early location permission (optional)
-  try { await getCurrentPosition(); } catch { /* prompt later */ }
+  // Prompt location permission early (optional)
+  try { await getCurrentPosition(); } catch { /* will prompt at first send */ }
