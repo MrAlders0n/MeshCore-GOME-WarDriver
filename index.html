@@ -40,40 +40,42 @@
         </h1>
       </header>
 
-      <!-- Status and Controls -->
-      <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-3">
-        <div class="grid grid-cols-2 gap-2 text-sm">
-          <div>Status: <span id="status" class="font-semibold text-red-300">Disconnected</span></div>
-          <div>Device: <span id="deviceInfo" class="text-slate-300">—</span></div>
-        </div>
-        <div class="grid grid-cols-2 gap-2 text-sm">
-          <div>Channel: <span id="channelInfo" class="text-slate-300">#wardriving</span></div>
-          <div>Interval: <span class="text-slate-300">30s</span></div>
-        </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <button id="connectBtn"
-            class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-40">
-            Connect
-          </button>
-          <div id="pingButtons" class="ml-auto flex items-center gap-2">
-            <button id="sendPingBtn"
-              disabled
-              class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium disabled:opacity-40">
-              Send Ping
-            </button>
-            <button id="autoToggleBtn"
-              disabled
-              class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium disabled:opacity-40">
-              Start Auto Ping
-            </button>
-        </div>
-        <div class="text-xs italic text-slate-400">
-          <span>Requires Bluetooth &amp; Location permissions.</span>
-        </div>
-        <div class="text-xs italic text-slate-400">
-          <span>Must remain in foreground with screen on and unlocked.</span>
-        </div>
-      </section>
+
+     <!-- Status and Controls -->
+     <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-3">
+       <div class="grid grid-cols-2 gap-2 text-sm">
+         <div>Status: <span id="status" class="font-semibold text-red-300">Disconnected</span></div>
+         <div>Device: <span id="deviceInfo" class="text-slate-300">—</span></div>
+       </div>
+       <div class="grid grid-cols-2 gap-2 text-sm">
+         <div>Channel: <span id="channelInfo" class="text-slate-300">#wardriving</span></div>
+         <div>Interval: <span class="text-slate-300">30s</span></div>
+       </div>
+       <!-- Buttons row: all side by side -->
+       <div class="flex flex-wrap items-center gap-2 justify-start">
+         <button id="connectBtn"
+           class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-40">
+           Connect
+         </button>
+         <button id="sendPingBtn"
+           disabled
+           class="px-3 py-1.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium disabled:opacity-40">
+           Send Ping
+         </button>
+         <button id="autoToggleBtn"
+           disabled
+           class="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium disabled:opacity-40">
+           Start Auto Ping
+         </button>
+       </div>
+       <!-- Text under buttons -->
+       <div class="text-xs italic text-slate-400 mt-2">
+         <span>Requires Bluetooth &amp; Location permissions.</span>
+       </div>
+       <div class="text-xs italic text-slate-400">
+         <span>Must remain in foreground with screen on and unlocked.</span>
+       </div>
+     </section>
       
       <!-- Session ping log -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">     
