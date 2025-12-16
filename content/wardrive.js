@@ -174,11 +174,13 @@ async function sendPing(manual = false) {
     setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
     if (lastPingEl) lastPingEl.textContent = `${nowStr} — ${payload}`;
 
+    // Session log
     if (sessionPingsEl) {
       const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
-      sessionPingsEl.textContent = sessionPingsEl.textContent
-        ? sessionPingsEl.textContent + "\n" + line
-        : line;
+      const li = document.createElement('li');
+      li.textContent = line;
+      sessionPingsEl.appendChild(li);
+       // Auto-scroll to bottom when a new entry arrives
       sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
     }
   } catch (e) {
