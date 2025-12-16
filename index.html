@@ -6,53 +6,21 @@
   <title>MeshCore Wardrive (Ottawa)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="description" content="Minimal MeshCore Wardrive — BLE companion ping to #wardriving every 30s">
-  <link rel="manifest" href="content/wardrive.json">
-  <link rel="icon" href="content/wardrive.png">
-  <link rel="stylesheet" href="content/tailwind.css">
+  content/wardrive.json
+  content/wardrive.png
+  content/tailwind.css
 </head>
 <body class="bg-slate-900 text-slate-100">
   <main class="min-h-screen flex items-start justify-center p-4">
     <div class="w-full max-w-xl space-y-4">
 
-      <!-- Header and Attribution -->
+      <!-- Header -->
       <header class="space-y-1">
         <h1 class="text-2xl font-semibold flex items-center gap-2">
-          <img src="content/wardrive.png" alt="Wardrive Logo" class="h-8 w-8 inline-block mr-2" />
+          content/wardrive.png
           MeshCore Wardrive (Ottawa)
         </h1>
-        <div class="text-xs italic text-slate-400">
-          <span>
-            This project is a fork of
-            <a class="underline" target="_blank" href="https://github.com/kallanreed/mesh-map">kallanreed/mesh-map</a>.
-            <strong>MrAlders0n</strong> is not the original creator; this version has been
-            modified to work with the Ottawa-built
-            <a class="underline" target="_blank" href="https://meshmapper.net">meshmapper.net</a>.
-          </span>
-        </div>
-        <div class="text-xs italic text-slate-400">
-          <span>Only for <a class="underline" target="_blank" href="https://ottawamesh.ca">YOW region</a>.</span>
-          <span>See <a class="underline" target="_blank" href="/howto">howto</a> for more info.</span>
-        </div>
       </header>
-
-      <!-- Info Blocks -->
-      <div class="text-xs italic text-slate-400">
-        Sends location to <span class="font-mono">#wardriving</span> to build the
-        <a class="underline" target="_blank" href="/">coverage map</a>.
-      </div>
-      <div class="text-xs italic text-slate-400">
-        <span>Requires Bluetooth &amp; Location permissions.</span>
-      </div>
-      <div class="text-xs italic text-slate-400">
-        <span>Must remain in foreground with screen on and unlocked.</span>
-      </div>
-      <div class="text-xs italic text-slate-400">
-        <span>
-          Does not work in Safari. Use
-          <a class="underline" target="_blank"
-            href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055">Bluefy on iOS</a>.
-        </span>
-      </div>
 
       <!-- Status and Controls -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-3">
@@ -84,6 +52,36 @@
         <div class="text-sm">Last Ping</div>
         <div id="lastPing" class="text-xs text-slate-400">None</div>
       </section>
+
+      <!-- Info & Attribution Block at Bottom -->
+      <footer class="mt-8 space-y-2">
+        <div class="text-xs italic text-slate-400">
+          This project is a fork of <a class="underline" target="_blank" href="https://github.com/kallanreed/mesh-map">kallanreed/mesh-map</a>.
+          MrAlders0n is not the original creator; this version has been modified to work with the Ottawa-built
+          <a class="underline" target="_blank" href="https://meshmapper.net">meshmapper.net</a>.
+        </div>
+        <div class="text-xs italic text-slate-400">
+          Only for <a class="underline" target="_blank" href="https://ottawamesh.ca">YOW region</a>.
+          See <a class="underline" target="_blank" href="/howto">howto</a> for more info.
+        </div>
+        <div class="text-xs italic text-slate-400">
+          Sends location to <span class="font-mono">#wardriving</span> to build the
+          <a class="underline" target="_blank" href="/coverage">coverage map</a>.
+        </div>
+        <div class="text-xs italic text-slate-400">
+          <span>Requires Bluetooth &amp; Location permissions.</span>
+        </div>
+        <div class="text-xs italic text-slate-400">
+          <span>Must remain in foreground with screen on and unlocked.</span>
+        </div>
+        <div class="text-xs italic text-slate-400">
+          <span>
+            Does not work in Safari. Use
+            <a class="underline" target="_blank"
+              href="https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055">Bluefy on iOS</a>.
+          </span>
+        </div>
+      </footer>
 
     </div>
   </main>
