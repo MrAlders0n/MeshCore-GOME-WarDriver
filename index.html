@@ -68,6 +68,29 @@
            Start Auto Ping
          </button>
        </div>
+
+       <!-- Auto Ping Interval selector -->
+       <div class="text-sm flex items-center gap-2 mt-2">
+         <label for="intervalSelect" class="text-slate-300">Auto interval:</label>
+         <select id="intervalSelect"
+                 class="bg-slate-900/70 border border-slate-600 rounded-lg px-2 py-1.5 text-sm">
+           <option value="15">15s</option>
+           <option value="30" selected>30s</option>
+           <option value="60">60s</option>
+         </select>
+       </div>
+       
+       <!-- Radio Power selector -->
+       <div class="text-sm flex items-center gap-2 mt-2">
+         <label for="powerSelect" class="text-slate-300">Radio power:</label>
+         <select id="powerSelect"
+                 class="bg-slate-900/70 border border-slate-600 rounded-lg px-2 py-1.5 text-sm">
+           <option value="">Unspecified</option>
+           <option value="0.3w">0.3w</option>
+           <option value="0.6w">0.6w</option>
+           <option value="1.0w">1.0w</option>
+          </select>
+
        <!-- Text under buttons -->
        <div class="text-xs italic text-slate-400 mt-2">
          <span>Requires Bluetooth &amp; Location permissions.</span>
