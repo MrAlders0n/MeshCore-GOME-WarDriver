@@ -1,31 +1,35 @@
 
 // Minimal Wardrive sender with wake locks:
 // - Connect to MeshCore Companion via Web Bluetooth (BLE)
-// - Send pings as "@[MapperBot]<LAT LON>" to the configured channel
-// - Manual "Send Ping" and Auto mode (every 30s)
+// - Send pings as "@[MapperBot]<LAT LON>[ <power> ]" (power only if specified)
+// - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
 import { WebBleConnection } from "/content/mc/index.js"; // your BLE client
 
 // ---- Config ----
 const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if needed
-const PING_INTERVAL_MS = 30 * 1000;
+const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailable
 const PING_PREFIX      = "@[MapperBot]";
 const WARDROVE_KEY     = new Uint8Array([
   0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
 ]);
 
-// ---- DOM refs (from your index.html; unchanged) ----
+// ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
-const statusEl      = $("status");
-const deviceInfoEl  = $("deviceInfo");
-const channelInfoEl = $("channelInfo");
-const connectBtn    = $("connectBtn");
-const sendPingBtn   = $("sendPingBtn");
-const autoToggleBtn = $("autoToggleBtn");
-const lastPingEl    = $("lastPing");
-const sessionPingsEl= document.getElementById("sessionPings"); // optional
+const statusEl       = $("status");
+const deviceInfoEl   = $("deviceInfo");
+const channelInfoEl  = $("channelInfo");
+const connectBtn     = $("connectBtn");
+const sendPingBtn    = $("sendPingBtn");
+const autoToggleBtn  = $("autoToggleBtn");
+const lastPingEl     = $("lastPing");
+const sessionPingsEl = document.getElementById("sessionPings"); // optional
+
+// NEW: selectors
+const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
+const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
 
 // ---- State ----
 const state = {
@@ -33,8 +37,8 @@ const state = {
   channel: null,
   autoTimerId: null,
   running: false,
-  wakeLock: null,          // holds the wake lock object (if supported)
-  bluefyLockEnabled: false // tracks Bluefy screen-dim setting
+  wakeLock: null,
+  bluefyLockEnabled: false
 };
 
 // ---- UI helpers ----
@@ -62,7 +66,6 @@ function updateAutoButton() {
 
 // ---- Wake Lock helpers ----
 async function acquireWakeLock() {
-  // Bluefy: prevents screen dim/lock when available
   if (navigator.bluetooth && typeof navigator.bluetooth.setScreenDimEnabled === "function") {
     try {
       navigator.bluetooth.setScreenDimEnabled(true);
@@ -73,15 +76,11 @@ async function acquireWakeLock() {
       console.warn("Bluefy setScreenDimEnabled failed:", e);
     }
   }
-
-  // Standard Wake Lock API
   try {
     if ("wakeLock" in navigator && typeof navigator.wakeLock.request === "function") {
       state.wakeLock = await navigator.wakeLock.request("screen");
       console.log("Wake lock acquired");
-      state.wakeLock.addEventListener?.("release", () => {
-        console.log("Wake lock released");
-      });
+      state.wakeLock.addEventListener?.("release", () => console.log("Wake lock released"));
     } else {
       console.log("Wake Lock API not supported");
     }
@@ -89,9 +88,7 @@ async function acquireWakeLock() {
     console.error(`Could not obtain wake lock: ${err.name}, ${err.message}`);
   }
 }
-
 async function releaseWakeLock() {
-  // Bluefy off
   if (state.bluefyLockEnabled && navigator.bluetooth && typeof navigator.bluetooth.setScreenDimEnabled === "function") {
     try {
       navigator.bluetooth.setScreenDimEnabled(false);
@@ -101,8 +98,6 @@ async function releaseWakeLock() {
       console.warn("Bluefy setScreenDimEnabled(false) failed:", e);
     }
   }
-
-  // Standard Wake Lock release
   try {
     if (state.wakeLock) {
       await state.wakeLock.release?.();
@@ -147,6 +142,21 @@ async function ensureChannel() {
   return ch;
 }
 
+// ---- Helpers: interval & payload ----
+function getSelectedIntervalMs() {
+  const s = intervalSelect?.value ? Number(intervalSelect.value) : DEFAULT_INTERVAL_S;
+  const clamped = [15, 30, 60].includes(s) ? s : DEFAULT_INTERVAL_S;
+  return clamped * 1000;
+}
+
+function buildPayload(lat, lon) {
+  const coordsStr = `${lat.toFixed(5)} ${lon.toFixed(5)}`; // "LAT LON"
+  const power = powerSelect?.value ?? "";
+  // Append power only if specified; wrap in square brackets at the very end.
+  const suffix = power ? ` [${power}]` : "";
+  return `${PING_PREFIX}<${coordsStr}>${suffix}`;
+}
+
 // ---- Ping ----
 async function sendPing(manual = false) {
   try {
@@ -154,10 +164,7 @@ async function sendPing(manual = false) {
     const lat = pos.coords.latitude;
     const lon = pos.coords.longitude;
 
-    // Exact format: "@[MapperBot]<GPS COORD>"
-    // Using "LAT LON" with a space; change to comma if needed.
-    const coordsStr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
-    const payload = `${PING_PREFIX} ${coordsStr}`;
+    const payload = buildPayload(lat, lon);
 
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
@@ -166,9 +173,8 @@ async function sendPing(manual = false) {
     setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
     if (lastPingEl) lastPingEl.textContent = `${nowStr} — ${payload}`;
 
-    // Optional session log
     if (sessionPingsEl) {
-      const line = `${nowStr}  ${coordsStr}`;
+      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
       sessionPingsEl.textContent = sessionPingsEl.textContent
         ? sessionPingsEl.textContent + "\n" + line
         : line;
@@ -202,11 +208,12 @@ function startAutoPing() {
   // Acquire wake lock for auto mode
   acquireWakeLock().catch(console.error);
 
-  // First ping immediately, then every 30s
+  // First ping immediately, then at selected interval
   sendPing(false).catch(console.error);
+  const intervalMs = getSelectedIntervalMs();
   state.autoTimerId = setInterval(() => {
     sendPing(false).catch(console.error);
-  }, PING_INTERVAL_MS);
+  }, intervalMs);
 }
 
 // ---- BLE connect / disconnect ----
@@ -238,7 +245,7 @@ async function connect() {
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
-      stopAutoPing();           // ensures wake lock is released
+      stopAutoPing();
       enableControls(false);
       updateAutoButton();
     });
@@ -250,10 +257,9 @@ async function connect() {
   }
 }
 
-// ---- Page visibility: release when hidden, reacquire on return ----
+// ---- Page visibility ----
 document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
-    // On hidden, stop auto mode and release lock
     if (state.running) {
       stopAutoPing();
       setStatus("Lost focus, auto mode stopped", "text-amber-300");
@@ -261,9 +267,7 @@ document.addEventListener("visibilitychange", async () => {
       releaseWakeLock();
     }
   } else {
-    // On visible, if user left auto mode on previously, they can re-start it;
-    // we do not auto restart to avoid surprise behavior.
-    // You can auto-reacquire wake lock here if state.running is true.
+    // On visible again, user can manually re-start Auto.
   }
 });
 
@@ -284,6 +288,5 @@ export async function onLoad() {
     }
   });
 
-  // Prompt location permission early (optional)
-  try { await getCurrentPosition(); } catch { /* will prompt at first send */ }
-}
+   // Early location permission (optional)
+  try { await getCurrentPosition(); } catch { /* prompt later */ }
