@@ -46,12 +46,21 @@
           Requires Bluetooth & Location permissions. Keep this tab in the foreground.
         </div>
       </section>
-
+      
       <!-- Last ping info -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
         <div class="text-sm">Last Ping</div>
         <div id="lastPing" class="text-xs text-slate-400">None</div>
-      </section>
+      
+        <!-- Session ping log -->
+        <div class="mt-3">
+          <div class="text-sm">Session Pings</div>
+          <div id="sessionPings"
+               class="text-xs text-slate-400 font-mono whitespace-pre-wrap leading-5 max-h-48 overflow-y-auto border border-slate-700/70 rounded-lg p-2 bg-slate-900/50">
+            <!-- one line per ping will be appended here -->
+          </div>
+        </div>
+      </
 
       <!-- Info & Attribution Block at Bottom -->
       <footer class="mt-8 space-y-2">
