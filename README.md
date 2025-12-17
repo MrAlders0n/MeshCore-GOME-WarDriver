@@ -60,6 +60,13 @@ Configure radio power for accurate coverage data:
 - **Timestamps and coordinates** for every ping
 - Track your wardriving session in real-time
 
+### 📡 Repeater Tracking
+- **Live repeater detection** via RX_LOG monitoring
+- See which **repeaters heard your pings**
+- **SNR and RSSI values** for each repeater echo
+- **Path visualization** showing the route taken
+- Automatic echo detection and deduplication
+
 ---
 
 ## 📱 Platform Support

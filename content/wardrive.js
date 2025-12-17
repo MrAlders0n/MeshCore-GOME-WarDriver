@@ -398,7 +398,7 @@ function updateRepeatersDisplay() {
   // Display count
   const countEl = document.getElementById('repeatersCount');
   if (countEl) {
-    countEl.textContent = `${sortedEchoes.length} repeater${sortedEchoes.length !== 1 ? 's' : ''}`;
+    countEl.textContent = `(${sortedEchoes.length} repeater${sortedEchoes.length !== 1 ? 's' : ''} heard)`;
   }
 }
 
