@@ -440,9 +440,7 @@ async function sendPing(manual = false) {
     // Post to MeshMapper API after delay (fire-and-forget pattern: non-blocking, errors are logged inside the function)
     // Delay allows the ping to propagate through the mesh network before API post
     setTimeout(() => {
-      postToMeshMapperAPI(lat, lon).catch(err => {
-        console.error("Delayed API post failed:", err);
-      });
+      postToMeshMapperAPI(lat, lon);
     }, MESHMAPPER_API_DELAY_MS);
 
     // Only refresh coverage iframe if GPS accuracy is good
