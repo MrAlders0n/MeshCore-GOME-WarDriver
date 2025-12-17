@@ -44,7 +44,8 @@ const state = {
   wakeLock: null,
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
-  bluefyLockEnabled: false
+  bluefyLockEnabled: false,
+  gpsState: "idle" // "idle", "acquiring", "acquired", "error"
 };
 
 // ---- UI helpers ----
@@ -168,7 +169,7 @@ async function getCurrentPosition() {
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve(pos),
       (err) => reject(err),
-      { enableHighAccuracy: true, maximumAge: 1000, timeout: 8000 }
+      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
     );
   });
 }
@@ -176,20 +177,33 @@ function updateGpsUi() {
   if (!gpsInfoEl || !gpsAccEl) return;
 
   if (!state.lastFix) {
-    gpsInfoEl.textContent = "Waiting for fix";
-    gpsAccEl.textContent = "N/A";
+    // Show different messages based on GPS state
+    if (state.gpsState === "acquiring") {
+      gpsInfoEl.textContent = "Acquiring GPS fix...";
+      gpsAccEl.textContent = "Please wait";
+    } else if (state.gpsState === "error") {
+      gpsInfoEl.textContent = "GPS error - check permissions";
+      gpsAccEl.textContent = "N/A";
+    } else {
+      gpsInfoEl.textContent = "Waiting for fix";
+      gpsAccEl.textContent = "N/A";
+    }
     return;
   }
 
   const { lat, lon, accM, tsMs } = state.lastFix;
   const ageSec = Math.max(0, Math.round((Date.now() - tsMs) / 1000));
 
+  state.gpsState = "acquired";
   gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
   gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "N/A";
 }
 function startGeoWatch() {
   if (state.geoWatchId) return;
   if (!("geolocation" in navigator)) return;
+
+  state.gpsState = "acquiring";
+  updateGpsUi();
 
   state.geoWatchId = navigator.geolocation.watchPosition(
     (pos) => {
@@ -199,14 +213,16 @@ function startGeoWatch() {
         accM: pos.coords.accuracy,
         tsMs: Date.now(),
       };
+      state.gpsState = "acquired";
       updateGpsUi();
     },
     (err) => {
       console.warn("watchPosition error:", err);
+      state.gpsState = "error";
       // Keep UI honest if it fails
       updateGpsUi();
     },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
   );
 }
 function stopGeoWatch() {
@@ -218,6 +234,9 @@ async function primeGpsOnce() {
   // Start continuous watch so the UI keeps updating
   startGeoWatch();
 
+  state.gpsState = "acquiring";
+  updateGpsUi();
+
   try {
     const pos = await getCurrentPosition();
 
@@ -228,6 +247,7 @@ async function primeGpsOnce() {
       tsMs: Date.now(),
     };
 
+    state.gpsState = "acquired";
     updateGpsUi();
 
     // NEW: refresh the coverage map after first fix
@@ -238,6 +258,7 @@ async function primeGpsOnce() {
 
   } catch (e) {
     console.warn("primeGpsOnce failed:", e);
+    state.gpsState = "error";
     updateGpsUi();
   }
 }
@@ -395,6 +416,7 @@ async function connect() {
       updateAutoButton();
       stopGeoWatch();
       state.lastFix = null;
+      state.gpsState = "idle";
       updateGpsUi();
     });
 
