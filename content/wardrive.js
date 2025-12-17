@@ -26,6 +26,7 @@ const MESHMAPPER_API_KEY_PLACEHOLDER = "YOUR_API_KEY_HERE";
 // You do NOT need to edit this file - just set MESHMAPPER_API_KEY in GitHub Secrets
 const MESHMAPPER_API_KEY = window.MESHMAPPER_API_KEY || MESHMAPPER_API_KEY_PLACEHOLDER;
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
+const MESHMAPPER_API_DELAY_MS = 7000; // Delay before posting to API (allows ping to propagate through mesh)
 
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
@@ -436,11 +437,11 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
-    // Post to MeshMapper API after 7-second delay (fire-and-forget pattern: non-blocking, errors are logged inside the function)
+    // Post to MeshMapper API after delay (fire-and-forget pattern: non-blocking, errors are logged inside the function)
     // Delay allows the ping to propagate through the mesh network before API post
     setTimeout(() => {
       postToMeshMapperAPI(lat, lon);
-    }, 7000);
+    }, MESHMAPPER_API_DELAY_MS);
 
     // Only refresh coverage iframe if GPS accuracy is good
     if (accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M) {
