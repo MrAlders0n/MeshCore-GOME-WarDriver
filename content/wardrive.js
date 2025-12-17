@@ -471,6 +471,12 @@ async function sendPing(manual = false) {
       return;
     }
 
+    // Stop the countdown timer when sending an auto ping to avoid status conflicts
+    if (!manual && state.running) {
+      stopAutoCountdown();
+      setStatus("Sending auto ping...", "text-sky-300");
+    }
+
     let lat, lon, accuracy;
 
     // In auto mode, always use the most recent GPS coordinates from the watch
@@ -519,20 +525,21 @@ async function sendPing(manual = false) {
     // Start cooldown period after successful ping
     startCooldown();
 
+    // Update status after ping is sent
+    // Brief delay to show "Ping sent" status before moving to "Waiting for API post"
     setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
+    
+    setTimeout(() => {
+      if (state.connection) {
+        setStatus("Waiting for API post", "text-sky-300");
+      }
+    }, STATUS_UPDATE_DELAY_MS);
 
     // Schedule MeshMapper API call with 7-second delay (non-blocking)
     // Clear any existing timer first
     if (state.meshMapperTimer) {
       clearTimeout(state.meshMapperTimer);
     }
-    
-    // Update status to show we're waiting to post to API
-    setTimeout(() => {
-      if (state.connection) {
-        setStatus("Waiting to post to API", "text-sky-300");
-      }
-    }, STATUS_UPDATE_DELAY_MS);
 
     state.meshMapperTimer = setTimeout(async () => {
       // Capture accuracy in closure to ensure it's available in nested callback
