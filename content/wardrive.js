@@ -80,7 +80,9 @@ function scheduleCoverageRefresh(lat, lon) {
   if (coverageRefreshTimer) clearTimeout(coverageRefreshTimer);
 
   coverageRefreshTimer = setTimeout(() => {
-    coverageFrameEl.src = buildCoverageEmbedUrl(lat, lon);
+    const url = buildCoverageEmbedUrl(lat, lon);
+    console.log("Coverage iframe URL:", url);
+    coverageFrameEl.src = url;
   }, 5000);
 }
 
