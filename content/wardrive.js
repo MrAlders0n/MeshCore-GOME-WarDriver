@@ -406,9 +406,12 @@ function onLogRxDataReceived(data) {
       return;
     }
     
-    // Check if this message was sent recently (within last 30 seconds)
+    // Check if this message was sent recently
+    // Use configured ping interval or 4 seconds, whichever is smaller
+    const intervalMs = getSelectedIntervalMs();
+    const maxAge = Math.min(4000, intervalMs);
     const age = Date.now() - state.lastPingTimestamp;
-    if (age > 30000) {
+    if (age > maxAge) {
       // Too old, ignore
       return;
     }
