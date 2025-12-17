@@ -20,9 +20,10 @@ const WARDROVE_KEY     = new Uint8Array([
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
+// DO NOT EDIT: This placeholder is used to detect if the API key is configured
 const MESHMAPPER_API_KEY_PLACEHOLDER = "YOUR_API_KEY_HERE";
-// API key will be set via environment variable or default placeholder
-// To set the API key, create a config.js file or use GitHub Pages environment
+// The API key is automatically injected from GitHub Secrets during deployment via config.js
+// You do NOT need to edit this file - just set MESHMAPPER_API_KEY in GitHub Secrets
 const MESHMAPPER_API_KEY = window.MESHMAPPER_API_KEY || MESHMAPPER_API_KEY_PLACEHOLDER;
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
@@ -368,9 +369,7 @@ async function postToMeshMapperAPI(lat, lon) {
 
     // Use device name if available, otherwise use default
     const deviceText = deviceInfoEl?.textContent;
-    const whoIdentifier = deviceText && deviceText !== "—" 
-      ? deviceText 
-      : MESHMAPPER_DEFAULT_WHO;
+    const whoIdentifier = (deviceText && deviceText !== "—") ? deviceText : MESHMAPPER_DEFAULT_WHO;
 
     // Build API payload
     const payload = {

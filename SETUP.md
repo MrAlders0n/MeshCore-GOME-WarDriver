@@ -6,6 +6,10 @@ This guide explains how to configure the MeshMapper API key for automatic postin
 
 Every time a ping is sent via the MeshCore WarDriver, the application automatically posts the same data to the YOW MeshMapper API at `https://yow.meshmapper.net/wardriving-api.php`. This helps track whether messages were received on the mesh network.
 
+## Important: You Do NOT Need to Edit Code
+
+**You do not need to edit any code files to configure the API key.** The key is automatically injected during deployment from GitHub Secrets. Just follow the steps below to add the secret.
+
 ## Setting Up the API Key
 
 The API key needs to be configured as a GitHub Secret so it can be injected during deployment while keeping it secure.
