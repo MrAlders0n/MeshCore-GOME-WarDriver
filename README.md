@@ -107,7 +107,21 @@ Pings are sent to the wardriving MeshCore channel to build community coverage ma
 
 ## 🔐 MeshMapper API Integration
 
-This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh. The API key is securely stored in GitHub Secrets.
+This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh. 
+
+### How It Works
+- The API key is securely stored in GitHub repository secrets (`MESHMAPPER_API_KEY`)
+- During GitHub Pages deployment, the key is automatically injected into `content/config.js`
+- A cache-busting timestamp ensures browsers always load the latest version
+- Local development uses a placeholder that skips API posting
+
+### For Repository Maintainers
+To set up the API key:
+1. Go to repository **Settings** → **Secrets and variables** → **Actions**
+2. Add a secret named `MESHMAPPER_API_KEY` with your MeshMapper API key
+3. The next deployment will automatically use this key
+
+The deployment workflow includes validation steps to ensure the API key is properly set and prevents accidental deployment with placeholder values.
 
 ---
 
