@@ -22,11 +22,7 @@ const WARDROVE_KEY     = new Uint8Array([
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
-// DO NOT EDIT: This placeholder is used to detect if the API key is configured
-const MESHMAPPER_API_KEY_PLACEHOLDER = "YOUR_API_KEY_HERE";
-// The API key is automatically injected from GitHub Secrets during deployment via config.js
-// You do NOT need to edit this file - just set MESHMAPPER_API_KEY in GitHub Secrets
-const MESHMAPPER_API_KEY = window.MESHMAPPER_API_KEY || MESHMAPPER_API_KEY_PLACEHOLDER;
+const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
@@ -383,11 +379,6 @@ function buildPayload(lat, lon) {
 // ---- MeshMapper API ----
 async function postToMeshMapperAPI(lat, lon) {
   try {
-    // Skip if API key is placeholder (not configured)
-    if (!MESHMAPPER_API_KEY || MESHMAPPER_API_KEY === MESHMAPPER_API_KEY_PLACEHOLDER) {
-      console.log("MeshMapper API key not configured, skipping API post");
-      return;
-    }
 
     // Get current power setting
     const power = getCurrentPowerSetting();
