@@ -436,9 +436,11 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
-    // Post to MeshMapper API (fire-and-forget pattern: non-blocking, errors are logged inside the function)
-    // Not awaited intentionally to avoid delaying the ping flow
-    postToMeshMapperAPI(lat, lon);
+    // Post to MeshMapper API after 7-second delay (fire-and-forget pattern: non-blocking, errors are logged inside the function)
+    // Delay allows the ping to propagate through the mesh network before API post
+    setTimeout(() => {
+      postToMeshMapperAPI(lat, lon);
+    }, 7000);
 
     // Only refresh coverage iframe if GPS accuracy is good
     if (accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M) {
