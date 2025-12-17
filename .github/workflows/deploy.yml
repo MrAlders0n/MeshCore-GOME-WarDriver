@@ -46,7 +46,7 @@ jobs:
       - name: Add cache-busting to config.js script tag
         run: |
           BUILD_ID=$(date +%s)
-          sed -i "s|content/config.js|content/config.js?v=${BUILD_ID}|g" index.html
+          sed -i "s|<script src=\"content/config.js\"|<script src=\"content/config.js?v=${BUILD_ID}\"|g" index.html
           echo "Updated index.html with cache-busting parameter: v=${BUILD_ID}"
           grep "config.js" index.html
 
