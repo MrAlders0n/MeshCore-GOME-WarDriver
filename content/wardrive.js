@@ -634,8 +634,7 @@ function startAutoPing() {
     sendPing(false).catch(console.error);
   }, intervalMs);
   
-  // Start countdown for the next ping (will be updated after first ping completes)
-  startAutoCountdown(intervalMs);
+  // Countdown will be started after the first ping completes
 }
 
 // ---- BLE connect / disconnect ----
