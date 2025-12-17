@@ -12,6 +12,7 @@ const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if neede
 const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailable
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
+const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
 const WARDROVE_KEY     = new Uint8Array([
   0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
@@ -281,7 +282,7 @@ async function primeGpsOnce() {
     updateGpsUi();
 
     // Only refresh the coverage map if we have an accurate fix
-    if (state.lastFix.accM && state.lastFix.accM < 100) {
+    if (state.lastFix.accM && state.lastFix.accM < GPS_ACCURACY_THRESHOLD_M) {
       scheduleCoverageRefresh(
         state.lastFix.lat,
         state.lastFix.lon
@@ -375,8 +376,8 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
-    // Only refresh coverage iframe if GPS accuracy is good (< 100m)
-    if (accuracy && accuracy < 100) {
+    // Only refresh coverage iframe if GPS accuracy is good
+    if (accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M) {
       scheduleCoverageRefresh(lat, lon);
     }
 
