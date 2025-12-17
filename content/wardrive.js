@@ -13,18 +13,10 @@ const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailab
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
-const WARDROVE_KEY     = new Uint8Array([
-  0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
-  0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
-]);
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
-// DO NOT EDIT: This placeholder is used to detect if the API key is configured
-const MESHMAPPER_API_KEY_PLACEHOLDER = "YOUR_API_KEY_HERE";
-// The API key is automatically injected from GitHub Secrets during deployment via config.js
-// You do NOT need to edit this file - just set MESHMAPPER_API_KEY in GitHub Secrets
-const MESHMAPPER_API_KEY = window.MESHMAPPER_API_KEY || MESHMAPPER_API_KEY_PLACEHOLDER;
+const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
@@ -357,11 +349,6 @@ function buildPayload(lat, lon) {
 // ---- MeshMapper API ----
 async function postToMeshMapperAPI(lat, lon) {
   try {
-    // Skip if API key is placeholder (not configured)
-    if (!MESHMAPPER_API_KEY || MESHMAPPER_API_KEY === MESHMAPPER_API_KEY_PLACEHOLDER) {
-      console.log("MeshMapper API key not configured, skipping API post");
-      return;
-    }
 
     // Get current power setting
     const power = getCurrentPowerSetting();
