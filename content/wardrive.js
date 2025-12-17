@@ -451,8 +451,13 @@ async function connect() {
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
       updateAutoButton();
       try { await conn.syncDeviceTime?.(); } catch { /* optional */ }
-      await ensureChannel();
-      await primeGpsOnce();
+      try {
+        await ensureChannel();
+        await primeGpsOnce();
+      } catch (e) {
+        console.error("Channel setup failed:", e);
+        setStatus(e.message || "Channel setup failed", "text-red-300");
+      }
     });
 
     conn.on("disconnected", () => {
