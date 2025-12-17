@@ -36,11 +36,19 @@ jobs:
           {
             echo "// MeshMapper API Configuration"
             echo "// This file is auto-generated during deployment from GitHub Secrets"
+            echo "// Build timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             node -e "console.log('window.MESHMAPPER_API_KEY = ' + JSON.stringify(process.env.API_KEY) + ';')"
           } > content/config.js
           echo "Generated config.js content:"
           cat content/config.js
           echo "API key length: ${#API_KEY}"
+      
+      - name: Add cache-busting to config.js script tag
+        run: |
+          BUILD_ID=$(date +%s)
+          sed -i "s|content/config.js|content/config.js?v=${BUILD_ID}|g" index.html
+          echo "Updated index.html with cache-busting parameter: v=${BUILD_ID}"
+          grep "config.js" index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
