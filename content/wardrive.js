@@ -60,13 +60,51 @@ const state = {
   gpsAgeUpdateTimer: null, // Timer for updating GPS age display
   meshMapperTimer: null, // Timer for delayed MeshMapper API call
   cooldownEndTime: null, // Timestamp when cooldown period ends
-  cooldownUpdateTimer: null // Timer to re-enable controls after cooldown
+  cooldownUpdateTimer: null, // Timer to re-enable controls after cooldown
+  autoCountdownTimer: null, // Timer for auto-ping countdown display
+  nextAutoPingTime: null // Timestamp when next auto-ping will occur
 };
 
 // ---- UI helpers ----
 function setStatus(text, color = "text-slate-300") {
   statusEl.textContent = text;
   statusEl.className = `font-semibold ${color}`;
+}
+function updateAutoCountdownStatus() {
+  if (!state.running || !state.nextAutoPingTime) {
+    return;
+  }
+  
+  const remainingMs = state.nextAutoPingTime - Date.now();
+  if (remainingMs <= 0) {
+    setStatus("Sending auto ping...", "text-sky-300");
+    return;
+  }
+  
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  setStatus(`Waiting for next auto ping (${remainingSec}s)`, "text-slate-300");
+}
+function startAutoCountdown(intervalMs) {
+  // Stop any existing countdown
+  stopAutoCountdown();
+  
+  // Set the next ping time
+  state.nextAutoPingTime = Date.now() + intervalMs;
+  
+  // Update immediately
+  updateAutoCountdownStatus();
+  
+  // Update every second
+  state.autoCountdownTimer = setInterval(() => {
+    updateAutoCountdownStatus();
+  }, 1000);
+}
+function stopAutoCountdown() {
+  if (state.autoCountdownTimer) {
+    clearInterval(state.autoCountdownTimer);
+    state.autoCountdownTimer = null;
+  }
+  state.nextAutoPingTime = null;
 }
 function isInCooldown() {
   return state.cooldownEndTime && Date.now() < state.cooldownEndTime;
@@ -435,27 +473,42 @@ async function sendPing(manual = false) {
 
     let lat, lon, accuracy;
 
-    // Use the selected interval to determine if GPS fix is fresh enough
-    const intervalMs = getSelectedIntervalMs();
-    const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS; // Allow buffer beyond interval
-
-    if (state.lastFix && (Date.now() - state.lastFix.tsMs) < maxAge) {
+    // In auto mode, always use the most recent GPS coordinates from the watch
+    // In manual mode, get fresh GPS if needed
+    if (!manual && state.running) {
+      // Auto mode: use GPS watch data
+      if (!state.lastFix) {
+        // If no GPS fix yet in auto mode, skip this ping and wait for watch to acquire location
+        console.warn("Auto ping skipped: waiting for GPS fix");
+        setStatus("Waiting for GPS fix...", "text-amber-300");
+        return;
+      }
       lat = state.lastFix.lat;
       lon = state.lastFix.lon;
       accuracy = state.lastFix.accM;
     } else {
-      // Get fresh GPS coordinates
-      const pos = await getCurrentPosition();
-      lat = pos.coords.latitude;
-      lon = pos.coords.longitude;
-      accuracy = pos.coords.accuracy;
-      state.lastFix = {
-        lat,
-        lon,
-        accM: accuracy,
-        tsMs: Date.now(),
-      };
-      updateGpsUi();
+      // Manual mode: check if we have recent enough GPS data
+      const intervalMs = getSelectedIntervalMs();
+      const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS; // Allow buffer beyond interval
+
+      if (state.lastFix && (Date.now() - state.lastFix.tsMs) < maxAge) {
+        lat = state.lastFix.lat;
+        lon = state.lastFix.lon;
+        accuracy = state.lastFix.accM;
+      } else {
+        // Get fresh GPS coordinates for manual ping
+        const pos = await getCurrentPosition();
+        lat = pos.coords.latitude;
+        lon = pos.coords.longitude;
+        accuracy = pos.coords.accuracy;
+        state.lastFix = {
+          lat,
+          lon,
+          accM: accuracy,
+          tsMs: Date.now(),
+        };
+        updateGpsUi();
+      }
     }
 
     const payload = buildPayload(lat, lon);
@@ -500,7 +553,14 @@ async function sendPing(manual = false) {
         
         // Set status to idle after map update
         if (state.connection) {
-          setStatus("Idle", "text-slate-300");
+          // If in auto mode, start countdown. Otherwise, set to idle
+          if (state.running) {
+            // Restart the countdown for next auto ping
+            const intervalMs = getSelectedIntervalMs();
+            startAutoCountdown(intervalMs);
+          } else {
+            setStatus("Idle", "text-slate-300");
+          }
         }
       }, MAP_REFRESH_DELAY_MS);
       
@@ -539,6 +599,7 @@ function stopAutoPing(ignoreCheck = false) {
     clearInterval(state.autoTimerId);
     state.autoTimerId = null;
   }
+  stopAutoCountdown();
   stopGeoWatch();
   state.running = false;
   updateAutoButton();
@@ -572,6 +633,8 @@ function startAutoPing() {
   state.autoTimerId = setInterval(() => {
     sendPing(false).catch(console.error);
   }, intervalMs);
+  
+  // Countdown will be started after the first ping completes
 }
 
 // ---- BLE connect / disconnect ----
@@ -625,6 +688,7 @@ async function connect() {
         clearTimeout(state.cooldownUpdateTimer);
         state.cooldownUpdateTimer = null;
       }
+      stopAutoCountdown();
       state.cooldownEndTime = null;
       
       state.lastFix = null;
