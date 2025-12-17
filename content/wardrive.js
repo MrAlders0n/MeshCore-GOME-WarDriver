@@ -190,10 +190,10 @@ function updateGpsUi() {
       gpsAccEl.textContent = "Please wait";
     } else if (state.gpsState === "error") {
       gpsInfoEl.textContent = "GPS error - check permissions";
-      gpsAccEl.textContent = "N/A";
+      gpsAccEl.textContent = "-";
     } else {
-      gpsInfoEl.textContent = "Waiting for fix";
-      gpsAccEl.textContent = "N/A";
+      gpsInfoEl.textContent = "-";
+      gpsAccEl.textContent = "-";
     }
     return;
   }
@@ -203,7 +203,7 @@ function updateGpsUi() {
 
   state.gpsState = "acquired";
   gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
-  gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "N/A";
+  gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "-";
 }
 
 // Start continuous GPS age display updates
