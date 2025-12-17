@@ -1,6 +1,3 @@
-# MeshMapper API configuration (contains sensitive API key)
-content/config.js
-
 # Node modules (if added in the future)
 node_modules/
 
