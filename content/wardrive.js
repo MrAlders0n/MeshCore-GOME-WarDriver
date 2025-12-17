@@ -16,12 +16,6 @@ const WARDROVE_KEY     = new Uint8Array([
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
 ]);
 
-// Set Connect and Disconnect button text & style
-const CONNECT_BTN_CLASS =
-  "px-4 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50";
-const DISCONNECT_BTN_CLASS =
-  "px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50";
-
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
@@ -94,15 +88,29 @@ function scheduleCoverageRefresh(lat, lon) {
 }
 function setConnectButton(connected) {
   if (!connectBtn) return;
-
   if (connected) {
     connectBtn.textContent = "Disconnect";
-    connectBtn.className = DISCONNECT_BTN_CLASS;
+    connectBtn.classList.remove(
+      "bg-emerald-600",
+      "hover:bg-emerald-500"
+    );
+    connectBtn.classList.add(
+      "bg-red-600",
+      "hover:bg-red-500"
+    );
   } else {
     connectBtn.textContent = "Connect";
-    connectBtn.className = CONNECT_BTN_CLASS;
+    connectBtn.classList.remove(
+      "bg-red-600",
+      "hover:bg-red-500"
+    );
+    connectBtn.classList.add(
+      "bg-emerald-600",
+      "hover:bg-emerald-500"
+    );
   }
 }
+
 
 
 // ---- Wake Lock helpers ----
