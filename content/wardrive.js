@@ -553,11 +553,10 @@ async function sendPing(manual = false) {
         
         // Set status to idle after map update
         if (state.connection) {
-          // If in auto mode, start countdown. Otherwise, set to idle
+          // If in auto mode, schedule next ping. Otherwise, set to idle
           if (state.running) {
-            // Restart the countdown for next auto ping
-            const intervalMs = getSelectedIntervalMs();
-            startAutoCountdown(intervalMs);
+            // Schedule the next auto ping with countdown
+            scheduleNextAutoPing();
           } else {
             setStatus("Idle", "text-slate-300");
           }
@@ -596,7 +595,7 @@ function stopAutoPing(stopGps = false) {
   }
   
   if (state.autoTimerId) {
-    clearInterval(state.autoTimerId);
+    clearTimeout(state.autoTimerId);
     state.autoTimerId = null;
   }
   stopAutoCountdown();
@@ -610,6 +609,22 @@ function stopAutoPing(stopGps = false) {
   updateAutoButton();
   releaseWakeLock();
 }
+function scheduleNextAutoPing() {
+  if (!state.running) return;
+  
+  const intervalMs = getSelectedIntervalMs();
+  
+  // Start countdown immediately
+  startAutoCountdown(intervalMs);
+  
+  // Schedule the next ping
+  state.autoTimerId = setTimeout(() => {
+    if (state.running) {
+      sendPing(false).catch(console.error);
+    }
+  }, intervalMs);
+}
+
 function startAutoPing() {
   if (!state.connection) {
     alert("Connect to a MeshCore device first.");
@@ -626,7 +641,7 @@ function startAutoPing() {
   
   // Clean up any existing auto-ping timer (but keep GPS watch running)
   if (state.autoTimerId) {
-    clearInterval(state.autoTimerId);
+    clearTimeout(state.autoTimerId);
     state.autoTimerId = null;
   }
   stopAutoCountdown();
@@ -640,14 +655,8 @@ function startAutoPing() {
   // Acquire wake lock for auto mode
   acquireWakeLock().catch(console.error);
 
-  // First ping immediately, then at selected interval
+  // Send first ping immediately
   sendPing(false).catch(console.error);
-  const intervalMs = getSelectedIntervalMs();
-  state.autoTimerId = setInterval(() => {
-    sendPing(false).catch(console.error);
-  }, intervalMs);
-  
-  // Countdown will be started after the first ping completes
 }
 
 // ---- BLE connect / disconnect ----
