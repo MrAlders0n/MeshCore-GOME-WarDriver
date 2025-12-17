@@ -60,7 +60,10 @@ const state = {
   gpsAgeUpdateTimer: null, // Timer for updating GPS age display
   meshMapperTimer: null, // Timer for delayed MeshMapper API call
   cooldownEndTime: null, // Timestamp when cooldown period ends
-  cooldownUpdateTimer: null // Timer to re-enable controls after cooldown
+  cooldownUpdateTimer: null, // Timer to re-enable controls after cooldown
+  autoCountdownTimer: null, // Timer for auto-ping countdown display
+  nextAutoPingTime: null, // Timestamp when next auto ping will occur
+  pingInProgress: false // Flag to indicate if a ping is currently being sent
 };
 
 // ---- UI helpers ----
@@ -105,6 +108,30 @@ function updateAutoButton() {
     autoToggleBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
     autoToggleBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
   }
+}
+function updateAutoCountdownStatus() {
+  // Don't update status if we're not in auto mode, or if a ping is actively being sent
+  if (!state.running || !state.nextAutoPingTime || state.pingInProgress) return;
+  
+  const remainingMs = Math.max(0, state.nextAutoPingTime - Date.now());
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  
+  if (remainingSec > 0) {
+    setStatus(`Waiting for next auto ping (${remainingSec}s)`, "text-slate-300");
+  }
+}
+function startAutoCountdown() {
+  stopAutoCountdown();
+  state.autoCountdownTimer = setInterval(() => {
+    updateAutoCountdownStatus();
+  }, 1000); // Update every second
+}
+function stopAutoCountdown() {
+  if (state.autoCountdownTimer) {
+    clearInterval(state.autoCountdownTimer);
+    state.autoCountdownTimer = null;
+  }
+  state.nextAutoPingTime = null;
 }
 function buildCoverageEmbedUrl(lat, lon) {
   const base =
@@ -433,6 +460,9 @@ async function sendPing(manual = false) {
       return;
     }
 
+    // Mark ping as in progress to prevent countdown from overwriting status
+    state.pingInProgress = true;
+
     let lat, lon, accuracy;
 
     // Use the selected interval to determine if GPS fix is fresh enough
@@ -498,9 +528,14 @@ async function sendPing(manual = false) {
           scheduleCoverageRefresh(lat, lon);
         }
         
-        // Set status to idle after map update
+        // Clear ping in progress flag and set status to idle or countdown after map update
+        state.pingInProgress = false;
         if (state.connection) {
-          setStatus("Idle", "text-slate-300");
+          if (state.running && state.nextAutoPingTime) {
+            updateAutoCountdownStatus();
+          } else {
+            setStatus("Idle", "text-slate-300");
+          }
         }
       }, MAP_REFRESH_DELAY_MS);
       
@@ -521,6 +556,7 @@ async function sendPing(manual = false) {
     }
   } catch (e) {
     console.error("Ping failed:", e);
+    state.pingInProgress = false;
     setStatus(e.message || "Ping failed", "text-red-300");
   }
 }
@@ -539,6 +575,7 @@ function stopAutoPing(ignoreCheck = false) {
     clearInterval(state.autoTimerId);
     state.autoTimerId = null;
   }
+  stopAutoCountdown();
   stopGeoWatch();
   state.running = false;
   updateAutoButton();
@@ -567,9 +604,15 @@ function startAutoPing() {
   acquireWakeLock().catch(console.error);
 
   // First ping immediately, then at selected interval
-  sendPing(false).catch(console.error);
   const intervalMs = getSelectedIntervalMs();
+  
+  // Set next ping time and start countdown
+  state.nextAutoPingTime = Date.now() + intervalMs;
+  startAutoCountdown();
+  
+  sendPing(false).catch(console.error);
   state.autoTimerId = setInterval(() => {
+    state.nextAutoPingTime = Date.now() + intervalMs;
     sendPing(false).catch(console.error);
   }, intervalMs);
 }
