@@ -15,6 +15,8 @@ const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness 
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
 const MESHMAPPER_DELAY_MS = 7000;              // Delay MeshMapper API call by 7 seconds
 const COOLDOWN_MS = 7000;                      // Cooldown period for manual ping and auto toggle
+const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping sent" status is visible
+const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const WARDROVE_KEY     = new Uint8Array([
   0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
@@ -110,7 +112,7 @@ function buildCoverageEmbedUrl(lat, lon) {
   return `${base}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
 }
 let coverageRefreshTimer = null;
-function scheduleCoverageRefresh(lat, lon) {
+function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
   if (!coverageFrameEl) return;
 
   if (coverageRefreshTimer) clearTimeout(coverageRefreshTimer);
@@ -119,7 +121,7 @@ function scheduleCoverageRefresh(lat, lon) {
     const url = buildCoverageEmbedUrl(lat, lon);
     console.log("Coverage iframe URL:", url);
     coverageFrameEl.src = url;
-  }, 5000);
+  }, delayMs);
 }
 function setConnectButton(connected) {
   if (!connectBtn) return;
@@ -464,23 +466,48 @@ async function sendPing(manual = false) {
     // Start cooldown period after successful ping
     startCooldown();
 
+    setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
+
     // Schedule MeshMapper API call with 7-second delay (non-blocking)
     // Clear any existing timer first
     if (state.meshMapperTimer) {
       clearTimeout(state.meshMapperTimer);
     }
-    state.meshMapperTimer = setTimeout(() => {
-      postToMeshMapperAPI(lat, lon);
+    
+    // Update status to show we're waiting to post to API
+    setTimeout(() => {
+      if (state.connection) {
+        setStatus("Waiting to post to API", "text-sky-300");
+      }
+    }, STATUS_UPDATE_DELAY_MS);
+
+    state.meshMapperTimer = setTimeout(async () => {
+      // Capture accuracy in closure to ensure it's available in nested callback
+      const capturedAccuracy = accuracy;
+      
+      try {
+        await postToMeshMapperAPI(lat, lon);
+      } catch (error) {
+        console.error("MeshMapper API post failed:", error);
+        // Continue with map refresh and status update even if API fails
+      }
+      
+      // Update map after API post to ensure backend updated
+      setTimeout(() => {
+        if (capturedAccuracy && capturedAccuracy < GPS_ACCURACY_THRESHOLD_M) {
+          scheduleCoverageRefresh(lat, lon);
+        }
+        
+        // Set status to idle after map update
+        if (state.connection) {
+          setStatus("Idle", "text-slate-300");
+        }
+      }, MAP_REFRESH_DELAY_MS);
+      
       state.meshMapperTimer = null;
     }, MESHMAPPER_DELAY_MS);
-
-    // Only refresh coverage iframe if GPS accuracy is good
-    if (accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M) {
-      scheduleCoverageRefresh(lat, lon);
-    }
-
+    
     const nowStr = new Date().toLocaleString();
-    setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
     if (lastPingEl) lastPingEl.textContent = `${nowStr} — ${payload}`;
 
     // Session log
