@@ -29,39 +29,14 @@ jobs:
         env:
           API_KEY: ${{ secrets.MESHMAPPER_API_KEY }}
         run: |
-          if [ -z "$API_KEY" ]; then
-            echo "ERROR: MESHMAPPER_API_KEY secret is not set!"
-            exit 1
-          fi
           {
             echo "// MeshMapper API Configuration"
             echo "// This file is auto-generated during deployment from GitHub Secrets"
-            echo "// Build timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             node -e "console.log('window.MESHMAPPER_API_KEY = ' + JSON.stringify(process.env.API_KEY) + ';')"
           } > content/config.js
-          echo "Generated config.js content:"
-          cat content/config.js
-          echo "API key length: ${#API_KEY}"
-      
-      - name: Add cache-busting to config.js script tag
-        run: |
-          BUILD_ID=$(date +%s)
-          sed -i "s|<script src=\"content/config.js\"|<script src=\"content/config.js?v=${BUILD_ID}\"|g" index.html
-          echo "Updated index.html with cache-busting parameter: v=${BUILD_ID}"
-          grep "config.js" index.html
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
-
-      - name: Verify config.js before upload
-        run: |
-          echo "Verifying config.js content before artifact upload:"
-          cat content/config.js
-          if grep -q "YOUR_API_KEY_HERE" content/config.js; then
-            echo "ERROR: config.js still contains placeholder!"
-            exit 1
-          fi
-          echo "✓ config.js contains actual API key"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
