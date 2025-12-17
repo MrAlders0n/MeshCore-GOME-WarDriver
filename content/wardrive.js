@@ -45,7 +45,8 @@ const state = {
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
   bluefyLockEnabled: false,
-  gpsState: "idle" // "idle", "acquiring", "acquired", "error"
+  gpsState: "idle", // "idle", "acquiring", "acquired", "error"
+  gpsAgeUpdateTimer: null // Timer for updating GPS age display
 };
 
 // ---- UI helpers ----
@@ -166,10 +167,18 @@ async function getCurrentPosition() {
       reject(new Error("Geolocation not supported"));
       return;
     }
+    // Use selected interval to determine maximum age
+    const intervalMs = getSelectedIntervalMs();
+    const maximumAge = Math.max(1000, intervalMs - 5000); // Fresh data, minimum 1s
+    
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve(pos),
       (err) => reject(err),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+      { 
+        enableHighAccuracy: true, 
+        maximumAge: maximumAge, 
+        timeout: 30000 
+      }
     );
   });
 }
@@ -198,12 +207,34 @@ function updateGpsUi() {
   gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
   gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "N/A";
 }
+
+// Start continuous GPS age display updates
+function startGpsAgeUpdater() {
+  if (state.gpsAgeUpdateTimer) return;
+  
+  state.gpsAgeUpdateTimer = setInterval(() => {
+    updateGpsUi();
+  }, 1000); // Update every second
+}
+
+// Stop GPS age display updates
+function stopGpsAgeUpdater() {
+  if (state.gpsAgeUpdateTimer) {
+    clearInterval(state.gpsAgeUpdateTimer);
+    state.gpsAgeUpdateTimer = null;
+  }
+}
 function startGeoWatch() {
   if (state.geoWatchId) return;
   if (!("geolocation" in navigator)) return;
 
   state.gpsState = "acquiring";
   updateGpsUi();
+  startGpsAgeUpdater(); // Start the age counter
+
+  // Get the selected interval to determine how fresh GPS data should be
+  const intervalMs = getSelectedIntervalMs();
+  const maximumAge = Math.max(5000, intervalMs - 5000); // Use interval minus 5s buffer, minimum 5s
 
   state.geoWatchId = navigator.geolocation.watchPosition(
     (pos) => {
@@ -222,13 +253,18 @@ function startGeoWatch() {
       // Keep UI honest if it fails
       updateGpsUi();
     },
-    { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }
+    { 
+      enableHighAccuracy: true, 
+      maximumAge: maximumAge, // Respect the selected interval
+      timeout: 30000 
+    }
   );
 }
 function stopGeoWatch() {
   if (!state.geoWatchId) return;
   navigator.geolocation.clearWatch(state.geoWatchId);
   state.geoWatchId = null;
+  stopGpsAgeUpdater(); // Stop the age counter
 }
 async function primeGpsOnce() {
   // Start continuous watch so the UI keeps updating
@@ -250,11 +286,13 @@ async function primeGpsOnce() {
     state.gpsState = "acquired";
     updateGpsUi();
 
-    // NEW: refresh the coverage map after first fix
-    scheduleCoverageRefresh(
-      state.lastFix.lat,
-      state.lastFix.lon
-    );
+    // Only refresh the coverage map if we have an accurate fix
+    if (state.lastFix.accM && state.lastFix.accM < 100) {
+      scheduleCoverageRefresh(
+        state.lastFix.lat,
+        state.lastFix.lon
+      );
+    }
 
   } catch (e) {
     console.warn("primeGpsOnce failed:", e);
@@ -304,19 +342,26 @@ function buildPayload(lat, lon) {
 // ---- Ping ----
 async function sendPing(manual = false) {
   try {
-    let lat, lon;
+    let lat, lon, accuracy;
 
-    if (state.lastFix && (Date.now() - state.lastFix.tsMs) < 30000) {
+    // Use the selected interval to determine if GPS fix is fresh enough
+    const intervalMs = getSelectedIntervalMs();
+    const maxAge = intervalMs + 5000; // Allow 5s buffer beyond interval
+
+    if (state.lastFix && (Date.now() - state.lastFix.tsMs) < maxAge) {
       lat = state.lastFix.lat;
       lon = state.lastFix.lon;
+      accuracy = state.lastFix.accM;
     } else {
+      // Get fresh GPS coordinates
       const pos = await getCurrentPosition();
       lat = pos.coords.latitude;
       lon = pos.coords.longitude;
+      accuracy = pos.coords.accuracy;
       state.lastFix = {
         lat,
         lon,
-        accM: pos.coords.accuracy,
+        accM: accuracy,
         tsMs: Date.now(),
       };
       updateGpsUi();
@@ -327,7 +372,10 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
-    scheduleCoverageRefresh(lat, lon);
+    // Only refresh coverage iframe if GPS accuracy is good (< 100m)
+    if (accuracy && accuracy < 100) {
+      scheduleCoverageRefresh(lat, lon);
+    }
 
     const nowStr = new Date().toLocaleString();
     setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
@@ -415,6 +463,7 @@ async function connect() {
       enableControls(false);
       updateAutoButton();
       stopGeoWatch();
+      stopGpsAgeUpdater(); // Ensure age updater stops
       state.lastFix = null;
       state.gpsState = "idle";
       updateGpsUi();
