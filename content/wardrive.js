@@ -586,9 +586,9 @@ async function sendPing(manual = false) {
 }
 
 // ---- Auto mode ----
-function stopAutoPing(ignoreCheck = false) {
-  // Check if we're in cooldown before stopping (unless ignoring check for disconnect)
-  if (!ignoreCheck && isInCooldown()) {
+function stopAutoPing(stopGps = false) {
+  // Check if we're in cooldown before stopping (unless stopGps is true for disconnect)
+  if (!stopGps && isInCooldown()) {
     const remainingMs = state.cooldownEndTime - Date.now();
     const remainingSec = Math.ceil(remainingMs / 1000);
     setStatus(`Please wait ${remainingSec}s before toggling auto mode`, "text-amber-300");
@@ -600,7 +600,12 @@ function stopAutoPing(ignoreCheck = false) {
     state.autoTimerId = null;
   }
   stopAutoCountdown();
-  stopGeoWatch();
+  
+  // Only stop GPS watch when disconnecting or page hidden, not during normal stop
+  if (stopGps) {
+    stopGeoWatch();
+  }
+  
   state.running = false;
   updateAutoButton();
   releaseWakeLock();
@@ -619,8 +624,16 @@ function startAutoPing() {
     return;
   }
   
+  // Clean up any existing auto-ping timer (but keep GPS watch running)
+  if (state.autoTimerId) {
+    clearInterval(state.autoTimerId);
+    state.autoTimerId = null;
+  }
+  stopAutoCountdown();
+  
+  // Start GPS watch for continuous updates
   startGeoWatch();
-  stopAutoPing(true); // Ignore cooldown check since we already checked above
+  
   state.running = true;
   updateAutoButton();
 
