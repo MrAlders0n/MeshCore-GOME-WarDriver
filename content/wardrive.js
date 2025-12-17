@@ -169,7 +169,6 @@ async function getCurrentPosition() {
       reject(new Error("Geolocation not supported"));
       return;
     }
-    
     navigator.geolocation.getCurrentPosition(
       (pos) => resolve(pos),
       (err) => reject(err),
@@ -210,7 +209,6 @@ function updateGpsUi() {
 // Start continuous GPS age display updates
 function startGpsAgeUpdater() {
   if (state.gpsAgeUpdateTimer) return;
-  
   state.gpsAgeUpdateTimer = setInterval(() => {
     updateGpsUi();
   }, 1000); // Update every second
