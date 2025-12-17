@@ -31,6 +31,13 @@ const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
 
+// Set Connect and Disconnect button text & style
+const CONNECT_BTN_CLASS =
+  "px-4 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50";
+const DISCONNECT_BTN_CLASS =
+  "px-4 py-2 rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50";
+
+
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
@@ -91,14 +98,13 @@ function setConnectButton(connected) {
 
   if (connected) {
     connectBtn.textContent = "Disconnect";
-    connectBtn.classList.remove("text-sky-300");
-    connectBtn.classList.add("text-red-300");
+    connectBtn.className = DISCONNECT_BTN_CLASS;
   } else {
     connectBtn.textContent = "Connect";
-    connectBtn.classList.remove("text-red-300");
-    connectBtn.classList.add("text-sky-300");
+    connectBtn.className = CONNECT_BTN_CLASS;
   }
 }
+
 
 // ---- Wake Lock helpers ----
 async function acquireWakeLock() {
