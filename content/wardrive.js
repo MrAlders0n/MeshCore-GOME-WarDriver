@@ -13,6 +13,12 @@ const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailab
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
+const MESHMAPPER_DELAY_MS = 7000;              // Delay MeshMapper API call by 7 seconds
+const COOLDOWN_MS = 7000;                      // Cooldown period for manual ping and auto toggle
+const WARDROVE_KEY     = new Uint8Array([
+  0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
+  0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
+]);
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
@@ -49,7 +55,10 @@ const state = {
   lastFix: null, // { lat, lon, accM, tsMs }
   bluefyLockEnabled: false,
   gpsState: "idle", // "idle", "acquiring", "acquired", "error"
-  gpsAgeUpdateTimer: null // Timer for updating GPS age display
+  gpsAgeUpdateTimer: null, // Timer for updating GPS age display
+  meshMapperTimer: null, // Timer for delayed MeshMapper API call
+  cooldownEndTime: null, // Timestamp when cooldown period ends
+  cooldownUpdateTimer: null // Timer to re-enable controls after cooldown
 };
 
 // ---- UI helpers ----
@@ -57,11 +66,32 @@ function setStatus(text, color = "text-slate-300") {
   statusEl.textContent = text;
   statusEl.className = `font-semibold ${color}`;
 }
+function isInCooldown() {
+  return state.cooldownEndTime && Date.now() < state.cooldownEndTime;
+}
+function startCooldown() {
+  state.cooldownEndTime = Date.now() + COOLDOWN_MS;
+  updateControlsForCooldown();
+  
+  // Clear any existing cooldown update and schedule a new one
+  if (state.cooldownUpdateTimer) {
+    clearTimeout(state.cooldownUpdateTimer);
+  }
+  state.cooldownUpdateTimer = setTimeout(() => {
+    state.cooldownEndTime = null;
+    updateControlsForCooldown();
+  }, COOLDOWN_MS);
+}
+function updateControlsForCooldown() {
+  const connected = !!state.connection;
+  const inCooldown = isInCooldown();
+  sendPingBtn.disabled = !connected || inCooldown;
+  autoToggleBtn.disabled = !connected || inCooldown;
+}
 function enableControls(connected) {
   connectBtn.disabled     = false;
-  sendPingBtn.disabled    = !connected;
-  autoToggleBtn.disabled  = !connected;
   channelInfoEl.textContent = CHANNEL_NAME;
+  updateControlsForCooldown();
 }
 function updateAutoButton() {
   if (state.running) {
@@ -393,6 +423,14 @@ async function postToMeshMapperAPI(lat, lon) {
 // ---- Ping ----
 async function sendPing(manual = false) {
   try {
+    // Check cooldown only for manual pings
+    if (manual && isInCooldown()) {
+      const remainingMs = state.cooldownEndTime - Date.now();
+      const remainingSec = Math.ceil(remainingMs / 1000);
+      setStatus(`Please wait ${remainingSec}s before sending another ping`, "text-amber-300");
+      return;
+    }
+
     let lat, lon, accuracy;
 
     // Use the selected interval to determine if GPS fix is fresh enough
@@ -423,9 +461,18 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
-    // Post to MeshMapper API (fire-and-forget pattern: non-blocking, errors are logged inside the function)
-    // Not awaited intentionally to avoid delaying the ping flow
-    postToMeshMapperAPI(lat, lon);
+    // Start cooldown period after successful ping
+    startCooldown();
+
+    // Schedule MeshMapper API call with 7-second delay (non-blocking)
+    // Clear any existing timer first
+    if (state.meshMapperTimer) {
+      clearTimeout(state.meshMapperTimer);
+    }
+    state.meshMapperTimer = setTimeout(() => {
+      postToMeshMapperAPI(lat, lon);
+      state.meshMapperTimer = null;
+    }, MESHMAPPER_DELAY_MS);
 
     // Only refresh coverage iframe if GPS accuracy is good
     if (accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M) {
@@ -452,7 +499,15 @@ async function sendPing(manual = false) {
 }
 
 // ---- Auto mode ----
-function stopAutoPing() {
+function stopAutoPing(ignoreCheck = false) {
+  // Check if we're in cooldown before stopping (unless ignoring check for disconnect)
+  if (!ignoreCheck && isInCooldown()) {
+    const remainingMs = state.cooldownEndTime - Date.now();
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, "text-amber-300");
+    return;
+  }
+  
   if (state.autoTimerId) {
     clearInterval(state.autoTimerId);
     state.autoTimerId = null;
@@ -467,8 +522,17 @@ function startAutoPing() {
     alert("Connect to a MeshCore device first.");
     return;
   }
+  
+  // Check if we're in cooldown
+  if (isInCooldown()) {
+    const remainingMs = state.cooldownEndTime - Date.now();
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, "text-amber-300");
+    return;
+  }
+  
   startGeoWatch();
-  stopAutoPing();
+  stopAutoPing(true); // Ignore cooldown check since we already checked above
   state.running = true;
   updateAutoButton();
 
@@ -519,11 +583,23 @@ async function connect() {
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
-      stopAutoPing();
+      stopAutoPing(true); // Ignore cooldown check on disconnect
       enableControls(false);
       updateAutoButton();
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
+      
+      // Clean up timers
+      if (state.meshMapperTimer) {
+        clearTimeout(state.meshMapperTimer);
+        state.meshMapperTimer = null;
+      }
+      if (state.cooldownUpdateTimer) {
+        clearTimeout(state.cooldownUpdateTimer);
+        state.cooldownUpdateTimer = null;
+      }
+      state.cooldownEndTime = null;
+      
       state.lastFix = null;
       state.gpsState = "idle";
       updateGpsUi();
@@ -565,7 +641,7 @@ async function disconnect() {
 document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
     if (state.running) {
-      stopAutoPing();
+      stopAutoPing(true); // Ignore cooldown check when page is hidden
       setStatus("Lost focus, auto mode stopped", "text-amber-300");
     } else {
       releaseWakeLock();
