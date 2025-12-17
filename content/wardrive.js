@@ -40,7 +40,6 @@ const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
-const repeatersListEl = document.getElementById("repeatersList"); // repeater tracking
 setConnectButton(false);
 
 // NEW: selectors
@@ -61,7 +60,8 @@ const state = {
   gpsAgeUpdateTimer: null, // Timer for updating GPS age display
   sentMessageTimestamps: new Set(), // Track sent message timestamps to identify echoes
   repeaterEchoes: new Map(), // Map of message timestamp -> array of repeater echoes
-  lastPingTimestamp: null // Track the timestamp of the last sent ping
+  lastPingTimestamp: null, // Track the timestamp of the last sent ping
+  lastPingListItem: null // Track the last ping list item DOM element for appending repeaters
 };
 
 // ---- UI helpers ----
@@ -365,40 +365,29 @@ function formatRepeaterPath(path) {
   return Array.from(path).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function updateRepeatersDisplay() {
-  if (!repeatersListEl) return;
+function updateRepeatersInPingLog() {
+  // Update the last ping entry with repeater information
+  if (!state.lastPingListItem || !sessionPingsEl) return;
   
   const echoes = state.repeaterEchoes.get(state.lastPingTimestamp);
-  if (!echoes || echoes.length === 0) {
-    repeatersListEl.innerHTML = '<li class="text-slate-500">No repeater echoes detected yet...</li>';
-    return;
-  }
-  
-  // Clear and rebuild the list
-  repeatersListEl.innerHTML = '';
+  if (!echoes || echoes.length === 0) return;
   
   // Sort by SNR (best first)
   const sortedEchoes = [...echoes].sort((a, b) => b.snr - a.snr);
   
-  sortedEchoes.forEach((echo, index) => {
-    const li = document.createElement('li');
-    const pathStr = formatRepeaterPath(echo.path);
-    const snrStr = echo.snr.toFixed(2);
-    const rssiStr = echo.rssi.toString();
-    
-    li.innerHTML = `
-      <span class="font-mono text-slate-300">[${pathStr}]</span>
-      <span class="text-emerald-400">SNR: ${snrStr} dB</span>
-      <span class="text-sky-400">RSSI: ${rssiStr} dBm</span>
-    `;
-    li.className = 'flex gap-3 items-center';
-    repeatersListEl.appendChild(li);
-  });
+  // Format repeater info: RepeaterID-1(SNR) | RepeaterID-2(SNR)
+  const repeaterText = sortedEchoes
+    .map(echo => {
+      const pathStr = formatRepeaterPath(echo.path);
+      const snrStr = echo.snr.toFixed(1);
+      return `${pathStr}(${snrStr})`;
+    })
+    .join(' | ');
   
-  // Display count
-  const countEl = document.getElementById('repeatersCount');
-  if (countEl) {
-    countEl.textContent = `(${sortedEchoes.length} repeater${sortedEchoes.length !== 1 ? 's' : ''} heard)`;
+  // Get the original text and append repeater info
+  const originalText = state.lastPingListItem.getAttribute('data-original-text');
+  if (originalText && repeaterText) {
+    state.lastPingListItem.textContent = `${originalText} | ${repeaterText}`;
   }
 }
 
@@ -453,8 +442,8 @@ function onLogRxDataReceived(data) {
       
       console.log(`✓ Repeater echo: path=[${pathHex}] SNR=${data.lastSnr.toFixed(2)} dB, RSSI=${data.lastRssi} dBm`);
       
-      // Update the UI
-      updateRepeatersDisplay();
+      // Update the UI - append to the last ping entry
+      updateRepeatersInPingLog();
     }
   } catch (error) {
     console.error('Error processing LogRxData:', error);
@@ -553,9 +542,6 @@ async function sendPing(manual = false) {
       state.repeaterEchoes.delete(oldestKey);
     }
     
-    // Reset the repeaters display
-    updateRepeatersDisplay();
-    
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
     // Post to MeshMapper API (fire-and-forget pattern: non-blocking, errors are logged inside the function)
@@ -573,9 +559,11 @@ async function sendPing(manual = false) {
 
     // Session log
     if (sessionPingsEl) {
-      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      const line = `${nowStr} | ${lat.toFixed(5)},${lon.toFixed(5)}`;
       const li = document.createElement('li');
       li.textContent = line;
+      li.setAttribute('data-original-text', line); // Store original text for repeater appending
+      state.lastPingListItem = li; // Store reference for updating with repeater info
       sessionPingsEl.appendChild(li);
        // Auto-scroll to bottom when a new entry arrives
       sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
@@ -670,11 +658,7 @@ async function connect() {
       // Clear repeater tracking state
       state.lastPingTimestamp = null;
       state.repeaterEchoes.clear();
-      if (repeatersListEl) {
-        repeatersListEl.innerHTML = '<li class="text-slate-500">No repeater echoes detected yet...</li>';
-      }
-      const countEl = document.getElementById('repeatersCount');
-      if (countEl) countEl.textContent = '';
+      state.lastPingListItem = null;
     });
 
   } catch (e) {
