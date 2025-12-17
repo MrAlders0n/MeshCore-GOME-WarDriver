@@ -214,6 +214,27 @@ function stopGeoWatch() {
   navigator.geolocation.clearWatch(state.geoWatchId);
   state.geoWatchId = null;
 }
+async function primeGpsOnce() {
+  // Start continuous watch so the UI keeps updating after the first fix
+  startGeoWatch();
+
+  // Trigger a one-time fix immediately so the UI stops saying "Waiting for fix"
+  try {
+    const pos = await getCurrentPosition();
+    state.lastFix = {
+      lat: pos.coords.latitude,
+      lon: pos.coords.longitude,
+      accM: pos.coords.accuracy,
+      tsMs: Date.now(),
+    };
+    updateGpsUi();
+  } catch (e) {
+    // If the browser blocks permission prompts without a user gesture,
+    // keep the UI honest and do not hard-fail the connection.
+    console.warn("primeGpsOnce failed:", e);
+    updateGpsUi();
+  }
+}
 
 
 // ---- Channel helpers ----
@@ -353,6 +374,7 @@ async function connect() {
       updateAutoButton();
       try { await conn.syncDeviceTime?.(); } catch { /* optional */ }
       await ensureChannel();
+      await primeGpsOnce();
     });
 
     conn.on("disconnected", () => {
