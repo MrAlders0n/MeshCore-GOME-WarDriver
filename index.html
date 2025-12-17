@@ -103,20 +103,19 @@
       <!-- Coverage preview -->
       <section class="card">
         <h2 class="text-lg font-semibold mb-2">Coverage Zone Preview</h2>
-        <iframe
-          id="coverageFrame"
-          title="MeshMapper Coverage Zone"
-          class="w-full h-[100vw] max-h-[80vh] rounded-md"
-          loading="lazy"
-          referrerpolicy="no-referrer"
-          src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=5000">
-        </iframe>
-
+          <iframe
+            id="coverageFrame"
+            title="MeshMapper Coverage Zone"
+            style="width: 100%; height: min(80vh, 95vw); border: 0; border-radius: 12px;"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+            src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=5000">
+          </iframe>
         <p class="text-xs text-slate-400 mt-2">
           This preview recenters after each ping is sent.
         </p>
       </section>
-      
+
       <!-- Session ping log -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
         <div class="mt-3">
