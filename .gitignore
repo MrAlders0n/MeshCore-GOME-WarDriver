@@ -1,6 +1,5 @@
 # MeshMapper API configuration (contains sensitive API key)
-# Note: config.js is now tracked with placeholder value for local development
-# During deployment, GitHub Actions regenerates it with the actual API key
+content/config.js
 
 # Node modules (if added in the future)
 node_modules/
