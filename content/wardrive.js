@@ -29,6 +29,7 @@ const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
+setConnectButton(false);
 
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
@@ -84,6 +85,19 @@ function scheduleCoverageRefresh(lat, lon) {
     console.log("Coverage iframe URL:", url);
     coverageFrameEl.src = url;
   }, 5000);
+}
+function setConnectButton(connected) {
+  if (!connectBtn) return;
+
+  if (connected) {
+    connectBtn.textContent = "Disconnect";
+    connectBtn.classList.remove("text-sky-300");
+    connectBtn.classList.add("text-red-300");
+  } else {
+    connectBtn.textContent = "Connect";
+    connectBtn.classList.remove("text-red-300");
+    connectBtn.classList.add("text-sky-300");
+  }
 }
 
 // ---- Wake Lock helpers ----
@@ -317,6 +331,7 @@ async function connect() {
 
     conn.on("connected", async () => {
       setStatus("Connected", "text-emerald-300");
+      setConnectButton(true);
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
@@ -328,6 +343,7 @@ async function connect() {
 
     conn.on("disconnected", () => {
       setStatus("Disconnected", "text-red-300");
+      setConnectButton(false);
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
@@ -345,6 +361,31 @@ async function connect() {
     connectBtn.disabled = false;
   }
 }
+async function disconnect() {
+  if (!state.connection) return;
+
+  connectBtn.disabled = true;
+  setStatus("Disconnecting...", "text-sky-300");
+
+  try {
+    // WebBleConnection typically exposes one of these.
+    if (typeof state.connection.close === "function") {
+      await state.connection.close();
+    } else if (typeof state.connection.disconnect === "function") {
+      await state.connection.disconnect();
+    } else if (typeof state.connection.device?.gatt?.disconnect === "function") {
+      state.connection.device.gatt.disconnect();
+    } else {
+      console.warn("No known disconnect method on connection object");
+    }
+  } catch (e) {
+    console.error("BLE disconnect failed:", e);
+    setStatus(e.message || "Disconnect failed", "text-red-300");
+  } finally {
+    connectBtn.disabled = false;
+  }
+}
+
 
 // ---- Page visibility ----
 document.addEventListener("visibilitychange", async () => {
@@ -366,7 +407,18 @@ export async function onLoad() {
   enableControls(false);
   updateAutoButton();
 
-  connectBtn.addEventListener("click", () => connect().catch(console.error));
+  connectBtn.addEventListener("click", async () => {
+    try {
+      if (state.connection) {
+        await disconnect();
+      } else {
+        await connect();
+      }
+    } catch (e) {
+      console.error(e);
+      setStatus(e.message || "Connection error", "text-red-300");
+    }
+  });
   sendPingBtn.addEventListener("click", () => sendPing(true).catch(console.error));
   autoToggleBtn.addEventListener("click", () => {
     if (state.running) {
