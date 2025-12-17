@@ -101,6 +101,15 @@ Pings are sent to the wardriving MeshCore channel to build community coverage ma
 - **Screen Wake Lock API** - Power management
 - **Tailwind CSS** - Responsive UI design
 - **PWA Ready** - Progressive Web App manifest
+- **MeshMapper API Integration** - Automatic ping data posting for mesh network comparison
+
+---
+
+## 🔐 MeshMapper API Integration
+
+This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh. The API key is securely stored in GitHub Secrets.
+
+**For setup instructions**, see [SETUP.md](SETUP.md)
 
 ---
 

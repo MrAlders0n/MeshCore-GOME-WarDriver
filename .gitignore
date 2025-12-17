@@ -1,0 +1,20 @@
+# MeshMapper API configuration (contains sensitive API key)
+content/config.js
+
+# Node modules (if added in the future)
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
