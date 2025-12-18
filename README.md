@@ -1,38 +1,50 @@
 # MeshCore GOME WarDriver
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.0.1)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-orange.svg)](#platform-support)
 
-A browser-based Progressive Web App for wardriving with MeshCore devices.  Connect via Bluetooth, send GPS pings, and build coverage maps for the Ottawa (YOW) mesh network.
+A browser-based Progressive Web App for wardriving with MeshCore devices. Connect via Bluetooth, send GPS pings, and build coverage maps for the Ottawa (YOW) mesh network.
 
-**Live at**: [wardrive.ottawamesh. ca](https://wardrive.ottawamesh.ca)
-
-🎉 **First Stable Release** - Successfully tested on Android and iOS! 
+**Live at**: [wardrive.ottawamesh.ca](https://wardrive.ottawamesh.ca)
 
 ---
 
 ## 🚀 Quick Start
 
-### For Android Users
-1. Open **Chrome** browser
-2. Visit [wardrive.ottawamesh.ca](https://wardrive.ottawamesh.ca)
-3. Enable **Bluetooth** and **Location** permissions
-4. Click **Connect** and select your MeshCore device
-5. Start pinging!  📡
+### Before you start
+- Make sure you have the **wardriving channel** set on your companion.
+- Take a **backup of your companion** (this webapp is beyond experimental).
 
-### For iOS Users  
-1. Install [**Bluefy**](https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055) from the App Store (free)
-2. Open [wardrive.ottawamesh. ca](https://wardrive.ottawamesh.ca) in Bluefy
-3. Enable **Bluetooth** and **Location** permissions
-4. Click **Connect** and select your MeshCore device
-5. Start pinging! 📡
+### Android (recommended)
+1. Disconnect the **MeshCore** app and close it
+2. Open **Google Chrome**
+3. Go to https://wardrive.ottawamesh.ca/
+4. **Connect** your device
+5. Pick **interval** and **power**
+6. Send a ping or start **auto ping**
+7. Move around and watch it track
 
-> ⚠️ **Note**:  Safari does not support Web Bluetooth and will not work. 
+### iOS
+1. Disconnect the **MeshCore** app and close it
+2. Install **Bluefy** (Web BLE browser): https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055
+3. Open https://wardrive.ottawamesh.ca/ in **Bluefy**
+4. **Connect** your device
+5. Pick **interval** and **power**
+6. Send a ping or start **auto ping**
+7. Move around and watch it track
+
+> ⚠️ **Note (iOS)**: You must use **Bluefy**. Other iOS browsers (including Safari) do not support Web Bluetooth (BLE).
 
 ---
 
 ## ✨ Features
+
+### 🗺️ Live Coverage Map
+- **Embedded MeshMapper** integration
+- **API POST** to MeshMapper to enable failed ping blocks
+- **Auto-refresh** after each ping (30-second delay)
+- **Interactive view** of coverage zones and repeaters
 
 ### 📍 GPS Tracking
 - **High-accuracy positioning** for precise coverage mapping
@@ -42,18 +54,13 @@ A browser-based Progressive Web App for wardriving with MeshCore devices.  Conne
 
 ### 🤖 Ping Modes
 - **Manual Mode**: Send pings on demand
-- **Auto Mode**:  Continuous pinging at 15s, 30s, or 60s intervals
-- **Wake Lock**:  Keeps screen on during auto mode for GPS accuracy
-
-### 🗺️ Live Coverage Map
-- **Embedded MeshMapper** integration
-- **Auto-refresh** after each ping (30-second delay)
-- **Interactive view** of coverage zones and repeaters
+- **Auto Mode**: Continuous pinging at 15s, 30s, or 60s intervals
+- **Wake Lock**: Keeps screen on during auto mode for GPS accuracy
 
 ### 📡 Power Configuration
-Configure radio power for accurate coverage data: 
+Configure radio power for accurate coverage data:
 - N/A (default)
-- 0. 3w, 0.6w, 1.0w
+- 0.3w, 0.6w, 1.0w
 
 ### 📊 Session Tracking
 - Scrollable **ping history log**
@@ -84,7 +91,7 @@ Configure radio power for accurate coverage data:
 
 ## 🗺️ Ottawa (YOW) Region
 
-This application is configured for the **Ottawa Mesh** network: 
+This application is configured for the **Ottawa Mesh** network:
 
 - **Wardriving App**: [wardrive.ottawamesh.ca](https://wardrive.ottawamesh.ca)
 - **Coverage Maps**: [yow.meshmapper.net](https://yow.meshmapper.net)
@@ -107,19 +114,19 @@ Pings are sent to the wardriving MeshCore channel to build community coverage ma
 
 ## 🔐 MeshMapper API Integration
 
-This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh. The API key is securely stored in GitHub Secrets.
+This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh.
 
 ---
 
 ## 📋 Requirements
 
 ### MeshCore Device
-- MeshCore device 
+- MeshCore device
 - Wardriving channel configured on your device
 
 ### Browser
 - **Android**: Chrome or Chromium-based browser
-- **iOS**:  Bluefy browser (Safari not supported)
+- **iOS**: Bluefy browser (Safari not supported)
 
 ### Permissions
 - ✅ Bluetooth access
@@ -130,18 +137,18 @@ This app automatically posts ping data to the YOW MeshMapper API to help compare
 
 ## 🙏 Credits
 
-This project is a fork and adaptation: 
+This project is a fork and adaptation:
 
 - **Original Project**: [kallanreed/mesh-map](https://github.com/kallanreed/mesh-map) by Kyle Reed
 - **Modified By**: [MrAlders0n](https://github.com/MrAlders0n) for Ottawa Mesh
-- **MeshMapper Backend**:  Created by [@CSP-Tom](https://github.com/CSP-Tom) - The backend database and mapping software that receives pings and maps coverage live for the community at [MeshMapper.net](https://meshmapper.net)
+- **MeshMapper Backend**: Created by [@CSP-Tom](https://github.com/CSP-Tom) - The backend database and mapping software that receives pings and maps coverage live for the community at [MeshMapper.net](https://meshmapper.net)
 - **Community**: Ottawa Mesh and all beta testers
 
 ---
 
 ## 🤝 Contributing
 
-Found a bug?  Have a feature request? 
+Found a bug? Have a feature request?
 
 - **Issues**: [GitHub Issues](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/issues)
 - **Community**: [Ottawa Mesh](https://ottawamesh.ca)
@@ -154,8 +161,8 @@ This project is licensed under the [MIT License](LICENSE) - see the LICENSE file
 
 ---
 
-## 🚗📡 Happy Wardriving! 
+## 🚗📡 Happy Wardriving!
 
-Help build the Ottawa Mesh coverage maps and grow the MeshCore network! 🌐
+Help build the Ottawa Mesh coverage maps and grow the MeshCore network!
 
-**Visit [wardrive.ottawamesh. ca](https://wardrive.ottawamesh.ca) today and contribute to the community coverage database!**
+**Visit [wardrive.ottawamesh.ca](https://wardrive.ottawamesh.ca) today and contribute to the community coverage database!**
