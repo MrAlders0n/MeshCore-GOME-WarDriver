@@ -470,7 +470,8 @@ function buildPayload(lat, lon) {
 // ---- Helper Functions ----
 function formatSessionLogLine(nowStr, lat, lon, status = '') {
   const coords = `${lat.toFixed(5)} ${lon.toFixed(5)}`;
-  return status ? `${nowStr}  ${coords} ${status}` : `${nowStr}  ${coords}`;
+  const statusStr = status ? ` ${status}` : '';
+  return `${nowStr}  ${coords}${statusStr}`;
 }
 
 // ---- Repeater Tracking ----
@@ -595,7 +596,7 @@ function stopRepeaterTracking() {
   console.log(`[Debug] Updating session log with repeater data:`, {
     hasRepeaterData: !!state.repeaterData,
     hasSessionLi: !!state.repeaterData?.sessionLi,
-    repeaterCount: state.repeaterData?.repeaters.size || 0
+    repeaterCount: state.repeaterData?.repeaters?.size || 0
   });
   
   if (state.repeaterData && state.repeaterData.sessionLi) {
