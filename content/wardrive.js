@@ -90,7 +90,7 @@ const state = {
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
   apiCountdownTimer: null, // Timer for API post countdown display
   apiPostTime: null, // Timestamp when API post will occur
-  skipReason: null // Reason for skipping a ping (e.g., "gps too old")
+  skipReason: null // Reason for skipping a ping - internal value only (e.g., "gps too old")
 };
 
 // ---- UI helpers ----
@@ -108,7 +108,11 @@ function setStatus(text, color = STATUS_COLORS.idle) {
   statusEl.className = `font-semibold ${color}`;
 }
 
-// Helper function to apply status from countdown result
+/**
+ * Apply status message from countdown timer result
+ * @param {string|{message: string, color: string}|null} result - Status message (string) or object with message and optional color
+ * @param {string} defaultColor - Default color to use if result is a string or object without color
+ */
 function applyCountdownStatus(result, defaultColor) {
   if (!result) return;
   if (typeof result === 'string') {
