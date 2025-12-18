@@ -22,6 +22,12 @@ const WARDROVE_KEY     = new Uint8Array([
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
 ]);
 
+// ---- GPS Filtering Config ----
+const OTTAWA_CENTER_LAT = 45.4215;             // Ottawa Parliament Hill latitude
+const OTTAWA_CENTER_LON = -75.6972;            // Ottawa Parliament Hill longitude
+const GEOFENCE_RADIUS_KM = 150;                // Ottawa geofence radius in kilometers
+const MIN_PING_DISTANCE_M = 25;                // Minimum movement required between pings in meters
+
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
@@ -38,6 +44,7 @@ const autoToggleBtn  = $("autoToggleBtn");
 const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
+const distanceSinceLastPingEl = document.getElementById("distanceSinceLastPing");
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
@@ -55,6 +62,7 @@ const state = {
   wakeLock: null,
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
+  lastPingLocation: null, // { lat, lon } - location of last successful ping
   bluefyLockEnabled: false,
   gpsState: "idle", // "idle", "acquiring", "acquired", "error"
   gpsAgeUpdateTimer: null, // Timer for updating GPS age display
@@ -64,8 +72,48 @@ const state = {
   autoCountdownTimer: null, // Timer for auto-ping countdown display
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
   apiCountdownTimer: null, // Timer for API post countdown display
-  apiPostTime: null // Timestamp when API post will occur
+  apiPostTime: null, // Timestamp when API post will occur
+  lastSkipReason: null // Track the reason for the last ping skip
 };
+
+// ---- GPS Distance Calculation (Haversine Formula) ----
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c; // Distance in kilometers
+}
+
+// ---- GPS Validation Functions ----
+function isWithinGeofence(lat, lon) {
+  const distanceKm = calculateDistance(lat, lon, OTTAWA_CENTER_LAT, OTTAWA_CENTER_LON);
+  return distanceKm <= GEOFENCE_RADIUS_KM;
+}
+
+function getDistanceFromLastPing(lat, lon) {
+  if (!state.lastPingLocation) {
+    return null; // No previous ping to compare against
+  }
+  const distanceKm = calculateDistance(
+    lat, lon, 
+    state.lastPingLocation.lat, 
+    state.lastPingLocation.lon
+  );
+  return distanceKm * 1000; // Convert to meters
+}
+
+function shouldSkipPingDueToDistance(lat, lon) {
+  const distanceM = getDistanceFromLastPing(lat, lon);
+  if (distanceM === null) {
+    return false; // No previous ping, don't skip
+  }
+  return distanceM < MIN_PING_DISTANCE_M;
+}
 
 // ---- UI helpers ----
 function setStatus(text, color = "text-slate-300") {
@@ -84,7 +132,13 @@ function updateAutoCountdownStatus() {
   }
   
   const remainingSec = Math.ceil(remainingMs / 1000);
-  setStatus(`Waiting for next auto ping (${remainingSec}s)`, "text-slate-300");
+  
+  // If last ping was skipped, show skip reason with countdown
+  if (state.lastSkipReason) {
+    setStatus(`${state.lastSkipReason} (${remainingSec}s)`, "text-amber-300");
+  } else {
+    setStatus(`Waiting for next auto ping (${remainingSec}s)`, "text-slate-300");
+  }
 }
 function startAutoCountdown(intervalMs) {
   // Stop any existing countdown
@@ -313,6 +367,22 @@ function updateGpsUi() {
   state.gpsState = "acquired";
   gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
   gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "-";
+}
+
+function updateDistanceDisplay() {
+  if (!distanceSinceLastPingEl) return;
+  
+  if (!state.lastFix || !state.lastPingLocation) {
+    distanceSinceLastPingEl.textContent = "-";
+    return;
+  }
+  
+  const distanceM = getDistanceFromLastPing(state.lastFix.lat, state.lastFix.lon);
+  if (distanceM === null) {
+    distanceSinceLastPingEl.textContent = "-";
+  } else {
+    distanceSinceLastPingEl.textContent = `${distanceM.toFixed(1)}m from last ping`;
+  }
 }
 
 // Start continuous GPS age display updates
@@ -555,10 +625,73 @@ async function sendPing(manual = false) {
       }
     }
 
+    // Update distance display (only updates when ping is attempted)
+    updateDistanceDisplay();
+
+    // ---- VALIDATION 1: Check geofence FIRST ----
+    const withinGeofence = isWithinGeofence(lat, lon);
+    const distanceFromOttawaKm = calculateDistance(lat, lon, OTTAWA_CENTER_LAT, OTTAWA_CENTER_LON);
+    
+    console.log(`[Geofence Check] Current position: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+    console.log(`[Geofence Check] Distance from Ottawa Parliament Hill: ${distanceFromOttawaKm.toFixed(2)} km`);
+    console.log(`[Geofence Check] Geofence radius: ${GEOFENCE_RADIUS_KM} km`);
+    console.log(`[Geofence Check] Within geofence: ${withinGeofence}`);
+    
+    if (!withinGeofence) {
+      const skipMsg = "Ping skipped, outside of geo fenced region";
+      console.warn(`[Geofence Check] ${skipMsg}`);
+      
+      if (manual) {
+        // Manual ping: persist skip message
+        state.lastSkipReason = skipMsg;
+        setStatus(skipMsg, "text-amber-300");
+      } else {
+        // Auto ping: show skip message with countdown
+        state.lastSkipReason = skipMsg;
+        scheduleNextAutoPing();
+      }
+      return;
+    }
+    
+    // ---- VALIDATION 2: Check distance from last ping ----
+    const distanceFromLastPingM = getDistanceFromLastPing(lat, lon);
+    if (distanceFromLastPingM !== null) {
+      console.log(`[Distance Check] Distance from last ping: ${distanceFromLastPingM.toFixed(2)} m`);
+      console.log(`[Distance Check] Minimum required distance: ${MIN_PING_DISTANCE_M} m`);
+      
+      if (shouldSkipPingDueToDistance(lat, lon)) {
+        const skipMsg = `Ping skipped, too close to last ping (${distanceFromLastPingM.toFixed(1)}m away)`;
+        console.warn(`[Distance Check] ${skipMsg}`);
+        
+        if (manual) {
+          // Manual ping: persist skip message
+          state.lastSkipReason = skipMsg;
+          setStatus(skipMsg, "text-amber-300");
+        } else {
+          // Auto ping: show skip message with countdown
+          state.lastSkipReason = skipMsg;
+          scheduleNextAutoPing();
+        }
+        return;
+      }
+    } else {
+      console.log(`[Distance Check] No previous ping location, skipping distance check`);
+    }
+
+    // All validations passed - proceed with ping
+    console.log(`[Ping] All validations passed, sending ping`);
+    
     const payload = buildPayload(lat, lon);
 
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
+
+    // Save successful ping location
+    state.lastPingLocation = { lat, lon };
+    console.log(`[Ping] Successful ping location saved: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
+    
+    // Clear any previous skip reason since this ping succeeded
+    state.lastSkipReason = null;
 
     // Start cooldown period after successful ping
     startCooldown();
@@ -765,8 +898,11 @@ async function connect() {
       state.cooldownEndTime = null;
       
       state.lastFix = null;
+      state.lastPingLocation = null;
+      state.lastSkipReason = null;
       state.gpsState = "idle";
       updateGpsUi();
+      updateDistanceDisplay();
     });
 
   } catch (e) {
