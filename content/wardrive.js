@@ -6,6 +6,8 @@
 // - Acquire wake lock during auto mode to keep screen awake
 
 import { WebBleConnection } from "/content/mc/index.js"; // your BLE client
+import Constants from "/content/mc/constants.js";
+import Packet from "/content/mc/packet.js";
 
 // ---- Config ----
 const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if needed
@@ -15,6 +17,7 @@ const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness 
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
 const MESHMAPPER_DELAY_MS = 7000;              // Delay MeshMapper API call by 7 seconds
 const COOLDOWN_MS = 7000;                      // Cooldown period for manual ping and auto toggle
+const REPEATER_LISTEN_MS = 7000;               // Listen for repeater echoes for 7 seconds
 const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping sent" status is visible
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const WARDROVE_KEY     = new Uint8Array([
@@ -64,7 +67,10 @@ const state = {
   autoCountdownTimer: null, // Timer for auto-ping countdown display
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
   apiCountdownTimer: null, // Timer for API post countdown display
-  apiPostTime: null // Timestamp when API post will occur
+  apiPostTime: null, // Timestamp when API post will occur
+  repeaterListenTimer: null, // Timer for stopping repeater listener
+  repeaterData: null, // Current repeater collection data {sessionLi, repeaters: Map}
+  repeaterLogListener: null // LogRxData event listener reference
 };
 
 // ---- UI helpers ----
@@ -454,6 +460,113 @@ function buildPayload(lat, lon) {
   return `${PING_PREFIX} ${coordsStr} ${suffix}`;
 }
 
+// ---- Repeater Tracking ----
+function startRepeaterTracking(sessionLi) {
+  // Clean up any existing tracking
+  stopRepeaterTracking();
+  
+  // Initialize repeater data collection
+  state.repeaterData = {
+    sessionLi: sessionLi,
+    repeaters: new Map() // Map of repeaterID -> SNR
+  };
+  
+  // Create listener for LogRxData events
+  state.repeaterLogListener = (logData) => {
+    try {
+      // Check if repeater data collection is still active
+      if (!state.repeaterData) return;
+      
+      // Validate input data
+      if (!logData || typeof logData.lastSnr !== 'number' || !logData.raw) return;
+      
+      // Parse the packet from raw data
+      let packet;
+      try {
+        packet = Packet.fromBytes(logData.raw);
+      } catch (parseError) {
+        console.warn("Failed to parse packet from LogRxData:", parseError);
+        return;
+      }
+      
+      // Check if this is a group text message (our ping echo)
+      // Verify path exists and has at least one byte (repeater ID)
+      if (packet.getPayloadType() === Packet.PAYLOAD_TYPE_GRP_TXT && 
+          packet.path && packet.path.length > 0) {
+        // Extract repeater ID (first byte of path)
+        const repeaterId = packet.path[0];
+        
+        // Validate repeater ID is a valid byte value (0-255)
+        // Note: repeaterId can be 0 (valid byte value), so we check type and range
+        if (repeaterId === undefined || typeof repeaterId !== 'number' || 
+            !Number.isInteger(repeaterId) || repeaterId < 0 || repeaterId > 255) {
+          console.warn(`Invalid repeater ID: ${repeaterId}`);
+          return;
+        }
+        
+        // SNR ranges from -12 to +12 dB
+        // Note: logData.lastSnr is already processed (readInt8() / 4) by the connection layer
+        const snr = Math.round(logData.lastSnr);
+        
+        // Store or update repeater data
+        // Keep the highest SNR value (closest to +12dB) for duplicate repeaters
+        if (!state.repeaterData.repeaters.has(repeaterId) || 
+            state.repeaterData.repeaters.get(repeaterId) < snr) {
+          state.repeaterData.repeaters.set(repeaterId, snr);
+          console.log(`Repeater detected: ID=${repeaterId}, SNR=${snr}dB`);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to parse repeater data:", e);
+    }
+  };
+  
+  // Start listening for LogRxData events
+  if (state.connection) {
+    state.connection.on(Constants.PushCodes.LogRxData, state.repeaterLogListener);
+  }
+  
+  // Schedule stop after REPEATER_LISTEN_MS
+  state.repeaterListenTimer = setTimeout(() => {
+    stopRepeaterTracking();
+  }, REPEATER_LISTEN_MS);
+}
+
+function stopRepeaterTracking() {
+  // Stop the timer
+  if (state.repeaterListenTimer) {
+    clearTimeout(state.repeaterListenTimer);
+    state.repeaterListenTimer = null;
+  }
+  
+  // Remove the event listener
+  if (state.repeaterLogListener && state.connection) {
+    state.connection.off(Constants.PushCodes.LogRxData, state.repeaterLogListener);
+    state.repeaterLogListener = null;
+  }
+  
+  // Update the session log entry with repeater data
+  if (state.repeaterData && state.repeaterData.sessionLi) {
+    const repeaters = state.repeaterData.repeaters;
+    if (repeaters.size > 0) {
+      // Format repeater data as [ID1(SNR1),ID2(SNR2),...]
+      // SNR values range from -12 to +12 dB, e.g., [25(-8),21(-5),14(3)]
+      const repeaterList = Array.from(repeaters.entries())
+        .sort((a, b) => a[0] - b[0]) // Sort by repeater ID
+        .map(([id, snr]) => `${id}(${snr})`)
+        .join(',');
+      
+      // Append to the existing text in the session log
+      const currentText = state.repeaterData.sessionLi.textContent;
+      state.repeaterData.sessionLi.textContent = `${currentText}  [${repeaterList}]`;
+      console.log(`Session ping updated with ${repeaters.size} repeater(s)`);
+    }
+  }
+  
+  // Clear repeater data
+  state.repeaterData = null;
+}
+
 // ---- MeshMapper API ----
 async function postToMeshMapperAPI(lat, lon) {
   try {
@@ -616,7 +729,8 @@ async function sendPing(manual = false) {
       state.meshMapperTimer = null;
     }, MESHMAPPER_DELAY_MS);
     
-    const nowStr = new Date().toLocaleString();
+    // Format timestamp as ISO 8601 without milliseconds: YYYY-MM-DDTHH:MM:SSZ
+    const nowStr = new Date().toISOString().split('.')[0] + 'Z';
     if (lastPingEl) lastPingEl.textContent = `${nowStr} — ${payload}`;
 
     // Session log
@@ -627,6 +741,9 @@ async function sendPing(manual = false) {
       sessionPingsEl.appendChild(li);
        // Auto-scroll to bottom when a new entry arrives
       sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
+      
+      // Start tracking repeater echoes for this ping
+      startRepeaterTracking(li);
     }
   } catch (e) {
     console.error("Ping failed:", e);
@@ -762,6 +879,7 @@ async function connect() {
       }
       stopAutoCountdown();
       stopApiCountdown();
+      stopRepeaterTracking();
       state.cooldownEndTime = null;
       
       state.lastFix = null;
