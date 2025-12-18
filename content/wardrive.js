@@ -761,6 +761,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     return await acquireFreshGpsPosition();
   } catch (e) {
     debugError(`Could not get fresh GPS location: ${e.message}`, e);
+    // Note: "Error:" prefix is intentional per UX requirements for manual ping timeout
     throw new Error("Error: could not get fresh GPS location");
   }
 }
