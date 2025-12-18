@@ -27,7 +27,7 @@ const OTTAWA_CENTER_LAT = 45.4215;             // Ottawa Parliament Hill latitud
 const OTTAWA_CENTER_LON = -75.6972;            // Ottawa Parliament Hill longitude
 const GEOFENCE_RADIUS_KM = 150;                // Ottawa geofence radius in kilometers
 const MIN_PING_DISTANCE_M = 25;                // Minimum movement required between pings in meters
-const DEBUG_GPS_LOGGING = true;                // Enable detailed GPS filtering console logs
+const DEBUG_GPS_LOGGING = false;               // Enable detailed GPS filtering console logs (set to true for debugging)
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
@@ -82,10 +82,13 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371; // Earth's radius in kilometers
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = 
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const lat1Rad = lat1 * Math.PI / 180;
+  const lat2Rad = lat2 * Math.PI / 180;
+  const sinDLatHalf = Math.sin(dLat / 2);
+  const sinDLonHalf = Math.sin(dLon / 2);
+  const a = sinDLatHalf * sinDLatHalf + 
+            Math.cos(lat1Rad) * Math.cos(lat2Rad) * 
+            sinDLonHalf * sinDLonHalf;
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c; // Distance in kilometers
 }
@@ -114,6 +117,18 @@ function shouldSkipPingDueToDistance(lat, lon) {
     return false; // No previous ping, don't skip
   }
   return distanceM < MIN_PING_DISTANCE_M;
+}
+
+// ---- Ping Skip Handler ----
+function handlePingSkip(skipMsg, manual) {
+  state.lastSkipReason = skipMsg;
+  if (manual) {
+    // Manual ping: persist skip message
+    setStatus(skipMsg, "text-amber-300");
+  } else {
+    // Auto ping: show skip message with countdown
+    scheduleNextAutoPing();
+  }
 }
 
 // ---- UI helpers ----
@@ -645,16 +660,7 @@ async function sendPing(manual = false) {
       if (DEBUG_GPS_LOGGING) {
         console.warn(`[Geofence Check] ${skipMsg}`);
       }
-      
-      if (manual) {
-        // Manual ping: persist skip message
-        state.lastSkipReason = skipMsg;
-        setStatus(skipMsg, "text-amber-300");
-      } else {
-        // Auto ping: show skip message with countdown
-        state.lastSkipReason = skipMsg;
-        scheduleNextAutoPing();
-      }
+      handlePingSkip(skipMsg, manual);
       return;
     }
     
@@ -671,16 +677,7 @@ async function sendPing(manual = false) {
         if (DEBUG_GPS_LOGGING) {
           console.warn(`[Distance Check] ${skipMsg}`);
         }
-        
-        if (manual) {
-          // Manual ping: persist skip message
-          state.lastSkipReason = skipMsg;
-          setStatus(skipMsg, "text-amber-300");
-        } else {
-          // Auto ping: show skip message with countdown
-          state.lastSkipReason = skipMsg;
-          scheduleNextAutoPing();
-        }
+        handlePingSkip(skipMsg, manual);
         return;
       }
     } else {
