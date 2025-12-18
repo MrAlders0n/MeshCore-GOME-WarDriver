@@ -62,7 +62,9 @@ const state = {
   cooldownEndTime: null, // Timestamp when cooldown period ends
   cooldownUpdateTimer: null, // Timer to re-enable controls after cooldown
   autoCountdownTimer: null, // Timer for auto-ping countdown display
-  nextAutoPingTime: null // Timestamp when next auto-ping will occur
+  nextAutoPingTime: null, // Timestamp when next auto-ping will occur
+  apiCountdownTimer: null, // Timer for API post countdown display
+  apiPostTime: null // Timestamp when API post will occur
 };
 
 // ---- UI helpers ----
@@ -105,6 +107,42 @@ function stopAutoCountdown() {
     state.autoCountdownTimer = null;
   }
   state.nextAutoPingTime = null;
+}
+function updateApiCountdownStatus() {
+  if (!state.apiPostTime) {
+    return;
+  }
+  
+  const remainingMs = state.apiPostTime - Date.now();
+  if (remainingMs <= 0) {
+    setStatus("Posting to API...", "text-sky-300");
+    return;
+  }
+  
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  setStatus(`Wait to post API (${remainingSec}s)`, "text-sky-300");
+}
+function startApiCountdown(delayMs) {
+  // Stop any existing countdown
+  stopApiCountdown();
+  
+  // Set the API post time
+  state.apiPostTime = Date.now() + delayMs;
+  
+  // Update immediately
+  updateApiCountdownStatus();
+  
+  // Update every second
+  state.apiCountdownTimer = setInterval(() => {
+    updateApiCountdownStatus();
+  }, 1000);
+}
+function stopApiCountdown() {
+  if (state.apiCountdownTimer) {
+    clearInterval(state.apiCountdownTimer);
+    state.apiCountdownTimer = null;
+  }
+  state.apiPostTime = null;
 }
 function isInCooldown() {
   return state.cooldownEndTime && Date.now() < state.cooldownEndTime;
@@ -526,12 +564,13 @@ async function sendPing(manual = false) {
     startCooldown();
 
     // Update status after ping is sent
-    // Brief delay to show "Ping sent" status before moving to "Waiting for API post"
+    // Brief delay to show "Ping sent" status before moving to countdown
     setStatus(manual ? "Ping sent" : "Auto ping sent", "text-emerald-300");
     
     setTimeout(() => {
       if (state.connection) {
-        setStatus("Waiting for API post", "text-sky-300");
+        // Start countdown for API post
+        startApiCountdown(MESHMAPPER_DELAY_MS);
       }
     }, STATUS_UPDATE_DELAY_MS);
 
@@ -544,6 +583,10 @@ async function sendPing(manual = false) {
     state.meshMapperTimer = setTimeout(async () => {
       // Capture accuracy in closure to ensure it's available in nested callback
       const capturedAccuracy = accuracy;
+      
+      // Stop the API countdown since we're posting now
+      stopApiCountdown();
+      setStatus("Posting to API...", "text-sky-300");
       
       try {
         await postToMeshMapperAPI(lat, lon);
@@ -718,6 +761,7 @@ async function connect() {
         state.cooldownUpdateTimer = null;
       }
       stopAutoCountdown();
+      stopApiCountdown();
       state.cooldownEndTime = null;
       
       state.lastFix = null;
