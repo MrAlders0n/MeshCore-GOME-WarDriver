@@ -548,7 +548,7 @@ function startDistanceUpdater() {
   if (state.distanceUpdateTimer) return;
   state.distanceUpdateTimer = setInterval(() => {
     updateDistanceUi();
-  }, 1000); // Update every second
+  }, 3000); // Update every 3 seconds as fallback (main updates happen on GPS position changes)
 }
 
 /**
@@ -647,7 +647,7 @@ function startGeoWatch() {
       };
       state.gpsState = "acquired";
       updateGpsUi();
-      updateDistanceUi();
+      updateDistanceUi(); // Update distance when GPS position changes
     },
     (err) => {
       debugError(`GPS watch error: ${err.code} - ${err.message}`);
