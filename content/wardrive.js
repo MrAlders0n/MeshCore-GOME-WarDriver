@@ -183,7 +183,7 @@ const autoCountdownTimer = createCountdownTimer(
     // If there's a skip reason, show it with the countdown in warning color
     if (state.skipReason === "outside geofence") {
       return { 
-        message: `Ping skipped, outside of geo fenced region (${remainingSec}s)`,
+        message: `Ping skipped, outside of geo fenced region, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
