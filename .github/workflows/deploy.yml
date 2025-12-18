@@ -53,6 +53,7 @@ jobs:
           
           mkdir -p _site/dev
           cp -r dev-content/* _site/dev/ 2>/dev/null || true
+          cp -r dev-content/content _site/dev/ 2>/dev/null || true
           
           # Inject dev badge with date
           DEV_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")

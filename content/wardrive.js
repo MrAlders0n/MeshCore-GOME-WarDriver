@@ -5,7 +5,7 @@
 // - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
-import { WebBleConnection } from "/content/mc/index.js"; // your BLE client
+import { WebBleConnection } from "./mc/index.js"; // your BLE client
 
 // ---- Config ----
 const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if needed
