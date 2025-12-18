@@ -669,8 +669,8 @@ async function sendPing(manual = false) {
       }
     }
 
-    // Validate GPS coordinates
-    if (!lat || !lon || typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+    // Validate GPS coordinates (note: 0 is a valid coordinate)
+    if (lat == null || lon == null || typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
       const msg = "Invalid GPS coordinates - cannot send ping";
       console.error(`GPS validation failed: lat=${lat}, lon=${lon}`);
       setStatus(msg, "text-red-300");
@@ -689,7 +689,6 @@ async function sendPing(manual = false) {
       const msg = `Outside service area (${geofenceCheck.distanceKm.toFixed(1)}km from Ottawa)`;
       console.log(`❌ Geofence check FAILED: ${msg}`);
       setStatus(msg, "text-red-300");
-      state.outsideGeofence = true;
       
       // In auto mode, schedule next ping to keep checking location
       if (!manual && state.running) {
@@ -712,9 +711,6 @@ async function sendPing(manual = false) {
         const remainingDistance = MIN_PING_DISTANCE_M - distanceFromLastPing;
         console.log(`Ping blocked: too close (${distanceFromLastPing.toFixed(1)}m). Need ${remainingDistance.toFixed(1)}m more`);
         
-        // Update state so checkLocationRestrictions keeps showing the error
-        state.tooCloseToLastPing = true;
-        
         if (manual) {
           // For manual ping, show immediate feedback
           setStatus(`Haven't moved far enough from last ping. Need ${remainingDistance.toFixed(1)}m more`, "text-amber-300");
@@ -725,10 +721,6 @@ async function sendPing(manual = false) {
         return;
       }
     }
-    
-    // Clear restriction flags since checks passed
-    state.tooCloseToLastPing = false;
-    state.outsideGeofence = false;
 
     const payload = buildPayload(lat, lon);
 
