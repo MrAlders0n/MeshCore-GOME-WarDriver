@@ -89,7 +89,8 @@ const state = {
   autoCountdownTimer: null, // Timer for auto-ping countdown display
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
   apiCountdownTimer: null, // Timer for API post countdown display
-  apiPostTime: null // Timestamp when API post will occur
+  apiPostTime: null, // Timestamp when API post will occur
+  skipReason: null // Reason for skipping a ping (e.g., "gps too old")
 };
 
 // ---- UI helpers ----
@@ -125,14 +126,26 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
       
       const remainingMs = this.endTime - Date.now();
       if (remainingMs <= 0) {
-        const message = getStatusMessage(0);
-        if (message) setStatus(message, STATUS_COLORS.info);
+        const result = getStatusMessage(0);
+        if (!result) return;
+        // Handle both string and object format
+        if (typeof result === 'string') {
+          setStatus(result, STATUS_COLORS.info);
+        } else {
+          setStatus(result.message, result.color || STATUS_COLORS.info);
+        }
         return;
       }
       
       const remainingSec = Math.ceil(remainingMs / 1000);
-      const message = getStatusMessage(remainingSec);
-      if (message) setStatus(message, STATUS_COLORS.idle);
+      const result = getStatusMessage(remainingSec);
+      if (!result) return;
+      // Handle both string and object format
+      if (typeof result === 'string') {
+        setStatus(result, STATUS_COLORS.idle);
+      } else {
+        setStatus(result.message, result.color || STATUS_COLORS.idle);
+      }
     },
     
     stop() {
@@ -150,9 +163,20 @@ const autoCountdownTimer = createCountdownTimer(
   () => state.nextAutoPingTime,
   (remainingSec) => {
     if (!state.running) return null;
-    return remainingSec === 0 
-      ? "Sending auto ping..." 
-      : `Waiting for next auto ping (${remainingSec}s)`;
+    if (remainingSec === 0) {
+      return { message: "Sending auto ping...", color: STATUS_COLORS.info };
+    }
+    // If there's a skip reason, show it with the countdown in warning color
+    if (state.skipReason) {
+      return { 
+        message: `Ping skipped, ${state.skipReason}. Waiting for next auto ping (${remainingSec}s)`,
+        color: STATUS_COLORS.warning
+      };
+    }
+    return { 
+      message: `Waiting for next auto ping (${remainingSec}s)`,
+      color: STATUS_COLORS.idle
+    };
   }
 );
 
@@ -160,9 +184,13 @@ const autoCountdownTimer = createCountdownTimer(
 const apiCountdownTimer = createCountdownTimer(
   () => state.apiPostTime,
   (remainingSec) => {
-    return remainingSec === 0 
-      ? "Posting to API..." 
-      : `Wait to post API (${remainingSec}s)`;
+    if (remainingSec === 0) {
+      return { message: "Posting to API...", color: STATUS_COLORS.info };
+    }
+    return { 
+      message: `Wait to post API (${remainingSec}s)`,
+      color: STATUS_COLORS.idle
+    };
   }
 );
 
@@ -705,8 +733,8 @@ async function getGpsCoordinatesForPing(isAutoMode) {
         return await acquireFreshGpsPosition();
       } catch (e) {
         debugError(`Could not refresh GPS position for auto ping: ${e.message}`, e);
-        const intervalSec = Math.ceil(intervalMs / 1000);
-        setStatus(`GPS could not refresh position, skipping ping. Next attempt (${intervalSec}s)`, STATUS_COLORS.error);
+        // Set skip reason so the countdown will show the appropriate message
+        state.skipReason = "gps too old";
         return null;
       }
     }
@@ -873,6 +901,9 @@ function stopAutoPing(stopGps = false) {
   }
   stopAutoCountdown();
   
+  // Clear skip reason
+  state.skipReason = null;
+  
   // Only stop GPS watch when disconnecting or page hidden, not during normal stop
   if (stopGps) {
     stopGeoWatch();
@@ -892,12 +923,14 @@ function scheduleNextAutoPing() {
   const intervalMs = getSelectedIntervalMs();
   debugLog(`Scheduling next auto ping in ${intervalMs}ms`);
   
-  // Start countdown immediately
+  // Start countdown immediately (skipReason may be set if ping was skipped)
   startAutoCountdown(intervalMs);
   
   // Schedule the next ping
   state.autoTimerId = setTimeout(() => {
     if (state.running) {
+      // Clear skip reason before next attempt
+      state.skipReason = null;
       debugLog("Auto ping timer fired, sending ping");
       sendPing(false).catch(console.error);
     }
@@ -927,6 +960,9 @@ function startAutoPing() {
     state.autoTimerId = null;
   }
   stopAutoCountdown();
+  
+  // Clear any previous skip reason
+  state.skipReason = null;
   
   // Start GPS watch for continuous updates
   debugLog("Starting GPS watch for auto mode");
