@@ -695,6 +695,25 @@ async function sendPing(manual = false) {
 
     const payload = buildPayload(lat, lon);
 
+    // Format timestamp as ISO 8601 without milliseconds: YYYY-MM-DDTHH:MM:SSZ
+    const nowStr = new Date().toISOString().split('.')[0] + 'Z';
+    
+    // Create session log entry and start tracking BEFORE sending ping
+    // This ensures we capture echoes that arrive immediately after transmission
+    let sessionLogLi = null;
+    if (sessionPingsEl) {
+      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      sessionLogLi = document.createElement('li');
+      sessionLogLi.textContent = line;
+      sessionPingsEl.appendChild(sessionLogLi);
+      // Auto-scroll to bottom when a new entry arrives
+      sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
+      
+      // Start tracking repeater echoes BEFORE sending the ping
+      // This is critical: echoes can arrive within milliseconds of transmission
+      startRepeaterTracking(sessionLogLi);
+    }
+
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
 
@@ -754,22 +773,8 @@ async function sendPing(manual = false) {
       state.meshMapperTimer = null;
     }, MESHMAPPER_DELAY_MS);
     
-    // Format timestamp as ISO 8601 without milliseconds: YYYY-MM-DDTHH:MM:SSZ
-    const nowStr = new Date().toISOString().split('.')[0] + 'Z';
+    // Update last ping display
     if (lastPingEl) lastPingEl.textContent = `${nowStr} — ${payload}`;
-
-    // Session log
-    if (sessionPingsEl) {
-      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
-      const li = document.createElement('li');
-      li.textContent = line;
-      sessionPingsEl.appendChild(li);
-       // Auto-scroll to bottom when a new entry arrives
-      sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
-      
-      // Start tracking repeater echoes for this ping
-      startRepeaterTracking(li);
-    }
   } catch (e) {
     console.error("Ping failed:", e);
     setStatus(e.message || "Ping failed", "text-red-300");
