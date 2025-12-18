@@ -185,6 +185,7 @@ function stopApiCountdown() {
   state.apiPostTime = null;
   apiCountdownTimer.stop();
 }
+
 // Cooldown management
 function isInCooldown() {
   return state.cooldownEndTime && Date.now() < state.cooldownEndTime;
@@ -230,10 +231,15 @@ function cleanupAllTimers() {
     state.cooldownUpdateTimer = null;
   }
   
+  // Clean up state timer references
+  state.autoCountdownTimer = null;
+  state.apiCountdownTimer = null;
+  
   stopAutoCountdown();
   stopApiCountdown();
   state.cooldownEndTime = null;
 }
+
 function enableControls(connected) {
   connectBtn.disabled     = false;
   channelInfoEl.textContent = CHANNEL_NAME;
