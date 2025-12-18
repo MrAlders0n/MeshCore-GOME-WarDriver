@@ -69,6 +69,7 @@ function checkGeofence(lat, lon) {
   const distanceM = calculateDistance(lat, lon, OTTAWA_CENTER_LAT, OTTAWA_CENTER_LON);
   const distanceKm = distanceM / 1000;
   const inBounds = distanceKm <= OTTAWA_GEOFENCE_RADIUS_KM;
+  console.log(`[Geofence] Location: ${lat}, ${lon} | Distance from Ottawa: ${distanceKm.toFixed(1)}km | Limit: ${OTTAWA_GEOFENCE_RADIUS_KM}km | InBounds: ${inBounds}`);
   return { inBounds, distanceKm };
 }
 
@@ -110,7 +111,9 @@ const state = {
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
   apiCountdownTimer: null, // Timer for API post countdown display
   apiPostTime: null, // Timestamp when API post will occur
-  lastPingLocation: null // { lat, lon, tsMs } - location of last successful ping for distance filtering
+  lastPingLocation: null, // { lat, lon, tsMs } - location of last successful ping for distance filtering
+  tooCloseToLastPing: false, // True when user hasn't moved far enough from last ping
+  outsideGeofence: false // True when user is outside the Ottawa geofence
 };
 
 // ---- UI helpers ----
@@ -361,11 +364,75 @@ function updateGpsUi() {
   gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "-";
 }
 
+// Check if current location allows pinging (distance and geofence)
+function checkLocationRestrictions() {
+  if (!state.lastFix) {
+    // No GPS fix, can't check restrictions
+    state.tooCloseToLastPing = false;
+    state.outsideGeofence = false;
+    return;
+  }
+
+  const { lat, lon } = state.lastFix;
+  
+  // Check geofence
+  const geofenceCheck = checkGeofence(lat, lon);
+  const wasOutside = state.outsideGeofence;
+  state.outsideGeofence = !geofenceCheck.inBounds;
+  
+  // Check distance from last ping
+  const wasTooClose = state.tooCloseToLastPing;
+  if (state.lastPingLocation) {
+    const distanceFromLastPing = calculateDistance(
+      lat, lon,
+      state.lastPingLocation.lat, state.lastPingLocation.lon
+    );
+    state.tooCloseToLastPing = distanceFromLastPing < MIN_PING_DISTANCE_M;
+    
+    // Update status - keep error visible when in restricted state
+    if (state.outsideGeofence) {
+      setStatus(`Outside service area (${geofenceCheck.distanceKm.toFixed(1)}km from Ottawa)`, "text-red-300");
+    } else if (state.tooCloseToLastPing) {
+      const remainingDistance = MIN_PING_DISTANCE_M - distanceFromLastPing;
+      if (state.running) {
+        // In auto mode, show "Haven't moved far enough, waiting for next ping (Xs)"
+        const remainingMs = state.nextAutoPingTime ? state.nextAutoPingTime - Date.now() : 0;
+        if (remainingMs > 0) {
+          const remainingSec = Math.ceil(remainingMs / 1000);
+          setStatus(`Haven't moved far enough (need ${remainingDistance.toFixed(1)}m), waiting for next ping (${remainingSec}s)`, "text-amber-300");
+        } else {
+          setStatus(`Haven't moved far enough (need ${remainingDistance.toFixed(1)}m)`, "text-amber-300");
+        }
+      } else {
+        // In manual mode, show persistent error
+        setStatus(`Haven't moved far enough from last ping. Need ${remainingDistance.toFixed(1)}m more`, "text-amber-300");
+      }
+    } else if ((wasTooClose || wasOutside) && !state.tooCloseToLastPing && !state.outsideGeofence) {
+      // Just cleared restrictions
+      if (state.running) {
+        updateAutoCountdownStatus();
+      } else if (!isInCooldown() && state.connection) {
+        setStatus("Idle", "text-slate-300");
+      }
+    }
+  } else {
+    state.tooCloseToLastPing = false;
+    
+    // Only update status if geofence state changed
+    if (state.outsideGeofence && !wasOutside) {
+      setStatus(`Outside service area (${geofenceCheck.distanceKm.toFixed(1)}km from Ottawa)`, "text-red-300");
+    } else if (!state.outsideGeofence && wasOutside && state.connection && !isInCooldown() && !state.running) {
+      setStatus("Idle", "text-slate-300");
+    }
+  }
+}
+
 // Start continuous GPS age display updates
 function startGpsAgeUpdater() {
   if (state.gpsAgeUpdateTimer) return;
   state.gpsAgeUpdateTimer = setInterval(() => {
     updateGpsUi();
+    checkLocationRestrictions();
   }, 1000); // Update every second
 }
 
@@ -394,6 +461,7 @@ function startGeoWatch() {
       };
       state.gpsState = "acquired";
       updateGpsUi();
+      checkLocationRestrictions();
     },
     (err) => {
       console.warn("watchPosition error:", err);
@@ -602,11 +670,15 @@ async function sendPing(manual = false) {
     }
 
     // Check geofence: ensure we're within the Ottawa service area
+    console.log(`Checking geofence for location: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
     const geofenceCheck = checkGeofence(lat, lon);
+    console.log(`Geofence check result: inBounds=${geofenceCheck.inBounds}, distance=${geofenceCheck.distanceKm.toFixed(1)}km`);
+    
     if (!geofenceCheck.inBounds) {
-      const msg = `Location outside service area (${geofenceCheck.distanceKm.toFixed(1)}km from Ottawa)`;
-      console.log(`Geofence check failed: ${msg}`);
+      const msg = `Outside service area (${geofenceCheck.distanceKm.toFixed(1)}km from Ottawa)`;
+      console.log(`❌ Geofence check FAILED: ${msg}`);
       setStatus(msg, "text-red-300");
+      state.outsideGeofence = true;
       
       // In auto mode, schedule next ping to keep checking location
       if (!manual && state.running) {
@@ -614,6 +686,7 @@ async function sendPing(manual = false) {
       }
       return;
     }
+    console.log(`✓ Geofence check PASSED: Within ${OTTAWA_GEOFENCE_RADIUS_KM}km of Ottawa`);
     
     // Check distance from last ping: skip if too close (within 25m)
     if (state.lastPingLocation) {
@@ -626,17 +699,25 @@ async function sendPing(manual = false) {
       
       if (distanceFromLastPing < MIN_PING_DISTANCE_M) {
         const remainingDistance = MIN_PING_DISTANCE_M - distanceFromLastPing;
-        const msg = `Ping skipped, too close to last ping (${distanceFromLastPing.toFixed(1)}m away). Need ${remainingDistance.toFixed(1)}m more to ping`;
-        console.log(msg);
-        setStatus(msg, "text-amber-300");
+        console.log(`Ping blocked: too close (${distanceFromLastPing.toFixed(1)}m). Need ${remainingDistance.toFixed(1)}m more`);
         
-        // In auto mode, schedule next ping to keep checking distance
-        if (!manual && state.running) {
+        // Update state so checkLocationRestrictions keeps showing the error
+        state.tooCloseToLastPing = true;
+        
+        if (manual) {
+          // For manual ping, show immediate feedback
+          setStatus(`Haven't moved far enough from last ping. Need ${remainingDistance.toFixed(1)}m more`, "text-amber-300");
+        } else if (state.running) {
+          // In auto mode, schedule next ping and let checkLocationRestrictions handle status
           scheduleNextAutoPing();
         }
         return;
       }
     }
+    
+    // Clear restriction flags since checks passed
+    state.tooCloseToLastPing = false;
+    state.outsideGeofence = false;
 
     const payload = buildPayload(lat, lon);
 
