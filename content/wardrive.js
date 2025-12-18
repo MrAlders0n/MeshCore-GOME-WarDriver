@@ -654,6 +654,31 @@ function scheduleApiPostAndMapRefresh(lat, lon, accuracy) {
 
 // ---- Ping ----
 /**
+ * Acquire fresh GPS coordinates and update state
+ * @returns {Promise<{lat: number, lon: number, accuracy: number}>} GPS coordinates
+ * @throws {Error} If GPS position cannot be acquired
+ */
+async function acquireFreshGpsPosition() {
+  const pos = await getCurrentPosition();
+  const coords = {
+    lat: pos.coords.latitude,
+    lon: pos.coords.longitude,
+    accuracy: pos.coords.accuracy
+  };
+  debugLog(`Fresh GPS acquired: lat=${coords.lat.toFixed(5)}, lon=${coords.lon.toFixed(5)}, accuracy=${coords.accuracy}m`);
+  
+  state.lastFix = {
+    lat: coords.lat,
+    lon: coords.lon,
+    accM: coords.accuracy,
+    tsMs: Date.now()
+  };
+  updateGpsUi();
+  
+  return coords;
+}
+
+/**
  * Get GPS coordinates for ping operation
  * @param {boolean} isAutoMode - Whether this is an auto ping
  * @returns {Promise<{lat: number, lon: number, accuracy: number}|null>} GPS coordinates or null if unavailable
@@ -677,23 +702,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
       setStatus("GPS data old, trying to refresh position", STATUS_COLORS.warning);
       
       try {
-        const pos = await getCurrentPosition();
-        const coords = {
-          lat: pos.coords.latitude,
-          lon: pos.coords.longitude,
-          accuracy: pos.coords.accuracy
-        };
-        debugLog(`Fresh GPS acquired for auto ping: lat=${coords.lat.toFixed(5)}, lon=${coords.lon.toFixed(5)}, accuracy=${coords.accuracy}m`);
-        
-        state.lastFix = {
-          lat: coords.lat,
-          lon: coords.lon,
-          accM: coords.accuracy,
-          tsMs: Date.now()
-        };
-        updateGpsUi();
-        
-        return coords;
+        return await acquireFreshGpsPosition();
       } catch (e) {
         debugError(`Could not refresh GPS position for auto ping: ${e.message}`, e);
         const intervalSec = Math.ceil(intervalMs / 1000);
@@ -749,23 +758,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
   // Get fresh GPS coordinates for manual ping
   debugLog("Requesting fresh GPS position for manual ping");
   try {
-    const pos = await getCurrentPosition();
-    const coords = {
-      lat: pos.coords.latitude,
-      lon: pos.coords.longitude,
-      accuracy: pos.coords.accuracy
-    };
-    debugLog(`Fresh GPS acquired: lat=${coords.lat.toFixed(5)}, lon=${coords.lon.toFixed(5)}, accuracy=${coords.accuracy}m`);
-    
-    state.lastFix = {
-      lat: coords.lat,
-      lon: coords.lon,
-      accM: coords.accuracy,
-      tsMs: Date.now()
-    };
-    updateGpsUi();
-    
-    return coords;
+    return await acquireFreshGpsPosition();
   } catch (e) {
     debugError(`Could not get fresh GPS location: ${e.message}`, e);
     throw new Error("Error: could not get fresh GPS location");
