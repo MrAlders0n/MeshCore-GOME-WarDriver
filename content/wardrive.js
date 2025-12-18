@@ -211,12 +211,13 @@ function pauseAutoCountdown() {
   if (state.nextAutoPingTime) {
     const remainingMs = state.nextAutoPingTime - Date.now();
     // Only pause if there's meaningful time remaining (more than 1 second)
-    // If timer already expired or about to expire, don't store it
-    if (remainingMs > 1000) {
+    // and not unreasonably large (max 5 minutes to handle clock skew)
+    const maxReasonableMs = 5 * 60 * 1000; // 5 minutes
+    if (remainingMs > 1000 && remainingMs < maxReasonableMs) {
       state.pausedAutoTimerRemainingMs = remainingMs;
       debugLog(`Pausing auto countdown with ${state.pausedAutoTimerRemainingMs}ms remaining`);
     } else {
-      debugLog(`Auto countdown already expired or about to expire (${remainingMs}ms), not pausing`);
+      debugLog(`Auto countdown time out of reasonable range (${remainingMs}ms), not pausing`);
       state.pausedAutoTimerRemainingMs = null;
     }
   }
@@ -228,10 +229,17 @@ function pauseAutoCountdown() {
 function resumeAutoCountdown() {
   // Resume auto countdown from paused time
   if (state.pausedAutoTimerRemainingMs !== null) {
-    debugLog(`Resuming auto countdown with ${state.pausedAutoTimerRemainingMs}ms remaining`);
-    startAutoCountdown(state.pausedAutoTimerRemainingMs);
-    state.pausedAutoTimerRemainingMs = null;
-    return true;
+    // Validate paused time is still reasonable before resuming
+    const maxReasonableMs = 5 * 60 * 1000; // 5 minutes
+    if (state.pausedAutoTimerRemainingMs > 1000 && state.pausedAutoTimerRemainingMs < maxReasonableMs) {
+      debugLog(`Resuming auto countdown with ${state.pausedAutoTimerRemainingMs}ms remaining`);
+      startAutoCountdown(state.pausedAutoTimerRemainingMs);
+      state.pausedAutoTimerRemainingMs = null;
+      return true;
+    } else {
+      debugLog(`Paused time out of reasonable range (${state.pausedAutoTimerRemainingMs}ms), not resuming`);
+      state.pausedAutoTimerRemainingMs = null;
+    }
   }
   return false;
 }
