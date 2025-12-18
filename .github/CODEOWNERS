@@ -1,0 +1,6 @@
+# Default owners for everything
+* @MrAlders0nHelp
+
+# Specific files/directories
+/docs/ @MrAlders0nHelp
+*. js @MrAlders0nHelp

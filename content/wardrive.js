@@ -184,7 +184,7 @@ function updateAutoButton() {
 }
 function buildCoverageEmbedUrl(lat, lon) {
   const base =
-    "https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&meters=1500";
+    "https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&dir=1&meters=1500";
   return `${base}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
 }
 let coverageRefreshTimer = null;
