@@ -654,19 +654,64 @@ function scheduleApiPostAndMapRefresh(lat, lon, accuracy) {
 
 // ---- Ping ----
 /**
+ * Acquire fresh GPS coordinates and update state
+ * @returns {Promise<{lat: number, lon: number, accuracy: number}>} GPS coordinates
+ * @throws {Error} If GPS position cannot be acquired
+ */
+async function acquireFreshGpsPosition() {
+  const pos = await getCurrentPosition();
+  const coords = {
+    lat: pos.coords.latitude,
+    lon: pos.coords.longitude,
+    accuracy: pos.coords.accuracy
+  };
+  debugLog(`Fresh GPS acquired: lat=${coords.lat.toFixed(5)}, lon=${coords.lon.toFixed(5)}, accuracy=${coords.accuracy}m`);
+  
+  state.lastFix = {
+    lat: coords.lat,
+    lon: coords.lon,
+    accM: coords.accuracy,
+    tsMs: Date.now()
+  };
+  updateGpsUi();
+  
+  return coords;
+}
+
+/**
  * Get GPS coordinates for ping operation
  * @param {boolean} isAutoMode - Whether this is an auto ping
  * @returns {Promise<{lat: number, lon: number, accuracy: number}|null>} GPS coordinates or null if unavailable
  */
 async function getGpsCoordinatesForPing(isAutoMode) {
   if (isAutoMode) {
-    // Auto mode: use GPS watch data only
+    // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
       debugWarn("Auto ping skipped: no GPS fix available yet");
       setStatus("Waiting for GPS fix...", STATUS_COLORS.warning);
       return null;
     }
-    debugLog(`Using GPS watch data: lat=${state.lastFix.lat.toFixed(5)}, lon=${state.lastFix.lon.toFixed(5)}`);
+    
+    // Check if GPS data is too old for auto ping
+    const ageMs = Date.now() - state.lastFix.tsMs;
+    const intervalMs = getSelectedIntervalMs();
+    const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS;
+    
+    if (ageMs >= maxAge) {
+      debugLog(`GPS data too old for auto ping (${ageMs}ms), attempting to refresh`);
+      setStatus("GPS data old, trying to refresh position", STATUS_COLORS.warning);
+      
+      try {
+        return await acquireFreshGpsPosition();
+      } catch (e) {
+        debugError(`Could not refresh GPS position for auto ping: ${e.message}`, e);
+        const intervalSec = Math.ceil(intervalMs / 1000);
+        setStatus(`GPS could not refresh position, skipping ping. Next attempt (${intervalSec}s)`, STATUS_COLORS.error);
+        return null;
+      }
+    }
+    
+    debugLog(`Using GPS watch data: lat=${state.lastFix.lat.toFixed(5)}, lon=${state.lastFix.lon.toFixed(5)} (age: ${ageMs}ms)`);
     return {
       lat: state.lastFix.lat,
       lon: state.lastFix.lon,
@@ -707,27 +752,18 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     // Data exists but is too old
     debugLog(`GPS data too old (${ageMs}ms), requesting fresh position`);
+    setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
   }
   
   // Get fresh GPS coordinates for manual ping
   debugLog("Requesting fresh GPS position for manual ping");
-  const pos = await getCurrentPosition();
-  const coords = {
-    lat: pos.coords.latitude,
-    lon: pos.coords.longitude,
-    accuracy: pos.coords.accuracy
-  };
-  debugLog(`Fresh GPS acquired: lat=${coords.lat.toFixed(5)}, lon=${coords.lon.toFixed(5)}, accuracy=${coords.accuracy}m`);
-  
-  state.lastFix = {
-    lat: coords.lat,
-    lon: coords.lon,
-    accM: coords.accuracy,
-    tsMs: Date.now()
-  };
-  updateGpsUi();
-  
-  return coords;
+  try {
+    return await acquireFreshGpsPosition();
+  } catch (e) {
+    debugError(`Could not get fresh GPS location: ${e.message}`, e);
+    // Note: "Error:" prefix is intentional per UX requirements for manual ping timeout
+    throw new Error("Error: could not get fresh GPS location");
+  }
 }
 
 /**
@@ -776,7 +812,14 @@ async function sendPing(manual = false) {
 
     // Get GPS coordinates
     const coords = await getGpsCoordinatesForPing(!manual && state.running);
-    if (!coords) return; // GPS not available, message already shown
+    if (!coords) {
+      // GPS not available, message already shown
+      // For auto mode, schedule next attempt
+      if (!manual && state.running) {
+        scheduleNextAutoPing();
+      }
+      return;
+    }
     
     const { lat, lon, accuracy } = coords;
 
