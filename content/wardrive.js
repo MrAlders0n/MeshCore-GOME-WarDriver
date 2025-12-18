@@ -57,6 +57,7 @@ const state = {
   lastFix: null, // { lat, lon, accM, tsMs }
   bluefyLockEnabled: false,
   gpsState: "idle", // "idle", "acquiring", "acquired", "error"
+  gpsError: null, // Store the GeolocationPositionError for detailed error messages
   gpsAgeUpdateTimer: null, // Timer for updating GPS age display
   meshMapperTimer: null, // Timer for delayed MeshMapper API call
   cooldownEndTime: null, // Timestamp when cooldown period ends
@@ -272,6 +273,39 @@ async function releaseWakeLock() {
 }
 
 // ---- Geolocation ----
+// Helper to decode GeolocationPositionError into user-friendly messages
+function getGpsErrorMessage(err) {
+  if (!err) return { short: "GPS error", detail: "Unknown error" };
+  
+  // GeolocationPositionError codes:
+  // 1 = PERMISSION_DENIED
+  // 2 = POSITION_UNAVAILABLE
+  // 3 = TIMEOUT
+  
+  switch (err.code) {
+    case 1: // PERMISSION_DENIED
+      return {
+        short: "Permission denied",
+        detail: "Location access denied. Check browser and system permissions."
+      };
+    case 2: // POSITION_UNAVAILABLE
+      return {
+        short: "Position unavailable",
+        detail: "Unable to get location. On macOS: Check System Settings → Privacy & Security → Location Services. Enable for your browser."
+      };
+    case 3: // TIMEOUT
+      return {
+        short: "GPS timeout",
+        detail: "Location request timed out. Try moving to an area with better GPS signal."
+      };
+    default:
+      return {
+        short: "GPS error",
+        detail: err.message || "Unknown error occurred"
+      };
+  }
+}
+
 async function getCurrentPosition() {
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
@@ -298,8 +332,9 @@ function updateGpsUi() {
       gpsInfoEl.textContent = "Acquiring GPS fix...";
       gpsAccEl.textContent = "Please wait";
     } else if (state.gpsState === "error") {
-      gpsInfoEl.textContent = "GPS error - check permissions";
-      gpsAccEl.textContent = "-";
+      const errorInfo = getGpsErrorMessage(state.gpsError);
+      gpsInfoEl.textContent = errorInfo.short;
+      gpsAccEl.textContent = errorInfo.detail;
     } else {
       gpsInfoEl.textContent = "-";
       gpsAccEl.textContent = "-";
@@ -347,11 +382,14 @@ function startGeoWatch() {
         tsMs: Date.now(),
       };
       state.gpsState = "acquired";
+      state.gpsError = null; // Clear any previous error
       updateGpsUi();
     },
     (err) => {
-      console.warn("watchPosition error:", err);
+      const errorInfo = getGpsErrorMessage(err);
+      console.warn(`watchPosition error (code ${err.code}):`, errorInfo.detail);
       state.gpsState = "error";
+      state.gpsError = err; // Store the error for UI display
       // Keep UI honest if it fails
       updateGpsUi();
     },
@@ -397,8 +435,10 @@ async function primeGpsOnce() {
     }
 
   } catch (e) {
-    console.warn("primeGpsOnce failed:", e);
+    const errorInfo = getGpsErrorMessage(e);
+    console.warn(`primeGpsOnce failed (code ${e.code || 'unknown'}):`, errorInfo.detail);
     state.gpsState = "error";
+    state.gpsError = e; // Store the error for UI display
     updateGpsUi();
   }
 }
