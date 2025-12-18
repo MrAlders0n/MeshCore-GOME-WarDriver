@@ -49,6 +49,14 @@ const WARDROVE_KEY     = new Uint8Array([
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
 ]);
 
+// Ottawa Geofence Configuration
+const OTTAWA_CENTER_LAT = 45.4215;  // Parliament Hill latitude
+const OTTAWA_CENTER_LON = -75.6972; // Parliament Hill longitude
+const OTTAWA_GEOFENCE_RADIUS_M = 150000; // 150 km in meters
+
+// Distance-Based Ping Filtering
+const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
+
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
@@ -65,6 +73,7 @@ const autoToggleBtn  = $("autoToggleBtn");
 const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
+const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
@@ -93,7 +102,9 @@ const state = {
   apiCountdownTimer: null, // Timer for API post countdown display
   apiPostTime: null, // Timestamp when API post will occur
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
-  pausedAutoTimerRemainingMs: null // Remaining time when auto ping timer was paused by manual ping
+  pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
+  lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
+  distanceUpdateTimer: null // Timer for updating distance display
 };
 
 // ---- UI helpers ----
@@ -170,6 +181,18 @@ const autoCountdownTimer = createCountdownTimer(
       return { message: "Sending auto ping...", color: STATUS_COLORS.info };
     }
     // If there's a skip reason, show it with the countdown in warning color
+    if (state.skipReason === "outside geofence") {
+      return { 
+        message: `Ping skipped, outside of geo fenced region (${remainingSec}s)`,
+        color: STATUS_COLORS.warning
+      };
+    }
+    if (state.skipReason === "too close") {
+      return { 
+        message: `Ping skipping, too close to last ping, waiting for next ping (${remainingSec}s)`,
+        color: STATUS_COLORS.warning
+      };
+    }
     if (state.skipReason) {
       return { 
         message: `Skipped (${state.skipReason}), next ping (${remainingSec}s)`,
@@ -416,6 +439,128 @@ async function releaseWakeLock() {
   }
 }
 
+// ---- Geofence & Distance Validation ----
+
+/**
+ * Calculate Haversine distance between two GPS coordinates
+ * @param {number} lat1 - First latitude
+ * @param {number} lon1 - First longitude
+ * @param {number} lat2 - Second latitude
+ * @param {number} lon2 - Second longitude
+ * @returns {number} Distance in meters
+ */
+function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
+  debugLog(`Calculating Haversine distance: (${lat1.toFixed(5)}, ${lon1.toFixed(5)}) to (${lat2.toFixed(5)}, ${lon2.toFixed(5)})`);
+  
+  const R = 6371000; // Earth's radius in meters
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const distance = R * c;
+  
+  debugLog(`Haversine distance calculated: ${distance.toFixed(2)}m`);
+  return distance;
+}
+
+/**
+ * Validate that GPS coordinates are within the Ottawa geofence
+ * @param {number} lat - Latitude to check
+ * @param {number} lon - Longitude to check
+ * @returns {boolean} True if within geofence, false otherwise
+ */
+function validateGeofence(lat, lon) {
+  debugLog(`Validating geofence for coordinates: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
+  debugLog(`Geofence center: (${OTTAWA_CENTER_LAT}, ${OTTAWA_CENTER_LON}), radius: ${OTTAWA_GEOFENCE_RADIUS_M}m`);
+  
+  const distance = calculateHaversineDistance(lat, lon, OTTAWA_CENTER_LAT, OTTAWA_CENTER_LON);
+  const isWithinGeofence = distance <= OTTAWA_GEOFENCE_RADIUS_M;
+  
+  debugLog(`Geofence validation: distance=${distance.toFixed(2)}m, within_geofence=${isWithinGeofence}`);
+  return isWithinGeofence;
+}
+
+/**
+ * Validate that current GPS coordinates are at least 25m from last successful ping
+ * @param {number} lat - Current latitude
+ * @param {number} lon - Current longitude
+ * @returns {boolean} True if distance >= 25m or no previous ping, false otherwise
+ */
+function validateMinimumDistance(lat, lon) {
+  debugLog(`Validating minimum distance for coordinates: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
+  
+  if (!state.lastSuccessfulPingLocation) {
+    debugLog("No previous successful ping location, minimum distance check skipped");
+    return true;
+  }
+  
+  const { lat: lastLat, lon: lastLon } = state.lastSuccessfulPingLocation;
+  debugLog(`Last successful ping location: (${lastLat.toFixed(5)}, ${lastLon.toFixed(5)})`);
+  
+  const distance = calculateHaversineDistance(lat, lon, lastLat, lastLon);
+  const isMinimumDistanceMet = distance >= MIN_PING_DISTANCE_M;
+  
+  debugLog(`Distance validation: distance=${distance.toFixed(2)}m, minimum_distance_met=${isMinimumDistanceMet} (threshold=${MIN_PING_DISTANCE_M}m)`);
+  return isMinimumDistanceMet;
+}
+
+/**
+ * Calculate distance from last successful ping location (for UI display)
+ * @returns {number|null} Distance in meters, or null if no previous ping
+ */
+function getDistanceFromLastPing() {
+  if (!state.lastFix || !state.lastSuccessfulPingLocation) {
+    return null;
+  }
+  
+  const { lat, lon } = state.lastFix;
+  const { lat: lastLat, lon: lastLon } = state.lastSuccessfulPingLocation;
+  
+  return calculateHaversineDistance(lat, lon, lastLat, lastLon);
+}
+
+/**
+ * Update the distance display in the UI
+ */
+function updateDistanceUi() {
+  if (!distanceInfoEl) return;
+  
+  const distance = getDistanceFromLastPing();
+  
+  if (distance === null) {
+    distanceInfoEl.textContent = "-";
+  } else {
+    distanceInfoEl.textContent = `${Math.round(distance)} m`;
+  }
+}
+
+/**
+ * Start continuous distance display updates
+ */
+function startDistanceUpdater() {
+  if (state.distanceUpdateTimer) return;
+  state.distanceUpdateTimer = setInterval(() => {
+    updateDistanceUi();
+  }, 1000); // Update every second
+}
+
+/**
+ * Stop distance display updates
+ */
+function stopDistanceUpdater() {
+  if (state.distanceUpdateTimer) {
+    clearInterval(state.distanceUpdateTimer);
+    state.distanceUpdateTimer = null;
+  }
+}
+
 // ---- Geolocation ----
 async function getCurrentPosition() {
   return new Promise((resolve, reject) => {
@@ -489,6 +634,7 @@ function startGeoWatch() {
   state.gpsState = "acquiring";
   updateGpsUi();
   startGpsAgeUpdater(); // Start the age counter
+  startDistanceUpdater(); // Start the distance updater
 
   state.geoWatchId = navigator.geolocation.watchPosition(
     (pos) => {
@@ -501,6 +647,7 @@ function startGeoWatch() {
       };
       state.gpsState = "acquired";
       updateGpsUi();
+      updateDistanceUi();
     },
     (err) => {
       debugError(`GPS watch error: ${err.code} - ${err.message}`);
@@ -524,6 +671,7 @@ function stopGeoWatch() {
   navigator.geolocation.clearWatch(state.geoWatchId);
   state.geoWatchId = null;
   stopGpsAgeUpdater(); // Stop the age counter
+  stopDistanceUpdater(); // Stop the distance updater
 }
 async function primeGpsOnce() {
   debugLog("Priming GPS with initial position request");
@@ -906,12 +1054,62 @@ async function sendPing(manual = false) {
     
     const { lat, lon, accuracy } = coords;
 
+    // VALIDATION 1: Geofence check (FIRST - must be within Ottawa 150km)
+    debugLog("Starting geofence validation");
+    if (!validateGeofence(lat, lon)) {
+      debugLog("Ping blocked: outside geofence");
+      
+      // Set skip reason for auto mode countdown display
+      state.skipReason = "outside geofence";
+      
+      if (manual) {
+        // Manual ping: show skip message that persists
+        setStatus("Ping skipped, outside of geo fenced region", STATUS_COLORS.warning);
+      } else if (state.running) {
+        // Auto ping: schedule next ping and show countdown with skip message
+        scheduleNextAutoPing();
+      }
+      
+      return;
+    }
+    debugLog("Geofence validation passed");
+
+    // VALIDATION 2: Distance check (SECOND - must be ≥ 25m from last successful ping)
+    debugLog("Starting distance validation");
+    if (!validateMinimumDistance(lat, lon)) {
+      debugLog("Ping blocked: too close to last ping");
+      
+      // Set skip reason for auto mode countdown display
+      state.skipReason = "too close";
+      
+      if (manual) {
+        // Manual ping: show skip message that persists
+        setStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
+      } else if (state.running) {
+        // Auto ping: schedule next ping and show countdown with skip message
+        scheduleNextAutoPing();
+      }
+      
+      return;
+    }
+    debugLog("Distance validation passed");
+
+    // Both validations passed - execute ping operation (Mesh + API)
+    debugLog("All validations passed, executing ping operation");
+    
     const payload = buildPayload(lat, lon);
     debugLog(`Sending ping to channel: "${payload}"`);
 
     const ch = await ensureChannel();
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     debugLog(`Ping sent successfully to channel ${ch.channelIdx}`);
+
+    // Ping operation succeeded - update last successful ping location
+    state.lastSuccessfulPingLocation = { lat, lon };
+    debugLog(`Updated last successful ping location: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
+    
+    // Clear skip reason on successful ping
+    state.skipReason = null;
 
     // Start cooldown period after successful ping
     debugLog(`Starting ${COOLDOWN_MS}ms cooldown`);
@@ -932,6 +1130,9 @@ async function sendPing(manual = false) {
     
     // Update UI with ping info
     logPingToUI(payload, lat, lon);
+    
+    // Update distance display immediately after successful ping
+    updateDistanceUi();
   } catch (e) {
     debugError(`Ping operation failed: ${e.message}`, e);
     setStatus(e.message || "Ping failed", STATUS_COLORS.error);
@@ -1089,13 +1290,16 @@ async function connect() {
       updateAutoButton();
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
+      stopDistanceUpdater(); // Ensure distance updater stops
       
       // Clean up all timers
       cleanupAllTimers();
       
       state.lastFix = null;
+      state.lastSuccessfulPingLocation = null;
       state.gpsState = "idle";
       updateGpsUi();
+      updateDistanceUi();
       debugLog("Disconnect cleanup complete");
     });
 
