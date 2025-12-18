@@ -492,9 +492,18 @@ function startRepeaterTracking(sessionLi) {
       // Check if this is a group text message (our ping echo)
       // Verify path exists and has at least one byte (repeater ID)
       if (packet.getPayloadType() === Packet.PAYLOAD_TYPE_GRP_TXT && 
-          packet.path && packet.path.length > 0 && packet.path[0] !== undefined) {
+          packet.path && packet.path.length > 0) {
         // Extract repeater ID (first byte of path)
+        // Note: repeaterId can be 0 (valid byte value), so we check path.length instead
         const repeaterId = packet.path[0];
+        
+        // Validate repeater ID is a valid byte value (0-255)
+        if (typeof repeaterId !== 'number' || repeaterId < 0 || repeaterId > 255) {
+          console.warn(`Invalid repeater ID: ${repeaterId}`);
+          return;
+        }
+        
+        // SNR ranges from -12 to +12 dB (Int8 / 4)
         const snr = Math.round(logData.lastSnr);
         
         // Store or update repeater data (keep best/strongest SNR if duplicate)
@@ -539,7 +548,7 @@ function stopRepeaterTracking() {
     const repeaters = state.repeaterData.repeaters;
     if (repeaters.size > 0) {
       // Format repeater data as [ID1(SNR1),ID2(SNR2),...]
-      // SNR values are typically negative, e.g., [25(-112),21(-109)]
+      // SNR values range from -12 to +12 dB, e.g., [25(-8),21(-5),14(3)]
       const repeaterList = Array.from(repeaters.entries())
         .sort((a, b) => a[0] - b[0]) // Sort by repeater ID
         .map(([id, snr]) => `${id}(${snr})`)
