@@ -715,7 +715,7 @@ async function sendPing(manual = false) {
     // This ensures we capture echoes that arrive immediately after transmission
     let sessionLogLi = null;
     if (sessionPingsEl) {
-      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)} [sending...]`;
       console.log(`[Debug] Creating session log entry: "${line}"`);
       sessionLogLi = document.createElement('li');
       sessionLogLi.textContent = line;
@@ -733,6 +733,13 @@ async function sendPing(manual = false) {
     console.log(`[Debug] Sending ping to channel ${ch.channelIdx}: "${payload}"`);
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     console.log(`[Debug] Ping sent successfully`);
+    
+    // Update session log to show ping was sent
+    if (sessionLogLi) {
+      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      sessionLogLi.textContent = line;
+      console.log(`[Debug] Session log updated to show ping sent`);
+    }
 
     // Start cooldown period after successful ping
     startCooldown();
