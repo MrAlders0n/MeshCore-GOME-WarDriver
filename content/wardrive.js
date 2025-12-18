@@ -465,6 +465,7 @@ function buildPayload(lat, lon) {
 // Debug output is logged to browser console with [Repeater Tracker] prefix
 // Open DevTools console to see real-time echo detection and diagnose connectivity issues
 function startRepeaterTracking(sessionLi) {
+  console.log(`[Debug] startRepeaterTracking called, sessionLi:`, sessionLi);
   // Clean up any existing tracking
   stopRepeaterTracking();
   
@@ -475,6 +476,8 @@ function startRepeaterTracking(sessionLi) {
   };
   
   console.log(`[Repeater Tracker] Started listening for channel echoes (${REPEATER_LISTEN_MS}ms window)`);
+  console.log(`[Debug] Connection object exists:`, !!state.connection);
+  console.log(`[Debug] LogRxData push code constant:`, Constants.PushCodes.LogRxData);
   
   // Create listener for LogRxData events
   state.repeaterLogListener = (logData) => {
@@ -546,16 +549,22 @@ function startRepeaterTracking(sessionLi) {
   
   // Start listening for LogRxData events
   if (state.connection) {
+    console.log(`[Debug] Registering LogRxData event listener on connection`);
     state.connection.on(Constants.PushCodes.LogRxData, state.repeaterLogListener);
+    console.log(`[Debug] LogRxData event listener registered successfully`);
+  } else {
+    console.warn(`[Debug] Cannot register LogRxData listener: connection is null`);
   }
   
   // Schedule stop after REPEATER_LISTEN_MS
   state.repeaterListenTimer = setTimeout(() => {
+    console.log(`[Debug] Repeater tracking timeout reached after ${REPEATER_LISTEN_MS}ms`);
     stopRepeaterTracking();
   }, REPEATER_LISTEN_MS);
 }
 
 function stopRepeaterTracking() {
+  console.log(`[Debug] stopRepeaterTracking called`);
   // Stop the timer
   if (state.repeaterListenTimer) {
     clearTimeout(state.repeaterListenTimer);
@@ -564,6 +573,7 @@ function stopRepeaterTracking() {
   
   // Remove the event listener
   if (state.repeaterLogListener && state.connection) {
+    console.log(`[Debug] Removing LogRxData event listener`);
     state.connection.off(Constants.PushCodes.LogRxData, state.repeaterLogListener);
     state.repeaterLogListener = null;
   }
@@ -638,12 +648,14 @@ async function postToMeshMapperAPI(lat, lon) {
 
 // ---- Ping ----
 async function sendPing(manual = false) {
+  console.log(`[Debug] sendPing called: manual=${manual}, timestamp=${new Date().toISOString()}`);
   try {
     // Check cooldown only for manual pings
     if (manual && isInCooldown()) {
       const remainingMs = state.cooldownEndTime - Date.now();
       const remainingSec = Math.ceil(remainingMs / 1000);
       setStatus(`Please wait ${remainingSec}s before sending another ping`, "text-amber-300");
+      console.log(`[Debug] Ping blocked by cooldown: ${remainingSec}s remaining`);
       return;
     }
 
@@ -694,6 +706,7 @@ async function sendPing(manual = false) {
     }
 
     const payload = buildPayload(lat, lon);
+    console.log(`[Debug] Payload built: "${payload}"`);
 
     // Format timestamp as ISO 8601 without milliseconds: YYYY-MM-DDTHH:MM:SSZ
     const nowStr = new Date().toISOString().split('.')[0] + 'Z';
@@ -703,6 +716,7 @@ async function sendPing(manual = false) {
     let sessionLogLi = null;
     if (sessionPingsEl) {
       const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      console.log(`[Debug] Creating session log entry: "${line}"`);
       sessionLogLi = document.createElement('li');
       sessionLogLi.textContent = line;
       sessionPingsEl.appendChild(sessionLogLi);
@@ -711,11 +725,14 @@ async function sendPing(manual = false) {
       
       // Start tracking repeater echoes BEFORE sending the ping
       // This is critical: echoes can arrive within milliseconds of transmission
+      console.log(`[Debug] Starting repeater tracking BEFORE sending ping`);
       startRepeaterTracking(sessionLogLi);
     }
 
     const ch = await ensureChannel();
+    console.log(`[Debug] Sending ping to channel ${ch.channelIdx}: "${payload}"`);
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
+    console.log(`[Debug] Ping sent successfully`);
 
     // Start cooldown period after successful ping
     startCooldown();
@@ -823,8 +840,10 @@ function scheduleNextAutoPing() {
 }
 
 function startAutoPing() {
+  console.log(`[Debug] startAutoPing called`);
   if (!state.connection) {
     alert("Connect to a MeshCore device first.");
+    console.log(`[Debug] startAutoPing aborted: no connection`);
     return;
   }
   
@@ -833,6 +852,7 @@ function startAutoPing() {
     const remainingMs = state.cooldownEndTime - Date.now();
     const remainingSec = Math.ceil(remainingMs / 1000);
     setStatus(`Please wait ${remainingSec}s before toggling auto mode`, "text-amber-300");
+    console.log(`[Debug] startAutoPing aborted: in cooldown (${remainingSec}s remaining)`);
     return;
   }
   
@@ -853,6 +873,7 @@ function startAutoPing() {
   acquireWakeLock().catch(console.error);
 
   // Send first ping immediately
+  console.log(`[Debug] startAutoPing: sending first ping immediately`);
   sendPing(false).catch(console.error);
 }
 
@@ -870,10 +891,12 @@ async function connect() {
     state.connection = conn;
 
     conn.on("connected", async () => {
+      console.log(`[Debug] Connection established successfully`);
       setStatus("Connected", "text-emerald-300");
       setConnectButton(true);
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
+      console.log(`[Debug] Device info retrieved:`, selfInfo);
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
       updateAutoButton();
       try { await conn.syncDeviceTime?.(); } catch { /* optional */ }
@@ -965,6 +988,16 @@ document.addEventListener("visibilitychange", async () => {
 
 // ---- Bind UI & init ----
 export async function onLoad() {
+  console.log(`
+╔═══════════════════════════════════════════════════════════╗
+║  MeshCore GOME WarDriver - Debug Console Logs Active     ║
+║  Open DevTools Console to monitor ping activity          ║
+║  Look for [Debug] and [Repeater Tracker] messages        ║
+╚═══════════════════════════════════════════════════════════╝
+  `);
+  console.log(`[Debug] Application loaded at ${new Date().toISOString()}`);
+  console.log(`[Debug] Session pings element:`, sessionPingsEl);
+  
   setStatus("Disconnected", "text-red-300");
   enableControls(false);
   updateAutoButton();
@@ -981,8 +1014,12 @@ export async function onLoad() {
       setStatus(e.message || "Connection error", "text-red-300");
     }
   });
-  sendPingBtn.addEventListener("click", () => sendPing(true).catch(console.error));
+  sendPingBtn.addEventListener("click", () => {
+    console.log(`[Debug] Manual ping button clicked at ${new Date().toISOString()}`);
+    sendPing(true).catch(console.error);
+  });
   autoToggleBtn.addEventListener("click", () => {
+    console.log(`[Debug] Auto toggle button clicked, current state.running=${state.running}`);
     if (state.running) {
       stopAutoPing();
       setStatus("Auto mode stopped", "text-slate-300");
