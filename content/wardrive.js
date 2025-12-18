@@ -29,11 +29,14 @@ const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
 // GPS Enhancement Configuration
 const MIN_PING_DISTANCE_M = 25;                // Minimum distance between pings in meters
-const OTTAWA_CENTER_LAT = 45.4215;             // Parliament Hill latitude
-const OTTAWA_CENTER_LON = -75.6972;            // Parliament Hill longitude
-const OTTAWA_GEOFENCE_RADIUS_KM = 150;         // Service area radius in kilometers
+const OTTAWA_CENTER_LAT = 45.4215;             // Ottawa center (Parliament Hill) latitude
+const OTTAWA_CENTER_LON = -75.6972;            // Ottawa center (Parliament Hill) longitude
+const OTTAWA_GEOFENCE_RADIUS_KM = 150;         // Service area radius in kilometers (covers greater Ottawa region)
 
 // ---- GPS Distance Calculation (Haversine Formula) ----
+const EARTH_RADIUS_METERS = 6371000; // Earth's mean radius in meters
+const DEG_TO_RAD = Math.PI / 180;    // Conversion factor from degrees to radians
+
 /**
  * Calculate the great-circle distance between two GPS coordinates using the Haversine formula.
  * @param {number} lat1 - Latitude of first point in degrees
@@ -43,18 +46,17 @@ const OTTAWA_GEOFENCE_RADIUS_KM = 150;         // Service area radius in kilomet
  * @returns {number} Distance in meters
  */
 function calculateDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Earth's radius in meters
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const Δφ = (lat2 - lat1) * Math.PI / 180;
-  const Δλ = (lon2 - lon1) * Math.PI / 180;
+  const φ1 = lat1 * DEG_TO_RAD;
+  const φ2 = lat2 * DEG_TO_RAD;
+  const Δφ = (lat2 - lat1) * DEG_TO_RAD;
+  const Δλ = (lon2 - lon1) * DEG_TO_RAD;
 
   const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
             Math.cos(φ1) * Math.cos(φ2) *
             Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
-  return R * c; // Distance in meters
+  return EARTH_RADIUS_METERS * c; // Distance in meters
 }
 
 /**
