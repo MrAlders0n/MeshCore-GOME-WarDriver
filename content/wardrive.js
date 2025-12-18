@@ -20,6 +20,13 @@ const COOLDOWN_MS = 7000;                      // Cooldown period for manual pin
 const REPEATER_LISTEN_MS = 7000;               // Listen for repeater echoes for 7 seconds
 const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping sent" status is visible
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
+const DEBUG_STARTUP_BANNER = `
+╔═══════════════════════════════════════════════════════════╗
+║  MeshCore GOME WarDriver - Debug Console Logs Active     ║
+║  Open DevTools Console to monitor ping activity          ║
+║  Look for [Debug] and [Repeater Tracker] messages        ║
+╚═══════════════════════════════════════════════════════════╝
+`;
 const WARDROVE_KEY     = new Uint8Array([
   0x40, 0x76, 0xC3, 0x15, 0xC1, 0xEF, 0x38, 0x5F,
   0xA9, 0x3F, 0x06, 0x60, 0x27, 0x32, 0x0F, 0xE5
@@ -460,6 +467,12 @@ function buildPayload(lat, lon) {
   return `${PING_PREFIX} ${coordsStr} ${suffix}`;
 }
 
+// ---- Helper Functions ----
+function formatSessionLogLine(nowStr, lat, lon, status = '') {
+  const coords = `${lat.toFixed(5)} ${lon.toFixed(5)}`;
+  return status ? `${nowStr}  ${coords} ${status}` : `${nowStr}  ${coords}`;
+}
+
 // ---- Repeater Tracking ----
 // Tracks channel echoes (repeater responses) after sending a ping
 // Debug output is logged to browser console with [Repeater Tracker] prefix
@@ -715,7 +728,7 @@ async function sendPing(manual = false) {
     // This ensures we capture echoes that arrive immediately after transmission
     let sessionLogLi = null;
     if (sessionPingsEl) {
-      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)} [sending...]`;
+      const line = formatSessionLogLine(nowStr, lat, lon, '[sending...]');
       console.log(`[Debug] Creating session log entry: "${line}"`);
       sessionLogLi = document.createElement('li');
       sessionLogLi.textContent = line;
@@ -736,7 +749,7 @@ async function sendPing(manual = false) {
     
     // Update session log to show ping was sent
     if (sessionLogLi) {
-      const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+      const line = formatSessionLogLine(nowStr, lat, lon);
       sessionLogLi.textContent = line;
       console.log(`[Debug] Session log updated to show ping sent`);
     }
@@ -995,13 +1008,7 @@ document.addEventListener("visibilitychange", async () => {
 
 // ---- Bind UI & init ----
 export async function onLoad() {
-  console.log(`
-╔═══════════════════════════════════════════════════════════╗
-║  MeshCore GOME WarDriver - Debug Console Logs Active     ║
-║  Open DevTools Console to monitor ping activity          ║
-║  Look for [Debug] and [Repeater Tracker] messages        ║
-╚═══════════════════════════════════════════════════════════╝
-  `);
+  console.log(DEBUG_STARTUP_BANNER);
   console.log(`[Debug] Application loaded at ${new Date().toISOString()}`);
   console.log(`[Debug] Session pings element:`, sessionPingsEl);
   
