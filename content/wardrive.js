@@ -673,10 +673,25 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     };
   }
   
-  // Manual mode: check if cached data is recent enough
+  // Manual mode: prefer GPS watch data if available and recent
+  // This prevents timeout issues when GPS watch is already running
   const intervalMs = getSelectedIntervalMs();
   const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS;
+  
+  // Check if GPS watch is active and providing recent data
+  const isGpsWatchActive = state.geoWatchId !== null;
   const isCachedDataFresh = state.lastFix && (Date.now() - state.lastFix.tsMs) < maxAge;
+  
+  if (isGpsWatchActive && state.lastFix) {
+    // GPS watch is running - use its data regardless of age to avoid conflicts
+    const ageMs = Date.now() - state.lastFix.tsMs;
+    debugLog(`Using GPS watch data for manual ping (age: ${ageMs}ms, watch active)`);
+    return {
+      lat: state.lastFix.lat,
+      lon: state.lastFix.lon,
+      accuracy: state.lastFix.accM
+    };
+  }
   
   if (isCachedDataFresh) {
     debugLog(`Using cached GPS data (age: ${Date.now() - state.lastFix.tsMs}ms)`);
@@ -687,7 +702,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     };
   }
   
-  // Get fresh GPS coordinates for manual ping
+  // Get fresh GPS coordinates for manual ping (only when watch is not active)
   debugLog("Requesting fresh GPS position for manual ping");
   const pos = await getCurrentPosition();
   const coords = {
