@@ -343,13 +343,22 @@ async function releaseWakeLock() {
 
 // ---- Geolocation ----
 async function getCurrentPosition() {
+  if (DEBUG_GPS_LOGGING) {
+    console.log("[GPS] Requesting current position");
+  }
+  
   return new Promise((resolve, reject) => {
     if (!("geolocation" in navigator)) {
       reject(new Error("Geolocation not supported"));
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (pos) => resolve(pos),
+      (pos) => {
+        if (DEBUG_GPS_LOGGING) {
+          console.log(`[GPS] Got current position: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}, accuracy: ±${Math.round(pos.coords.accuracy)}m`);
+        }
+        resolve(pos);
+      },
       (err) => reject(err),
       { 
         enableHighAccuracy: true, 
@@ -406,6 +415,7 @@ function startGpsAgeUpdater() {
   if (state.gpsAgeUpdateTimer) return;
   state.gpsAgeUpdateTimer = setInterval(() => {
     updateGpsUi();
+    updateDistanceDisplay(); // Also update distance from last ping
   }, 1000); // Update every second
 }
 
@@ -420,6 +430,10 @@ function startGeoWatch() {
   if (state.geoWatchId) return;
   if (!("geolocation" in navigator)) return;
 
+  if (DEBUG_GPS_LOGGING) {
+    console.log("[GPS] Starting continuous GPS watch");
+  }
+
   state.gpsState = "acquiring";
   updateGpsUi();
   startGpsAgeUpdater(); // Start the age counter
@@ -433,7 +447,13 @@ function startGeoWatch() {
         tsMs: Date.now(),
       };
       state.gpsState = "acquired";
+      
+      if (DEBUG_GPS_LOGGING) {
+        console.log(`[GPS] Position updated: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}, accuracy: ±${Math.round(pos.coords.accuracy)}m`);
+      }
+      
       updateGpsUi();
+      updateDistanceDisplay(); // Update distance when GPS position updates
     },
     (err) => {
       console.warn("watchPosition error:", err);
