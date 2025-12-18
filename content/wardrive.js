@@ -669,6 +669,17 @@ async function sendPing(manual = false) {
       }
     }
 
+    // Validate GPS coordinates
+    if (!lat || !lon || typeof lat !== 'number' || typeof lon !== 'number' || isNaN(lat) || isNaN(lon)) {
+      const msg = "Invalid GPS coordinates - cannot send ping";
+      console.error(`GPS validation failed: lat=${lat}, lon=${lon}`);
+      setStatus(msg, "text-red-300");
+      if (!manual && state.running) {
+        scheduleNextAutoPing();
+      }
+      return;
+    }
+    
     // Check geofence: ensure we're within the Ottawa service area
     console.log(`Checking geofence for location: ${lat.toFixed(5)}, ${lon.toFixed(5)}`);
     const geofenceCheck = checkGeofence(lat, lon);
