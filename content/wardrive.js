@@ -37,6 +37,7 @@ const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailab
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
+const GPS_WATCH_MAX_AGE_MS = 60000;            // Maximum age for GPS watch data in manual pings (60s)
 const MESHMAPPER_DELAY_MS = 7000;              // Delay MeshMapper API call by 7 seconds
 const COOLDOWN_MS = 7000;                      // Cooldown period for manual ping and auto toggle
 const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping sent" status is visible
@@ -673,18 +674,39 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     };
   }
   
-  // Manual mode: check if cached data is recent enough
-  const intervalMs = getSelectedIntervalMs();
-  const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS;
-  const isCachedDataFresh = state.lastFix && (Date.now() - state.lastFix.tsMs) < maxAge;
+  // Manual mode: prefer GPS watch data if available and recent
+  // This prevents timeout issues when GPS watch is already running
+  const isGpsWatchActive = state.geoWatchId !== null;
   
-  if (isCachedDataFresh) {
-    debugLog(`Using cached GPS data (age: ${Date.now() - state.lastFix.tsMs}ms)`);
-    return {
-      lat: state.lastFix.lat,
-      lon: state.lastFix.lon,
-      accuracy: state.lastFix.accM
-    };
+  if (state.lastFix) {
+    const ageMs = Date.now() - state.lastFix.tsMs;
+    
+    // If GPS watch is running, use its data if recent (to avoid concurrent requests)
+    if (isGpsWatchActive && ageMs < GPS_WATCH_MAX_AGE_MS) {
+      debugLog(`Using GPS watch data for manual ping (age: ${ageMs}ms, watch active)`);
+      return {
+        lat: state.lastFix.lat,
+        lon: state.lastFix.lon,
+        accuracy: state.lastFix.accM
+      };
+    }
+    
+    // If watch is not active, use cached data if fresh enough
+    if (!isGpsWatchActive) {
+      const intervalMs = getSelectedIntervalMs();
+      const maxAge = intervalMs + GPS_FRESHNESS_BUFFER_MS;
+      if (ageMs < maxAge) {
+        debugLog(`Using cached GPS data (age: ${ageMs}ms, watch inactive)`);
+        return {
+          lat: state.lastFix.lat,
+          lon: state.lastFix.lon,
+          accuracy: state.lastFix.accM
+        };
+      }
+    }
+    
+    // Data exists but is too old
+    debugLog(`GPS data too old (${ageMs}ms), requesting fresh position`);
   }
   
   // Get fresh GPS coordinates for manual ping
