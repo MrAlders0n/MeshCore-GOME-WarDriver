@@ -96,18 +96,18 @@ Pings are sent to the wardriving MeshCore channel to build community coverage ma
 
 ## 🔧 Technical Stack
 
-- **Web Bluetooth ** - BLE device communication
-- **Geolocation ** - High-accuracy GPS tracking
-- **Screen Wake Lock ** - Power management
+- **Web Bluetooth API** - BLE device communication
+- **Geolocation API** - High-accuracy GPS tracking
+- **Screen Wake Lock API** - Power management
 - **Tailwind CSS** - Responsive UI design
 - **PWA Ready** - Progressive Web App manifest
-- **MeshMapper  Integration** - Automatic ping data posting for mesh network comparison
+- **MeshMapper API Integration** - Automatic ping data posting for mesh network comparison
 
 ---
 
-## 🔐 MeshMapper  Integration
+## 🔐 MeshMapper API Integration
 
-This app automatically posts ping data to the YOW MeshMapper  to help compare if messages were received on the mesh. The  key is securely stored in GitHub Secrets..
+This app automatically posts ping data to the YOW MeshMapper API to help compare if messages were received on the mesh. The API key is securely stored in GitHub Secrets.
 
 ---
 
