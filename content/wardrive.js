@@ -894,7 +894,7 @@ function buildPayload(lat, lon) {
   const coordsStr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   const power = getCurrentPowerSetting();
   const suffix = power ? ` [${power}]` : "";
-  return `${PING_PREFIX} ${coordsStr} ${suffix}`;
+  return `${PING_PREFIX} ${coordsStr}${suffix}`.trim();
 }
 
 // ---- MeshMapper API ----
