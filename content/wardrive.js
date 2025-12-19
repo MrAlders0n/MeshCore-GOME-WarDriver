@@ -1730,7 +1730,11 @@ async function sendPing(manual = false) {
     // Check if a capacity check is already in progress (prevent race conditions)
     if (state.capacityCheckInProgress) {
       debugLog(`Capacity check already in progress, skipping ping`);
-      if (!manual && state.running) {
+      if (manual) {
+        // Manual ping: provide user feedback
+        setStatus("Please wait, checking capacity...", STATUS_COLORS.warning);
+      } else if (state.running) {
+        // Auto ping: schedule next attempt
         scheduleNextAutoPing();
       }
       return;
@@ -1990,7 +1994,7 @@ function scheduleNextAutoPing() {
   }, intervalMs);
 }
 
-function startAutoPing() {
+async function startAutoPing() {
   debugLog("startAutoPing called");
   if (!state.connection) {
     debugError("Cannot start auto ping - not connected");
@@ -2020,7 +2024,9 @@ function startAutoPing() {
   debugLog(`Performing capacity check with reason="connect" before starting auto ping`);
   setStatus("Checking wardriving capacity...", STATUS_COLORS.info);
   
-  postCapacityCheck("connect", state.devicePublicKey, who).then(capacityResult => {
+  try {
+    const capacityResult = await postCapacityCheck("connect", state.devicePublicKey, who);
+    
     if (!capacityResult.allowed) {
       debugLog("Capacity check denied auto ping start");
       setStatus("Wardriving is currently at capacity or disabled.", STATUS_COLORS.error);
@@ -2055,10 +2061,11 @@ function startAutoPing() {
     // Send first ping immediately
     debugLog("Sending initial auto ping");
     sendPing(false).catch(console.error);
-  }).catch(error => {
+  } catch (error) {
     debugError(`Capacity check failed: ${error.message}`);
     setStatus("Failed to check wardriving capacity. Try again.", STATUS_COLORS.error);
-  });
+    alert("Failed to check wardriving capacity. Try again later.");
+  }
 }
 
 // ---- BLE connect / disconnect ----
