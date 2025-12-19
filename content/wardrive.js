@@ -1511,7 +1511,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     if (ageMs >= maxAge) {
       debugLog(`GPS data too old for auto ping (${ageMs}ms), attempting to refresh`);
-      setStatus("GPS data old, trying to refresh position", STATUS_COLORS.warning);
+      setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
       
       try {
         return await acquireFreshGpsPosition();

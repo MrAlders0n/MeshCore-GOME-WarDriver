@@ -166,20 +166,12 @@ Status messages follow these consistent conventions:
 - **Context**: Auto ping triggered but no GPS lock acquired yet
 - **Minimum Visibility**: 500ms minimum enforced
 
-#### GPS data old, trying to refresh position
-- **Message**: `"GPS data old, trying to refresh position"`
-- **Color**: Amber (warning)
-- **Used in**: `getGpsCoordinatesForPing()`
-- **Source**: `content/wardrive.js:1514`
-- **Context**: Auto ping with stale GPS data, attempting refresh
-- **Minimum Visibility**: 500ms minimum enforced
-
 #### GPS data too old, requesting fresh position
 - **Message**: `"GPS data too old, requesting fresh position"`
 - **Color**: Amber (warning)
 - **Used in**: `getGpsCoordinatesForPing()`
-- **Source**: `content/wardrive.js:1567`
-- **Context**: Manual ping with stale GPS data
+- **Source**: `content/wardrive.js:1514`, `content/wardrive.js:1567`
+- **Context**: GPS data is stale and needs refresh (used in both auto and manual ping modes)
 - **Minimum Visibility**: 500ms minimum enforced
 
 ---
@@ -347,10 +339,10 @@ Result:     "Message A" (visible 500ms) → "Message C"
 
 ## Summary
 
-**Total Status Messages**: 28 unique message patterns
+**Total Status Messages**: 27 unique message patterns
 - **Connection**: 8 messages
 - **Ping Operation**: 7 messages
-- **GPS**: 3 messages
+- **GPS**: 2 messages
 - **Countdown Timers**: 6 message patterns (with dynamic countdown values)
 - **API/Map**: 2 messages
 - **Auto Mode**: 3 messages
