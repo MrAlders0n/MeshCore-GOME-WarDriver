@@ -1050,34 +1050,36 @@ function handleRxLogEvent(data, originalPayload, channelIdx) {
       return;
     }
     
-    // Extract repeater ID from the last hop in the path (most recent repeater)
-    // The path is a Uint8Array where each byte represents a hop
-    const lastHopIndex = packet.path.length - 1;
-    const repeaterId = packet.path[lastHopIndex].toString(16).padStart(2, '0');
+    // Convert entire path to hex string for the repeater identifier
+    // This represents the complete path this message took
+    // Example: path [0x25, 0x21] becomes "2521"
+    const pathHex = Array.from(packet.path)
+      .map(byte => byte.toString(16).padStart(2, '0'))
+      .join('');
     
-    debugLog(`Detected potential repeater echo: repeaterId=${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
+    debugLog(`Detected repeater echo: path=${pathHex}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
     
-    // Check if we already have this repeater
-    if (state.repeaterTracking.repeaters.has(repeaterId)) {
-      const existing = state.repeaterTracking.repeaters.get(repeaterId);
-      debugLog(`Repeater ${repeaterId} already seen (existing SNR=${existing.snr}, new SNR=${data.lastSnr})`);
+    // Check if we already have this path
+    if (state.repeaterTracking.repeaters.has(pathHex)) {
+      const existing = state.repeaterTracking.repeaters.get(pathHex);
+      debugLog(`Path ${pathHex} already seen (existing SNR=${existing.snr}, new SNR=${data.lastSnr})`);
       
       // Keep the best (highest) SNR
       if (data.lastSnr > existing.snr) {
-        debugLog(`Updating repeater ${repeaterId} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
-        state.repeaterTracking.repeaters.set(repeaterId, {
+        debugLog(`Updating path ${pathHex} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
+        state.repeaterTracking.repeaters.set(pathHex, {
           snr: data.lastSnr,
           seenCount: existing.seenCount + 1
         });
       } else {
-        debugLog(`Keeping existing SNR for repeater ${repeaterId} (existing ${existing.snr} >= new ${data.lastSnr})`);
+        debugLog(`Keeping existing SNR for path ${pathHex} (existing ${existing.snr} >= new ${data.lastSnr})`);
         // Still increment seen count
         existing.seenCount++;
       }
     } else {
-      // New repeater
-      debugLog(`Adding new repeater echo: repeaterId=${repeaterId}, SNR=${data.lastSnr}`);
-      state.repeaterTracking.repeaters.set(repeaterId, {
+      // New path
+      debugLog(`Adding new repeater echo: path=${pathHex}, SNR=${data.lastSnr}`);
+      state.repeaterTracking.repeaters.set(pathHex, {
         snr: data.lastSnr,
         seenCount: 1
       });
@@ -1134,13 +1136,14 @@ function stopRepeaterTracking() {
 /**
  * Format repeater telemetry for output
  * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
- * @returns {string} Formatted repeater string (e.g., "a0(-112),b3(-109)" or "none")
+ * @returns {string} Formatted repeater string (e.g., "25(-112),2521(-109)" or "none")
  */
 function formatRepeaterTelemetry(repeaters) {
   if (repeaters.length === 0) {
     return "none";
   }
   
+  // Format as: path(snr), path(snr), ...
   return repeaters.map(r => `${r.repeaterId}(${Math.round(r.snr)})`).join(',');
 }
 
