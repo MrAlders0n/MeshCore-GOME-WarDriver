@@ -1740,13 +1740,17 @@ async function sendPing(manual = false) {
     const who = getDeviceIdentifier();
     
     // Check if a capacity check is already in progress (prevent race conditions)
+    // Note: For auto ping, we schedule the next ping rather than waiting for the
+    // current check to complete. This prevents the app from getting stuck if a
+    // capacity check hangs or takes too long. The next ping will be scheduled at
+    // the normal interval (15s/30s/60s), not immediately.
     if (state.capacityCheckInProgress) {
       debugLog(`Capacity check already in progress, skipping ping`);
       if (manual) {
         // Manual ping: provide user feedback
         setStatus("Please wait, checking capacity...", STATUS_COLORS.warning);
       } else if (state.running) {
-        // Auto ping: schedule next attempt
+        // Auto ping: schedule next attempt at normal interval
         scheduleNextAutoPing();
       }
       return;
