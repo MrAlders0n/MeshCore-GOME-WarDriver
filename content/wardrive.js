@@ -120,6 +120,7 @@ const state = {
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
   distanceUpdateTimer: null, // Timer for updating distance display
+  capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -354,6 +355,9 @@ function cleanupAllTimers() {
   stopRxListeningCountdown();
   state.cooldownEndTime = null;
   state.pausedAutoTimerRemainingMs = null;
+  
+  // Clear captured ping coordinates
+  state.capturedPingCoords = null;
 }
 
 function enableControls(connected) {
@@ -1623,6 +1627,10 @@ async function sendPing(manual = false) {
 
     const ch = await ensureChannel();
     
+    // Capture GPS coordinates at ping time - these will be used for API post after 7s delay
+    state.capturedPingCoords = { lat, lon, accuracy };
+    debugLog(`GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
+    
     // Start repeater echo tracking BEFORE sending the ping
     debugLog(`Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
     startRepeaterTracking(payload, ch.channelIdx);
@@ -1674,8 +1682,21 @@ async function sendPing(manual = false) {
       const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
       debugLog(`Formatted heard_repeats for API: "${heardRepeatsStr}"`);
       
-      // Post to API with heard repeats data
-      await postApiAndRefreshMap(lat, lon, accuracy, heardRepeatsStr);
+      // Use captured coordinates for API post (not current GPS position)
+      if (state.capturedPingCoords) {
+        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = state.capturedPingCoords;
+        debugLog(`Using captured ping coordinates for API post: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
+        
+        // Post to API with heard repeats data
+        await postApiAndRefreshMap(apiLat, apiLon, apiAccuracy, heardRepeatsStr);
+        
+        // Clear captured coordinates after API post completes
+        state.capturedPingCoords = null;
+        debugLog(`Cleared captured ping coordinates after API post`);
+      } else {
+        debugWarn(`No captured ping coordinates available for API post, using original coordinates`);
+        await postApiAndRefreshMap(lat, lon, accuracy, heardRepeatsStr);
+      }
       
       // Clear timer reference
       state.meshMapperTimer = null;
