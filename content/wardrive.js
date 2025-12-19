@@ -858,40 +858,40 @@ function getGpsMaximumAge(minAge = 1000) {
 
 /**
  * Map tx_power (dBm) from device to power setting string
- * Common LoRa power levels:
- * - 30 dBm = 1000 mW = 1.0w
- * - 27 dBm = 500 mW = 0.5w
- * - 24 dBm = 250 mW = 0.25w
- * - 20 dBm = 100 mW = 0.1w
- * - 17 dBm = 50 mW = 0.05w
- * - 14 dBm = 25 mW = 0.025w
+ * Maps device transmit power to available UI options (0.3w, 0.6w, 1.0w)
+ * 
+ * Reference dBm to mW conversion:
+ * - 30 dBm = 1000 mW
+ * - 27 dBm = 500 mW
+ * - 24 dBm = 250 mW
+ * - 20 dBm = 100 mW
  * 
  * @param {number} txPowerDbm - Transmit power in dBm
- * @returns {string} Power setting string (e.g., "1.0w", "0.6w", "0.3w", or "")
+ * @returns {string} Power setting string matching UI options: "1.0w", "0.6w", "0.3w", or "" (N/A)
  */
 function mapTxPowerToWattage(txPowerDbm) {
-  if (txPowerDbm == null || txPowerDbm < 0) {
+  if (txPowerDbm == null) {
     debugLog(`Invalid txPower value: ${txPowerDbm}, defaulting to N/A`);
     return "";
   }
   
   debugLog(`Mapping txPower: ${txPowerDbm} dBm`);
   
-  // Map dBm to closest wattage option
+  // Map dBm to closest available UI wattage option
   if (txPowerDbm >= 29) {
-    // >= 29 dBm (~800mW) maps to 1.0w
+    // >= 29 dBm (794+ mW, approximately 0.8w-1.0w) maps to 1.0w
     debugLog(`txPower ${txPowerDbm} dBm mapped to 1.0w`);
     return "1.0w";
   } else if (txPowerDbm >= 26) {
-    // 26-28 dBm (~400-630mW) maps to 0.6w
+    // 26-28 dBm (398-631 mW, approximately 0.4w-0.6w) maps to 0.6w
     debugLog(`txPower ${txPowerDbm} dBm mapped to 0.6w`);
     return "0.6w";
   } else if (txPowerDbm >= 22) {
-    // 22-25 dBm (~160-320mW) maps to 0.3w
+    // 22-25 dBm (158-316 mW, approximately 0.16w-0.32w) maps to 0.3w
     debugLog(`txPower ${txPowerDbm} dBm mapped to 0.3w`);
     return "0.3w";
   } else {
-    // < 22 dBm, too low for standard options
+    // < 22 dBm (< 158 mW), too low for available options
     debugLog(`txPower ${txPowerDbm} dBm is below 0.3w threshold, using N/A`);
     return "";
   }
