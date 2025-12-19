@@ -5,7 +5,7 @@
 // - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
-import { WebBleConnection } from "./mc/index.js"; // your BLE client
+import { WebBleConnection, Constants, Packet } from "./mc/index.js"; // your BLE client
 
 // ---- Debug Configuration ----
 // Enable debug logging via URL parameter (?debug=true) or set default here
@@ -44,6 +44,7 @@ const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping se
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second) to pause
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
+const RX_LOG_LISTEN_WINDOW_MS = 7000;          // Listen window for repeater echoes (7 seconds)
 
 // Ottawa Geofence Configuration
 const OTTAWA_CENTER_LAT = 45.4215;  // Parliament Hill latitude
@@ -100,7 +101,15 @@ const state = {
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
-  distanceUpdateTimer: null // Timer for updating distance display
+  distanceUpdateTimer: null, // Timer for updating distance display
+  repeaterTracking: {
+    isListening: false,           // Whether we're currently listening for echoes
+    sentTimestamp: null,          // Timestamp when the ping was sent
+    sentPayload: null,            // The payload text that was sent
+    repeaters: new Map(),         // Map<repeaterId, {snr, seenCount}>
+    listenTimeout: null,          // Timeout handle for 7-second window
+    rxLogHandler: null,           // Handler function for rx_log events
+  }
 };
 
 // ---- UI helpers ----
@@ -972,6 +981,169 @@ function scheduleApiPostAndMapRefresh(lat, lon, accuracy) {
   }, MESHMAPPER_DELAY_MS);
 }
 
+// ---- Repeater Echo Tracking ----
+
+/**
+ * Start listening for repeater echoes via rx_log
+ * @param {string} payload - The ping payload that was sent
+ * @param {number} channelIdx - The channel index where the ping was sent
+ */
+function startRepeaterTracking(payload, channelIdx) {
+  debugLog(`Starting repeater echo tracking for ping: "${payload}" on channel ${channelIdx}`);
+  debugLog(`7-second rx_log listening window opened at ${new Date().toISOString()}`);
+  
+  // Clear any existing tracking state
+  stopRepeaterTracking();
+  
+  // Initialize tracking state
+  state.repeaterTracking.isListening = true;
+  state.repeaterTracking.sentTimestamp = Date.now();
+  state.repeaterTracking.sentPayload = payload;
+  state.repeaterTracking.repeaters.clear();
+  
+  // Create the rx_log handler
+  const rxLogHandler = (data) => {
+    handleRxLogEvent(data, payload, channelIdx);
+  };
+  
+  // Store the handler so we can remove it later
+  state.repeaterTracking.rxLogHandler = rxLogHandler;
+  
+  // Listen for rx_log events
+  if (state.connection) {
+    state.connection.on(Constants.PushCodes.LogRxData, rxLogHandler);
+    debugLog(`Registered LogRxData event handler`);
+  }
+  
+  // Set timeout to stop listening after 7 seconds
+  state.repeaterTracking.listenTimeout = setTimeout(() => {
+    debugLog(`7-second rx_log listening window closed at ${new Date().toISOString()}`);
+    stopRepeaterTracking();
+  }, RX_LOG_LISTEN_WINDOW_MS);
+}
+
+/**
+ * Handle an rx_log event and check if it's a repeater echo of our ping
+ * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ * @param {string} originalPayload - The payload we sent
+ * @param {number} channelIdx - The channel index where we sent the ping
+ */
+function handleRxLogEvent(data, originalPayload, channelIdx) {
+  try {
+    debugLog(`Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    
+    // Parse the packet from raw data
+    const packet = Packet.fromBytes(data.raw);
+    
+    debugLog(`Parsed packet: route_type=${packet.route_type_string}, payload_type=${packet.payload_type_string}, path_len=${packet.path.length}`);
+    
+    // Check if this is a channel message (GRP_TXT)
+    if (packet.payload_type !== Packet.PAYLOAD_TYPE_GRP_TXT) {
+      debugLog(`Ignoring rx_log entry: not a channel message (payload_type=${packet.payload_type})`);
+      return;
+    }
+    
+    // For channel messages, the path contains repeater hops
+    // Each hop in the path is 1 byte (repeater ID)
+    if (packet.path.length === 0) {
+      debugLog(`Ignoring rx_log entry: no path (direct transmission, not a repeater echo)`);
+      return;
+    }
+    
+    // Extract repeater ID from the last hop in the path (most recent repeater)
+    // The path is a Uint8Array where each byte represents a hop
+    const lastHopIndex = packet.path.length - 1;
+    const repeaterId = packet.path[lastHopIndex].toString(16).padStart(2, '0');
+    
+    debugLog(`Detected potential repeater echo: repeaterId=${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
+    
+    // Check if we already have this repeater
+    if (state.repeaterTracking.repeaters.has(repeaterId)) {
+      const existing = state.repeaterTracking.repeaters.get(repeaterId);
+      debugLog(`Repeater ${repeaterId} already seen (existing SNR=${existing.snr}, new SNR=${data.lastSnr})`);
+      
+      // Keep the best (highest) SNR
+      if (data.lastSnr > existing.snr) {
+        debugLog(`Updating repeater ${repeaterId} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
+        state.repeaterTracking.repeaters.set(repeaterId, {
+          snr: data.lastSnr,
+          seenCount: existing.seenCount + 1
+        });
+      } else {
+        debugLog(`Keeping existing SNR for repeater ${repeaterId} (existing ${existing.snr} >= new ${data.lastSnr})`);
+        // Still increment seen count
+        existing.seenCount++;
+      }
+    } else {
+      // New repeater
+      debugLog(`Adding new repeater echo: repeaterId=${repeaterId}, SNR=${data.lastSnr}`);
+      state.repeaterTracking.repeaters.set(repeaterId, {
+        snr: data.lastSnr,
+        seenCount: 1
+      });
+    }
+  } catch (error) {
+    debugError(`Error processing rx_log entry: ${error.message}`, error);
+  }
+}
+
+/**
+ * Stop listening for repeater echoes and return the results
+ * @returns {Array<{repeaterId: string, snr: number}>} Array of repeater telemetry
+ */
+function stopRepeaterTracking() {
+  if (!state.repeaterTracking.isListening) {
+    return [];
+  }
+  
+  debugLog(`Stopping repeater echo tracking`);
+  
+  // Stop listening for rx_log events
+  if (state.connection && state.repeaterTracking.rxLogHandler) {
+    state.connection.off(Constants.PushCodes.LogRxData, state.repeaterTracking.rxLogHandler);
+    debugLog(`Unregistered LogRxData event handler`);
+  }
+  
+  // Clear timeout
+  if (state.repeaterTracking.listenTimeout) {
+    clearTimeout(state.repeaterTracking.listenTimeout);
+    state.repeaterTracking.listenTimeout = null;
+  }
+  
+  // Get the results
+  const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
+    repeaterId: id,
+    snr: data.snr
+  }));
+  
+  // Sort by repeater ID for deterministic output
+  repeaters.sort((a, b) => a.repeaterId.localeCompare(b.repeaterId));
+  
+  debugLog(`Final aggregated repeater list: ${repeaters.length > 0 ? repeaters.map(r => `${r.repeaterId}(${r.snr}dB)`).join(', ') : 'none'}`);
+  
+  // Reset state
+  state.repeaterTracking.isListening = false;
+  state.repeaterTracking.sentTimestamp = null;
+  state.repeaterTracking.sentPayload = null;
+  state.repeaterTracking.repeaters.clear();
+  state.repeaterTracking.rxLogHandler = null;
+  
+  return repeaters;
+}
+
+/**
+ * Format repeater telemetry for output
+ * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
+ * @returns {string} Formatted repeater string (e.g., "a0(-112),b3(-109)" or "none")
+ */
+function formatRepeaterTelemetry(repeaters) {
+  if (repeaters.length === 0) {
+    return "none";
+  }
+  
+  return repeaters.map(r => `${r.repeaterId}(${Math.round(r.snr)})`).join(',');
+}
+
 // ---- Ping ----
 /**
  * Acquire fresh GPS coordinates and update state
@@ -1087,26 +1259,55 @@ async function getGpsCoordinatesForPing(isAutoMode) {
 }
 
 /**
- * Log ping information to the UI
+ * Log ping information to the UI with repeater telemetry
+ * Creates a session log entry that will be updated with repeater data
  * @param {string} payload - The ping message
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
+ * @returns {HTMLElement|null} The list item element for later updates, or null
  */
 function logPingToUI(payload, lat, lon) {
-  const nowStr = new Date().toLocaleString();
+  const nowStr = new Date().toISOString();
   
   if (lastPingEl) {
     lastPingEl.textContent = `${nowStr} — ${payload}`;
   }
 
   if (sessionPingsEl) {
-    const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+    // Create log entry with placeholder for repeater data
+    // Format: timestamp | lat,lon | repeaters
+    const line = `${nowStr} | ${lat.toFixed(5)},${lon.toFixed(5)} | ...`;
     const li = document.createElement('li');
     li.textContent = line;
+    li.setAttribute('data-timestamp', nowStr);
+    li.setAttribute('data-lat', lat.toFixed(5));
+    li.setAttribute('data-lon', lon.toFixed(5));
     sessionPingsEl.appendChild(li);
     // Auto-scroll to bottom
     sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
+    return li;
   }
+  
+  return null;
+}
+
+/**
+ * Update a ping log entry with repeater telemetry
+ * @param {HTMLElement|null} logEntry - The log entry element to update
+ * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
+ */
+function updatePingLogWithRepeaters(logEntry, repeaters) {
+  if (!logEntry) return;
+  
+  const timestamp = logEntry.getAttribute('data-timestamp');
+  const lat = logEntry.getAttribute('data-lat');
+  const lon = logEntry.getAttribute('data-lon');
+  const repeaterStr = formatRepeaterTelemetry(repeaters);
+  
+  // Update the log entry with final repeater data
+  logEntry.textContent = `${timestamp} | ${lat},${lon} | ${repeaterStr}`;
+  
+  debugLog(`Updated ping log entry with repeater telemetry: ${repeaterStr}`);
 }
 
 /**
@@ -1199,6 +1400,11 @@ async function sendPing(manual = false) {
     debugLog(`Sending ping to channel: "${payload}"`);
 
     const ch = await ensureChannel();
+    
+    // Start repeater echo tracking BEFORE sending the ping
+    debugLog(`Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
+    startRepeaterTracking(payload, ch.channelIdx);
+    
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     debugLog(`Ping sent successfully to channel ${ch.channelIdx}`);
 
@@ -1226,8 +1432,14 @@ async function sendPing(manual = false) {
     // Schedule MeshMapper API post and map refresh
     scheduleApiPostAndMapRefresh(lat, lon, accuracy);
     
-    // Update UI with ping info
-    logPingToUI(payload, lat, lon);
+    // Create UI log entry with placeholder for repeater data
+    const logEntry = logPingToUI(payload, lat, lon);
+    
+    // Schedule repeater telemetry update after 7-second window
+    setTimeout(() => {
+      const repeaters = stopRepeaterTracking();
+      updatePingLogWithRepeaters(logEntry, repeaters);
+    }, RX_LOG_LISTEN_WINDOW_MS);
     
     // Update distance display immediately after successful ping
     updateDistanceUi();
@@ -1389,6 +1601,7 @@ async function connect() {
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
       stopDistanceUpdater(); // Ensure distance updater stops
+      stopRepeaterTracking(); // Stop repeater echo tracking
       
       // Clean up all timers
       cleanupAllTimers();
