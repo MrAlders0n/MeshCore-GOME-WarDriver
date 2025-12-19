@@ -115,8 +115,7 @@ const state = {
   cooldownUpdateTimer: null, // Timer to re-enable controls after cooldown
   autoCountdownTimer: null, // Timer for auto-ping countdown display
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
-  apiCountdownTimer: null, // Timer for API post countdown display
-  apiPostTime: null, // Timestamp when API post will occur
+  rxListeningEndTime: null, // Timestamp when RX listening window ends
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
@@ -231,16 +230,16 @@ const autoCountdownTimer = createCountdownTimer(
   }
 );
 
-// API post countdown timer
-const apiCountdownTimer = createCountdownTimer(
-  () => state.apiPostTime,
+// RX listening countdown timer (for heard repeats)
+const rxListeningCountdownTimer = createCountdownTimer(
+  () => state.rxListeningEndTime,
   (remainingSec) => {
     if (remainingSec === 0) {
-      return { message: "Posting to API...", color: STATUS_COLORS.info };
+      return { message: "Finalizing heard repeats...", color: STATUS_COLORS.info };
     }
     return { 
-      message: `Wait to post API (${remainingSec}s)`,
-      color: STATUS_COLORS.idle
+      message: `Listening for heard repeats (${remainingSec}s)`,
+      color: STATUS_COLORS.info
     };
   }
 );
@@ -291,14 +290,16 @@ function resumeAutoCountdown() {
   return false;
 }
 
-function startApiCountdown(delayMs) {
-  state.apiPostTime = Date.now() + delayMs;
-  apiCountdownTimer.start(delayMs);
+function startRxListeningCountdown(delayMs) {
+  debugLog(`Starting RX listening countdown: ${delayMs}ms`);
+  state.rxListeningEndTime = Date.now() + delayMs;
+  rxListeningCountdownTimer.start(delayMs);
 }
 
-function stopApiCountdown() {
-  state.apiPostTime = null;
-  apiCountdownTimer.stop();
+function stopRxListeningCountdown() {
+  debugLog(`Stopping RX listening countdown`);
+  state.rxListeningEndTime = null;
+  rxListeningCountdownTimer.stop();
 }
 
 // Cooldown management
@@ -348,10 +349,9 @@ function cleanupAllTimers() {
   
   // Clean up state timer references
   state.autoCountdownTimer = null;
-  state.apiCountdownTimer = null;
   
   stopAutoCountdown();
-  stopApiCountdown();
+  stopRxListeningCountdown();
   state.cooldownEndTime = null;
   state.pausedAutoTimerRemainingMs = null;
 }
@@ -911,8 +911,9 @@ function getDeviceIdentifier() {
  * Post wardrive ping data to MeshMapper API
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
+ * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
  */
-async function postToMeshMapperAPI(lat, lon) {
+async function postToMeshMapperAPI(lat, lon, heardRepeats) {
   try {
     const payload = {
       key: MESHMAPPER_API_KEY,
@@ -920,10 +921,11 @@ async function postToMeshMapperAPI(lat, lon) {
       lon,
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting() || "N/A",
+      heard_repeats: heardRepeats,
       test: 0
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -943,62 +945,53 @@ async function postToMeshMapperAPI(lat, lon) {
 }
 
 /**
- * Schedule MeshMapper API post and coverage map refresh after a ping
+ * Post to MeshMapper API and refresh coverage map after heard repeats are finalized
+ * This executes immediately (no delay) because it's called after the RX listening window
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {number} accuracy - GPS accuracy in meters
+ * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
  */
-function scheduleApiPostAndMapRefresh(lat, lon, accuracy) {
-  // Clear any existing timer
-  if (state.meshMapperTimer) {
-    debugLog("Clearing existing MeshMapper timer");
-    clearTimeout(state.meshMapperTimer);
-  }
-
-  debugLog(`Scheduling MeshMapper API post in ${MESHMAPPER_DELAY_MS}ms`);
+async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
+  debugLog(`postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
   
-  state.meshMapperTimer = setTimeout(async () => {
-    stopApiCountdown();
-    setStatus("Posting to API...", STATUS_COLORS.info);
+  setStatus("Posting to API", STATUS_COLORS.info);
+  
+  try {
+    await postToMeshMapperAPI(lat, lon, heardRepeats);
+  } catch (error) {
+    debugError("MeshMapper API post failed:", error);
+  }
+  
+  // Update map after API post
+  setTimeout(() => {
+    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
     
-    try {
-      await postToMeshMapperAPI(lat, lon);
-    } catch (error) {
-      debugError("MeshMapper API post failed:", error);
+    if (shouldRefreshMap) {
+      debugLog(`Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
+      scheduleCoverageRefresh(lat, lon);
+    } else {
+      debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
-    // Update map after API post
-    setTimeout(() => {
-      const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-      
-      if (shouldRefreshMap) {
-        debugLog(`Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-        scheduleCoverageRefresh(lat, lon);
-      } else {
-        debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-      }
-      
-      // Update status based on current mode
-      if (state.connection) {
-        if (state.running) {
-          // Check if we should resume a paused auto countdown (manual ping during auto mode)
-          const resumed = resumeAutoCountdown();
-          if (!resumed) {
-            // No paused timer to resume, schedule new auto ping (this was an auto ping)
-            debugLog("Scheduling next auto ping");
-            scheduleNextAutoPing();
-          } else {
-            debugLog("Resumed auto countdown after manual ping");
-          }
+    // Update status based on current mode
+    if (state.connection) {
+      if (state.running) {
+        // Check if we should resume a paused auto countdown (manual ping during auto mode)
+        const resumed = resumeAutoCountdown();
+        if (!resumed) {
+          // No paused timer to resume, schedule new auto ping (this was an auto ping)
+          debugLog("Scheduling next auto ping");
+          scheduleNextAutoPing();
         } else {
-          debugLog("Setting status to idle");
-          setStatus("Idle", STATUS_COLORS.idle);
+          debugLog("Resumed auto countdown after manual ping");
         }
+      } else {
+        debugLog("Setting status to idle");
+        setStatus("Idle", STATUS_COLORS.idle);
       }
-    }, MAP_REFRESH_DELAY_MS);
-    
-    state.meshMapperTimer = null;
-  }, MESHMAPPER_DELAY_MS);
+    }
+  }, MAP_REFRESH_DELAY_MS);
 }
 
 // ---- Repeater Echo Tracking ----
@@ -1363,7 +1356,7 @@ function stopRepeaterTracking() {
  */
 function formatRepeaterTelemetry(repeaters) {
   if (repeaters.length === 0) {
-    return "none";
+    return "None";
   }
   
   // Format as: path(snr), path(snr), ...
@@ -1651,31 +1644,42 @@ async function sendPing(manual = false) {
     // Update status after ping is sent
     setStatus(manual ? "Ping sent" : "Auto ping sent", STATUS_COLORS.success);
     
-    // Start API countdown after brief delay to show "Ping sent" message
-    setTimeout(() => {
-      if (state.connection) {
-        startApiCountdown(MESHMAPPER_DELAY_MS);
-      }
-    }, STATUS_UPDATE_DELAY_MS);
-
-    // Schedule MeshMapper API post and map refresh
-    scheduleApiPostAndMapRefresh(lat, lon, accuracy);
-    
     // Create UI log entry with placeholder for repeater data
     const logEntry = logPingToUI(payload, lat, lon);
     
-    // Schedule repeater telemetry update after 7-second window
-    // Store timeout handle for cleanup if needed
-    const updateTimeout = setTimeout(() => {
-      const repeaters = stopRepeaterTracking();
-      updatePingLogWithRepeaters(logEntry, repeaters);
-    }, RX_LOG_LISTEN_WINDOW_MS);
+    // Start RX listening countdown after brief delay to show "Ping sent" message
+    setTimeout(() => {
+      if (state.connection) {
+        debugLog(`Starting RX listening window for ${RX_LOG_LISTEN_WINDOW_MS}ms`);
+        startRxListeningCountdown(RX_LOG_LISTEN_WINDOW_MS);
+      }
+    }, STATUS_UPDATE_DELAY_MS);
     
-    // Note: This timeout is intentionally not stored in state because:
-    // - It's tied to a specific ping and log entry (logEntry)
-    // - It will complete naturally after 7 seconds
-    // - stopRepeaterTracking() will be called which cleans up the main listener
-    // - On disconnect, stopRepeaterTracking() is called directly which stops listening immediately
+    // Schedule the sequence: listen for 7s, THEN finalize repeats and post to API
+    // This timeout is stored in meshMapperTimer for cleanup purposes
+    state.meshMapperTimer = setTimeout(async () => {
+      debugLog(`RX listening window completed after ${RX_LOG_LISTEN_WINDOW_MS}ms`);
+      
+      // Stop listening countdown
+      stopRxListeningCountdown();
+      
+      // Stop repeater tracking and get final results
+      const repeaters = stopRepeaterTracking();
+      debugLog(`Finalized heard repeats: ${repeaters.length} unique paths detected`);
+      
+      // Update UI log with repeater data
+      updatePingLogWithRepeaters(logEntry, repeaters);
+      
+      // Format repeater data for API
+      const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
+      debugLog(`Formatted heard_repeats for API: "${heardRepeatsStr}"`);
+      
+      // Post to API with heard repeats data
+      await postApiAndRefreshMap(lat, lon, accuracy, heardRepeatsStr);
+      
+      // Clear timer reference
+      state.meshMapperTimer = null;
+    }, RX_LOG_LISTEN_WINDOW_MS);
     
     // Update distance display immediately after successful ping
     updateDistanceUi();
