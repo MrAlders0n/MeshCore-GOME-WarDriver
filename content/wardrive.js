@@ -1053,42 +1053,41 @@ async function decryptGroupTextPayload(payload, channelKey) {
       .map(b => b.toString(16).padStart(2, '0')).join('');
     debugLog(`[DECRYPT] Encrypted data preview (first 32 bytes): ${encPreview}...`);
     
-    // Pad to 16-byte blocks if needed (AES block size)
-    const blockSize = 16;
-    const paddedLength = Math.ceil(encryptedData.length / blockSize) * blockSize;
-    const paddedData = new Uint8Array(paddedLength);
-    paddedData.set(encryptedData);
+    // Use aes-js library for proper AES-ECB decryption
+    debugLog(`[DECRYPT] Using aes-js library for AES-ECB decryption`);
     
-    if (paddedLength !== encryptedData.length) {
-      debugLog(`[DECRYPT] Padded encrypted data from ${encryptedData.length} to ${paddedLength} bytes`);
+    // Check if aes-js is available
+    if (typeof aesjs === 'undefined') {
+      debugError(`[DECRYPT] ABORT: aes-js library not loaded`);
+      return null;
     }
     
-    // Web Crypto API doesn't support ECB mode directly
-    // We simulate ECB by using CBC with a zero IV
-    const iv = new Uint8Array(16); // Zero IV for ECB simulation
-    debugLog(`[DECRYPT] Using AES-CBC with zero IV to simulate ECB mode`);
+    // Convert Uint8Array to regular array for aes-js
+    const keyArray = Array.from(channelKey);
+    const encryptedArray = Array.from(encryptedData);
     
-    // Import the channel key for AES-CBC decryption
-    debugLog(`[DECRYPT] Importing channel key for AES-CBC decryption...`);
-    const cryptoKey = await crypto.subtle.importKey(
-      'raw',
-      channelKey,
-      { name: 'AES-CBC' },
-      false,
-      ['decrypt']
-    );
-    debugLog(`[DECRYPT] Channel key imported successfully`);
+    debugLog(`[DECRYPT] Decrypting ${encryptedData.length} bytes with AES-ECB...`);
     
-    // Decrypt using AES-CBC with zero IV (simulates ECB)
-    debugLog(`[DECRYPT] Decrypting ${paddedData.length} bytes...`);
-    const decryptedBuffer = await crypto.subtle.decrypt(
-      { name: 'AES-CBC', iv: iv },
-      cryptoKey,
-      paddedData
-    );
+    // Create AES-ECB decryption instance
+    const aesCbc = new aesjs.ModeOfOperation.ecb(keyArray);
+    
+    // Decrypt block by block (ECB processes each 16-byte block independently)
+    const blockSize = 16;
+    const decryptedBytes = new Uint8Array(encryptedArray.length);
+    
+    for (let i = 0; i < encryptedArray.length; i += blockSize) {
+      const block = encryptedArray.slice(i, i + blockSize);
+      
+      // Pad last block if necessary
+      while (block.length < blockSize) {
+        block.push(0);
+      }
+      
+      const decryptedBlock = aesCbc.decrypt(block);
+      decryptedBytes.set(decryptedBlock, i);
+    }
+    
     debugLog(`[DECRYPT] Decryption completed successfully`);
-    
-    const decryptedBytes = new Uint8Array(decryptedBuffer);
     debugLog(`[DECRYPT] Decrypted data length: ${decryptedBytes.length} bytes`);
     
     // Log decrypted bytes for debugging
@@ -1248,14 +1247,22 @@ function handleRxLogEvent(data, originalPayload, channelIdx, expectedChannelHash
       debugLog(`[MESSAGE_CORRELATION] Decrypted: "${decryptedMessage}" (${decryptedMessage.length} chars)`);
       debugLog(`[MESSAGE_CORRELATION] Expected:  "${originalPayload}" (${originalPayload.length} chars)`);
       
-      // Compare decrypted message with what we sent
-      if (decryptedMessage !== originalPayload) {
+      // Channel messages include sender name prefix: "SenderName: Message"
+      // Check if our expected message is contained in the decrypted text
+      // This handles both exact matches and messages with sender prefixes
+      const messageMatches = decryptedMessage === originalPayload || decryptedMessage.includes(originalPayload);
+      
+      if (!messageMatches) {
         debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Message content mismatch (not an echo of our ping)`);
         debugLog(`[MESSAGE_CORRELATION] This is a different message on the same channel`);
         return;
       }
       
-      debugLog(`[MESSAGE_CORRELATION] ✅ Message content match confirmed - this is an echo of our ping!`);
+      if (decryptedMessage === originalPayload) {
+        debugLog(`[MESSAGE_CORRELATION] ✅ Exact message match confirmed - this is an echo of our ping!`);
+      } else {
+        debugLog(`[MESSAGE_CORRELATION] ✅ Message contained in decrypted text (with sender prefix) - this is an echo of our ping!`);
+      }
     } else {
       debugWarn(`[MESSAGE_CORRELATION] ⚠️ WARNING: Cannot verify message content - channel key not available`);
       debugWarn(`[MESSAGE_CORRELATION] Proceeding without message content verification (less reliable)`);
