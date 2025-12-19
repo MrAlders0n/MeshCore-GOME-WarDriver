@@ -723,6 +723,13 @@ async function primeGpsOnce() {
  * @throws {Error} If channel name format is invalid
  */
 async function deriveChannelKey(channelName) {
+  // Check if Web Crypto API is available
+  if (typeof crypto === 'undefined' || !crypto.subtle) {
+    throw new Error(
+      'Web Crypto API is not available. This app requires HTTPS or a modern browser with crypto.subtle support.'
+    );
+  }
+  
   // Validate channel name format: must start with # and contain only a-z, 0-9, and dashes
   if (!channelName.startsWith('#')) {
     throw new Error(`Channel name must start with # (got: "${channelName}")`);
@@ -748,7 +755,7 @@ async function deriveChannelKey(channelName) {
   const hashArray = new Uint8Array(hashBuffer);
   const channelKey = hashArray.slice(0, 16);
   
-  debugLog(`Derived channel key for "${channelName}": ${Array.from(channelKey).map(b => b.toString(16).padStart(2, '0')).join('')}`);
+  debugLog(`Derived channel key for "${channelName}" (length: ${channelKey.length} bytes)`);
   
   return channelKey;
 }
