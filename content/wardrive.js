@@ -57,7 +57,9 @@ let WARDRIVING_CHANNEL_HASH = null;
     WARDRIVING_CHANNEL_HASH = await computeChannelHash(channelKey);
     debugLog(`Wardriving channel hash pre-computed at startup: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
   } catch (error) {
-    debugError(`Failed to pre-compute channel hash: ${error.message}`);
+    debugError(`CRITICAL: Failed to pre-compute channel hash: ${error.message}`);
+    debugError(`Repeater echo tracking will be disabled. Please reload the page.`);
+    // Channel hash remains null, which will be checked before starting tracking
   }
 })();
 
@@ -1199,6 +1201,7 @@ function formatRepeaterTelemetry(repeaters) {
   }
   
   // Format as: path(snr), path(snr), ...
+  // Round SNR to integers for cleaner output (matches meshcore-cli behavior)
   return repeaters.map(r => `${r.repeaterId}(${Math.round(r.snr)})`).join(',');
 }
 
@@ -1325,19 +1328,21 @@ async function getGpsCoordinatesForPing(isAutoMode) {
  * @returns {HTMLElement|null} The list item element for later updates, or null
  */
 function logPingToUI(payload, lat, lon) {
-  const nowStr = new Date().toISOString();
+  // Use ISO format for data storage but user-friendly format for display
+  const now = new Date();
+  const isoStr = now.toISOString();
   
   if (lastPingEl) {
-    lastPingEl.textContent = `${nowStr} — ${payload}`;
+    lastPingEl.textContent = `${now.toLocaleString()} — ${payload}`;
   }
 
   if (sessionPingsEl) {
     // Create log entry with placeholder for repeater data
-    // Format: timestamp | lat,lon | repeaters
-    const line = `${nowStr} | ${lat.toFixed(5)},${lon.toFixed(5)} | ...`;
+    // Format: timestamp | lat,lon | repeaters (using ISO for consistency with requirements)
+    const line = `${isoStr} | ${lat.toFixed(5)},${lon.toFixed(5)} | ...`;
     const li = document.createElement('li');
     li.textContent = line;
-    li.setAttribute('data-timestamp', nowStr);
+    li.setAttribute('data-timestamp', isoStr);
     li.setAttribute('data-lat', lat.toFixed(5));
     li.setAttribute('data-lon', lon.toFixed(5));
     sessionPingsEl.appendChild(li);
@@ -1494,10 +1499,17 @@ async function sendPing(manual = false) {
     const logEntry = logPingToUI(payload, lat, lon);
     
     // Schedule repeater telemetry update after 7-second window
-    setTimeout(() => {
+    // Store timeout handle for cleanup if needed
+    const updateTimeout = setTimeout(() => {
       const repeaters = stopRepeaterTracking();
       updatePingLogWithRepeaters(logEntry, repeaters);
     }, RX_LOG_LISTEN_WINDOW_MS);
+    
+    // Note: This timeout is intentionally not stored in state because:
+    // - It's tied to a specific ping and log entry (logEntry)
+    // - It will complete naturally after 7 seconds
+    // - stopRepeaterTracking() will be called which cleans up the main listener
+    // - On disconnect, stopRepeaterTracking() is called directly which stops listening immediately
     
     // Update distance display immediately after successful ping
     updateDistanceUi();
