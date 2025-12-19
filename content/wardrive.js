@@ -920,6 +920,9 @@ function autoSelectPowerSetting(txPowerDbm) {
   const naRadio = document.querySelector('input[name="power"][value=""]');
   if (naRadio) {
     naRadio.checked = true;
+    debugLog("N/A power option selected as fallback");
+  } else {
+    debugError("Could not find N/A power radio button in DOM");
   }
 }
 
