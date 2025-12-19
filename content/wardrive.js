@@ -1689,14 +1689,15 @@ async function sendPing(manual = false) {
         
         // Post to API with heard repeats data
         await postApiAndRefreshMap(apiLat, apiLon, apiAccuracy, heardRepeatsStr);
-        
-        // Clear captured coordinates after API post completes
-        state.capturedPingCoords = null;
-        debugLog(`Cleared captured ping coordinates after API post`);
       } else {
-        debugWarn(`No captured ping coordinates available for API post, using original coordinates`);
-        await postApiAndRefreshMap(lat, lon, accuracy, heardRepeatsStr);
+        // This should never happen as coordinates are always captured before ping
+        debugError(`CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
+        debugError(`Skipping API post to avoid posting incorrect coordinates`);
       }
+      
+      // Clear captured coordinates after API post completes (always, regardless of path)
+      state.capturedPingCoords = null;
+      debugLog(`Cleared captured ping coordinates after API post`);
       
       // Clear timer reference
       state.meshMapperTimer = null;
