@@ -102,17 +102,9 @@ Status messages follow these consistent conventions:
 - **Color**: Green (success)
 - **Used in**: `sendPing()`
 - **Source**: `content/wardrive.js:1749`
-- **Context**: After successful manual ping transmission to mesh device
+- **Context**: After successful ping transmission to mesh device (both manual and auto pings)
 - **Minimum Visibility**: 500ms minimum enforced
-- **Notes**: This was the primary message mentioned in previous issues as flashing too quickly
-
-#### Auto ping sent
-- **Message**: `"Auto ping sent"`
-- **Color**: Green (success)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1749`
-- **Context**: After successful auto ping transmission to mesh device
-- **Minimum Visibility**: 500ms minimum enforced
+- **Notes**: Consolidated from separate "Ping sent" and "Auto ping sent" messages
 
 #### Ping failed
 - **Message**: `"Ping failed"` (or error message)
@@ -122,11 +114,11 @@ Status messages follow these consistent conventions:
 - **Context**: Ping operation encounters an error
 - **Minimum Visibility**: N/A (error state persists)
 
-#### Ping skipped, outside of geo fenced region
-- **Message**: `"Ping skipped, outside of geo fenced region"`
+#### Ping skipped, outside of geofenced region
+- **Message**: `"Ping skipped, outside of geofenced region"`
 - **Color**: Amber (warning)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1688`
+- **Used in**: `sendPing()`, `autoCountdownTimer`
+- **Source**: `content/wardrive.js:1688`, `content/wardrive.js:297`
 - **Context**: GPS coordinates outside Ottawa 150km radius
 - **Minimum Visibility**: 500ms minimum enforced
 
@@ -138,8 +130,8 @@ Status messages follow these consistent conventions:
 - **Context**: Current location < 25m from last successful ping
 - **Minimum Visibility**: 500ms minimum enforced
 
-#### Please wait Xs before sending another ping
-- **Message**: `"Please wait Xs before sending another ping"` (X is dynamic countdown)
+#### Wait Xs before sending another ping
+- **Message**: `"Wait Xs before sending another ping"` (X is dynamic countdown)
 - **Color**: Amber (warning)
 - **Used in**: `sendPing()`
 - **Source**: `content/wardrive.js:1646`
@@ -198,8 +190,8 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Duration**: 15s, 30s, or 60s (user-selectable)
 - **Minimum Visibility**: 500ms for first message, immediate for countdown updates
 
-#### Ping skipped, outside of geo fenced region, waiting for next ping (Xs)
-- **Message**: `"Ping skipped, outside of geo fenced region, waiting for next ping (Xs)"` (X is dynamic countdown)
+#### Ping skipped, outside of geofenced region, waiting for next ping (Xs)
+- **Message**: `"Ping skipped, outside of geofenced region, waiting for next ping (Xs)"` (X is dynamic countdown)
 - **Color**: Amber (warning)
 - **Used in**: `autoCountdownTimer`
 - **Source**: `content/wardrive.js:297`
@@ -264,8 +256,8 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Context**: Browser tab hidden while auto mode running
 - **Minimum Visibility**: 500ms minimum enforced
 
-#### Please wait Xs before toggling auto mode
-- **Message**: `"Please wait Xs before toggling auto mode"` (X is dynamic countdown)
+#### Wait Xs before toggling auto mode
+- **Message**: `"Wait Xs before toggling auto mode"` (X is dynamic countdown)
 - **Color**: Amber (warning)
 - **Used in**: `stopAutoPing()`, `startAutoPing()`
 - **Source**: `content/wardrive.js:1816`, `content/wardrive.js:1876`
@@ -331,9 +323,9 @@ Result:     "Message A" (visible 500ms) → "Message C"
 
 ## Summary
 
-**Total Status Messages**: 26 unique message patterns
+**Total Status Messages**: 25 unique message patterns
 - **Connection**: 7 messages
-- **Ping Operation**: 7 messages
+- **Ping Operation**: 6 messages (consolidated "Ping sent" for both manual and auto)
 - **GPS**: 2 messages
 - **Countdown Timers**: 6 message patterns (with dynamic countdown values)
 - **API/Map**: 2 messages
@@ -341,4 +333,11 @@ Result:     "Message A" (visible 500ms) → "Message C"
 
 **Minimum Visibility**: All non-countdown messages enforce **500ms minimum visibility**. Countdown messages respect this minimum on first display, then update immediately.
 
-**Standardization**: All messages follow consistent conventions with no trailing punctuation, sentence case capitalization, appropriate verb tenses, and consistent error message format (X failed).
+**Standardization**: All messages follow consistent conventions:
+- No trailing punctuation
+- Sentence case capitalization
+- Present progressive tense (-ing) for ongoing actions
+- Past tense for completed actions
+- Consistent "X failed" format for error messages
+- Consistent tone (direct, technical) - removed "Please" from wait messages
+- Proper compound words ("geofenced" not "geo fenced")

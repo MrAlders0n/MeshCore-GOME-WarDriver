@@ -294,7 +294,7 @@ const autoCountdownTimer = createCountdownTimer(
     // If there's a skip reason, show it with the countdown in warning color
     if (state.skipReason === "outside geofence") {
       return { 
-        message: `Ping skipped, outside of geo fenced region, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, outside of geofenced region, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
@@ -1643,7 +1643,7 @@ async function sendPing(manual = false) {
     if (manual && isInCooldown()) {
       const remainingSec = getRemainingCooldownSeconds();
       debugLog(`Manual ping blocked by cooldown (${remainingSec}s remaining)`);
-      setStatus(`Please wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
+      setStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
       return;
     }
 
@@ -1685,7 +1685,7 @@ async function sendPing(manual = false) {
       
       if (manual) {
         // Manual ping: show skip message that persists
-        setStatus("Ping skipped, outside of geo fenced region", STATUS_COLORS.warning);
+        setStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1746,7 +1746,7 @@ async function sendPing(manual = false) {
     startCooldown();
 
     // Update status after ping is sent
-    setStatus(manual ? "Ping sent" : "Auto ping sent", STATUS_COLORS.success);
+    setStatus("Ping sent", STATUS_COLORS.success);
     
     // Create UI log entry with placeholder for repeater data
     const logEntry = logPingToUI(payload, lat, lon);
@@ -1813,7 +1813,7 @@ function stopAutoPing(stopGps = false) {
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -1873,7 +1873,7 @@ function startAutoPing() {
   if (isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
