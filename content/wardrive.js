@@ -5,7 +5,7 @@
 // - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
-import { WebBleConnection } from "./mc/index.js"; // your BLE client
+import { WebBleConnection, Constants, Packet } from "./mc/index.js"; // your BLE client
 
 // ---- Debug Configuration ----
 // Enable debug logging via URL parameter (?debug=true) or set default here
@@ -44,6 +44,26 @@ const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping se
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second) to pause
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
+const RX_LOG_LISTEN_WINDOW_MS = 7000;          // Listen window for repeater echoes (7 seconds)
+
+// Pre-computed channel hash and key for the wardriving channel
+// These will be computed once at startup and used for message correlation and decryption
+let WARDRIVING_CHANNEL_HASH = null;
+let WARDRIVING_CHANNEL_KEY = null;
+
+// Initialize the wardriving channel hash and key at startup
+(async function initializeChannelHash() {
+  try {
+    WARDRIVING_CHANNEL_KEY = await deriveChannelKey(CHANNEL_NAME);
+    WARDRIVING_CHANNEL_HASH = await computeChannelHash(WARDRIVING_CHANNEL_KEY);
+    debugLog(`Wardriving channel hash pre-computed at startup: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
+    debugLog(`Wardriving channel key cached for message decryption (${WARDRIVING_CHANNEL_KEY.length} bytes)`);
+  } catch (error) {
+    debugError(`CRITICAL: Failed to pre-compute channel hash/key: ${error.message}`);
+    debugError(`Repeater echo tracking will be disabled. Please reload the page.`);
+    // Channel hash and key remain null, which will be checked before starting tracking
+  }
+})();
 
 // Ottawa Geofence Configuration
 const OTTAWA_CENTER_LAT = 45.4215;  // Parliament Hill latitude
@@ -95,12 +115,21 @@ const state = {
   cooldownUpdateTimer: null, // Timer to re-enable controls after cooldown
   autoCountdownTimer: null, // Timer for auto-ping countdown display
   nextAutoPingTime: null, // Timestamp when next auto-ping will occur
-  apiCountdownTimer: null, // Timer for API post countdown display
-  apiPostTime: null, // Timestamp when API post will occur
+  rxListeningEndTime: null, // Timestamp when RX listening window ends
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
-  distanceUpdateTimer: null // Timer for updating distance display
+  distanceUpdateTimer: null, // Timer for updating distance display
+  capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
+  repeaterTracking: {
+    isListening: false,           // Whether we're currently listening for echoes
+    sentTimestamp: null,          // Timestamp when the ping was sent
+    sentPayload: null,            // The payload text that was sent
+    channelIdx: null,             // Channel index for reference
+    repeaters: new Map(),         // Map<repeaterId, {snr, seenCount}>
+    listenTimeout: null,          // Timeout handle for 7-second window
+    rxLogHandler: null,           // Handler function for rx_log events
+  }
 };
 
 // ---- UI helpers ----
@@ -113,22 +142,97 @@ const STATUS_COLORS = {
   info: "text-sky-300"
 };
 
-function setStatus(text, color = STATUS_COLORS.idle) {
+// Status message management with minimum visibility duration
+const MIN_STATUS_VISIBILITY_MS = 500; // Minimum time a status message must remain visible
+const statusMessageState = {
+  lastSetTime: 0,           // Timestamp when status was last set
+  pendingMessage: null,     // Pending message to display after minimum visibility
+  pendingTimer: null,       // Timer for pending message
+  currentText: '',          // Current status text
+  currentColor: ''          // Current status color
+};
+
+/**
+ * Set status message with minimum visibility enforcement
+ * Non-timed status messages will remain visible for at least 500ms before being replaced
+ * @param {string} text - Status message text
+ * @param {string} color - Status color class
+ * @param {boolean} immediate - If true, bypass minimum visibility (for countdown timers)
+ */
+function setStatus(text, color = STATUS_COLORS.idle, immediate = false) {
+  const now = Date.now();
+  const timeSinceLastSet = now - statusMessageState.lastSetTime;
+  
+  // Special case: if this is the same message, update timestamp without changing UI
+  // This prevents countdown timer updates from being delayed unnecessarily
+  // Example: If status is already "Waiting (10s)", the next "Waiting (9s)" won't be delayed
+  if (text === statusMessageState.currentText && color === statusMessageState.currentColor) {
+    debugLog(`Status update (same message): "${text}"`);
+    statusMessageState.lastSetTime = now;
+    return;
+  }
+  
+  // If immediate flag is set (for countdown timers), apply immediately
+  if (immediate) {
+    applyStatusImmediately(text, color);
+    return;
+  }
+  
+  // If minimum visibility time has passed, apply immediately
+  if (timeSinceLastSet >= MIN_STATUS_VISIBILITY_MS) {
+    applyStatusImmediately(text, color);
+    return;
+  }
+  
+  // Minimum visibility time has not passed, queue the message
+  const delayNeeded = MIN_STATUS_VISIBILITY_MS - timeSinceLastSet;
+  debugLog(`Status queued (${delayNeeded}ms delay): "${text}" (current: "${statusMessageState.currentText}")`);
+  
+  // Store pending message
+  statusMessageState.pendingMessage = { text, color };
+  
+  // Clear any existing pending timer
+  if (statusMessageState.pendingTimer) {
+    clearTimeout(statusMessageState.pendingTimer);
+  }
+  
+  // Schedule the pending message
+  statusMessageState.pendingTimer = setTimeout(() => {
+    if (statusMessageState.pendingMessage) {
+      const pending = statusMessageState.pendingMessage;
+      statusMessageState.pendingMessage = null;
+      statusMessageState.pendingTimer = null;
+      applyStatusImmediately(pending.text, pending.color);
+    }
+  }, delayNeeded);
+}
+
+/**
+ * Apply status message immediately to the UI
+ * @param {string} text - Status message text
+ * @param {string} color - Status color class
+ */
+function applyStatusImmediately(text, color) {
   statusEl.textContent = text;
   statusEl.className = `font-semibold ${color}`;
+  statusMessageState.lastSetTime = Date.now();
+  statusMessageState.currentText = text;
+  statusMessageState.currentColor = color;
+  debugLog(`Status applied: "${text}"`);
 }
 
 /**
  * Apply status message from countdown timer result
  * @param {string|{message: string, color: string}|null} result - Status message (string) or object with message and optional color
  * @param {string} defaultColor - Default color to use if result is a string or object without color
+ * @param {boolean} immediate - If true, bypass minimum visibility (for countdown updates)
  */
-function applyCountdownStatus(result, defaultColor) {
+function applyCountdownStatus(result, defaultColor, immediate = true) {
   if (!result) return;
   if (typeof result === 'string') {
-    setStatus(result, defaultColor);
+    setStatus(result, defaultColor, immediate);
   } else {
-    setStatus(result.message, result.color || defaultColor);
+    setStatus(result.message, result.color || defaultColor, immediate);
   }
 }
 
@@ -137,10 +241,15 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
   return {
     timerId: null,
     endTime: null,
+    // Track if this is the first update after starting the countdown
+    // First update respects minimum visibility of the previous status message
+    // Subsequent updates apply immediately for smooth countdown display (every 1 second)
+    isFirstUpdate: true,
     
     start(durationMs) {
       this.stop();
       this.endTime = Date.now() + durationMs;
+      this.isFirstUpdate = true; // Reset flag when starting
       this.update();
       this.timerId = setInterval(() => this.update(), 1000);
     },
@@ -155,7 +264,12 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
       }
       
       const remainingSec = Math.ceil(remainingMs / 1000);
-      applyCountdownStatus(getStatusMessage(remainingSec), STATUS_COLORS.idle);
+      // First update respects minimum visibility of previous message
+      // Subsequent updates are immediate for smooth 1-second countdown intervals
+      const immediate = !this.isFirstUpdate;
+      applyCountdownStatus(getStatusMessage(remainingSec), STATUS_COLORS.idle, immediate);
+      // Mark first update as complete after calling applyCountdownStatus
+      this.isFirstUpdate = false;
     },
     
     stop() {
@@ -164,6 +278,7 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
         this.timerId = null;
       }
       this.endTime = null;
+      this.isFirstUpdate = true; // Reset flag when stopping
     }
   };
 }
@@ -174,18 +289,18 @@ const autoCountdownTimer = createCountdownTimer(
   (remainingSec) => {
     if (!state.running) return null;
     if (remainingSec === 0) {
-      return { message: "Sending auto ping...", color: STATUS_COLORS.info };
+      return { message: "Sending auto ping", color: STATUS_COLORS.info };
     }
     // If there's a skip reason, show it with the countdown in warning color
     if (state.skipReason === "outside geofence") {
       return { 
-        message: `Ping skipped, outside of geo fenced region, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, outside of geofenced region, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
     if (state.skipReason === "too close") {
       return { 
-        message: `Ping skipping, too close to last ping, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, too close to last ping, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
@@ -202,16 +317,16 @@ const autoCountdownTimer = createCountdownTimer(
   }
 );
 
-// API post countdown timer
-const apiCountdownTimer = createCountdownTimer(
-  () => state.apiPostTime,
+// RX listening countdown timer (for heard repeats)
+const rxListeningCountdownTimer = createCountdownTimer(
+  () => state.rxListeningEndTime,
   (remainingSec) => {
     if (remainingSec === 0) {
-      return { message: "Posting to API...", color: STATUS_COLORS.info };
+      return { message: "Finalizing heard repeats", color: STATUS_COLORS.info };
     }
     return { 
-      message: `Wait to post API (${remainingSec}s)`,
-      color: STATUS_COLORS.idle
+      message: `Listening for heard repeats (${remainingSec}s)`,
+      color: STATUS_COLORS.info
     };
   }
 );
@@ -262,14 +377,16 @@ function resumeAutoCountdown() {
   return false;
 }
 
-function startApiCountdown(delayMs) {
-  state.apiPostTime = Date.now() + delayMs;
-  apiCountdownTimer.start(delayMs);
+function startRxListeningCountdown(delayMs) {
+  debugLog(`Starting RX listening countdown: ${delayMs}ms`);
+  state.rxListeningEndTime = Date.now() + delayMs;
+  rxListeningCountdownTimer.start(delayMs);
 }
 
-function stopApiCountdown() {
-  state.apiPostTime = null;
-  apiCountdownTimer.stop();
+function stopRxListeningCountdown() {
+  debugLog(`Stopping RX listening countdown`);
+  state.rxListeningEndTime = null;
+  rxListeningCountdownTimer.stop();
 }
 
 // Cooldown management
@@ -317,14 +434,23 @@ function cleanupAllTimers() {
     state.cooldownUpdateTimer = null;
   }
   
+  // Clean up status message timer
+  if (statusMessageState.pendingTimer) {
+    clearTimeout(statusMessageState.pendingTimer);
+    statusMessageState.pendingTimer = null;
+    statusMessageState.pendingMessage = null;
+  }
+  
   // Clean up state timer references
   state.autoCountdownTimer = null;
-  state.apiCountdownTimer = null;
   
   stopAutoCountdown();
-  stopApiCountdown();
+  stopRxListeningCountdown();
   state.cooldownEndTime = null;
   state.pausedAutoTimerRemainingMs = null;
+  
+  // Clear captured ping coordinates
+  state.capturedPingCoords = null;
 }
 
 function enableControls(connected) {
@@ -865,7 +991,7 @@ function buildPayload(lat, lon) {
   const coordsStr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   const power = getCurrentPowerSetting();
   const suffix = power ? ` [${power}]` : "";
-  return `${PING_PREFIX} ${coordsStr} ${suffix}`;
+  return `${PING_PREFIX} ${coordsStr}${suffix}`.trim();
 }
 
 // ---- MeshMapper API ----
@@ -882,8 +1008,9 @@ function getDeviceIdentifier() {
  * Post wardrive ping data to MeshMapper API
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
+ * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
  */
-async function postToMeshMapperAPI(lat, lon) {
+async function postToMeshMapperAPI(lat, lon, heardRepeats) {
   try {
     const payload = {
       key: MESHMAPPER_API_KEY,
@@ -891,10 +1018,11 @@ async function postToMeshMapperAPI(lat, lon) {
       lon,
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting() || "N/A",
+      heard_repeats: heardRepeats,
       test: 0
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -914,62 +1042,426 @@ async function postToMeshMapperAPI(lat, lon) {
 }
 
 /**
- * Schedule MeshMapper API post and coverage map refresh after a ping
+ * Post to MeshMapper API and refresh coverage map after heard repeats are finalized
+ * This executes immediately (no delay) because it's called after the RX listening window
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {number} accuracy - GPS accuracy in meters
+ * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
  */
-function scheduleApiPostAndMapRefresh(lat, lon, accuracy) {
-  // Clear any existing timer
-  if (state.meshMapperTimer) {
-    debugLog("Clearing existing MeshMapper timer");
-    clearTimeout(state.meshMapperTimer);
-  }
-
-  debugLog(`Scheduling MeshMapper API post in ${MESHMAPPER_DELAY_MS}ms`);
+async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
+  debugLog(`postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
   
-  state.meshMapperTimer = setTimeout(async () => {
-    stopApiCountdown();
-    setStatus("Posting to API...", STATUS_COLORS.info);
+  setStatus("Posting to API", STATUS_COLORS.info);
+  
+  // Hidden 3-second delay before API POST (user sees "Posting to API" status during this time)
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  try {
+    await postToMeshMapperAPI(lat, lon, heardRepeats);
+  } catch (error) {
+    debugError("MeshMapper API post failed:", error);
+  }
+  
+  // Update map after API post
+  setTimeout(() => {
+    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
     
-    try {
-      await postToMeshMapperAPI(lat, lon);
-    } catch (error) {
-      debugError("MeshMapper API post failed:", error);
+    if (shouldRefreshMap) {
+      debugLog(`Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
+      scheduleCoverageRefresh(lat, lon);
+    } else {
+      debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
-    // Update map after API post
-    setTimeout(() => {
-      const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-      
-      if (shouldRefreshMap) {
-        debugLog(`Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-        scheduleCoverageRefresh(lat, lon);
-      } else {
-        debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-      }
-      
-      // Update status based on current mode
-      if (state.connection) {
-        if (state.running) {
-          // Check if we should resume a paused auto countdown (manual ping during auto mode)
-          const resumed = resumeAutoCountdown();
-          if (!resumed) {
-            // No paused timer to resume, schedule new auto ping (this was an auto ping)
-            debugLog("Scheduling next auto ping");
-            scheduleNextAutoPing();
-          } else {
-            debugLog("Resumed auto countdown after manual ping");
-          }
+    // Update status based on current mode
+    if (state.connection) {
+      if (state.running) {
+        // Check if we should resume a paused auto countdown (manual ping during auto mode)
+        const resumed = resumeAutoCountdown();
+        if (!resumed) {
+          // No paused timer to resume, schedule new auto ping (this was an auto ping)
+          debugLog("Scheduling next auto ping");
+          scheduleNextAutoPing();
         } else {
-          debugLog("Setting status to idle");
-          setStatus("Idle", STATUS_COLORS.idle);
+          debugLog("Resumed auto countdown after manual ping");
         }
+      } else {
+        debugLog("Setting status to idle");
+        setStatus("Idle", STATUS_COLORS.idle);
       }
-    }, MAP_REFRESH_DELAY_MS);
+    }
+  }, MAP_REFRESH_DELAY_MS);
+}
+
+// ---- Repeater Echo Tracking ----
+
+/**
+ * Compute channel hash from channel secret (first byte of SHA-256)
+ * @param {Uint8Array} channelSecret - The 16-byte channel secret
+ * @returns {Promise<number>} The channel hash (first byte of SHA-256)
+ */
+async function computeChannelHash(channelSecret) {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', channelSecret);
+  const hashArray = new Uint8Array(hashBuffer);
+  return hashArray[0];
+}
+
+/**
+ * Decrypt GroupText payload and extract message text
+ * Payload structure: [1 byte channel_hash][2 bytes MAC][encrypted data]
+ * Encrypted data: [4 bytes timestamp][1 byte flags][message text]
+ * @param {Uint8Array} payload - The packet payload
+ * @param {Uint8Array} channelKey - The 16-byte channel secret for decryption
+ * @returns {Promise<string|null>} The decrypted message text, or null if decryption fails
+ */
+async function decryptGroupTextPayload(payload, channelKey) {
+  try {
+    debugLog(`[DECRYPT] Starting GroupText payload decryption`);
+    debugLog(`[DECRYPT] Payload length: ${payload.length} bytes`);
+    debugLog(`[DECRYPT] Channel key length: ${channelKey.length} bytes`);
     
-    state.meshMapperTimer = null;
-  }, MESHMAPPER_DELAY_MS);
+    // Validate payload length
+    if (payload.length < 3) {
+      debugLog(`[DECRYPT] ABORT: Payload too short for decryption (${payload.length} bytes, need at least 3)`);
+      return null;
+    }
+    
+    // Extract components
+    const channelHash = payload[0];
+    const cipherMAC = payload.slice(1, 3);
+    const encryptedData = payload.slice(3);
+    
+    debugLog(`[DECRYPT] Channel hash: 0x${channelHash.toString(16).padStart(2, '0')}`);
+    debugLog(`[DECRYPT] Cipher MAC: ${Array.from(cipherMAC).map(b => b.toString(16).padStart(2, '0')).join('')}`);
+    debugLog(`[DECRYPT] Encrypted data length: ${encryptedData.length} bytes`);
+    
+    if (encryptedData.length === 0) {
+      debugLog(`[DECRYPT] ABORT: No encrypted data to decrypt`);
+      return null;
+    }
+    
+    // Log first 32 bytes of encrypted data for debugging
+    const encPreview = Array.from(encryptedData.slice(0, Math.min(32, encryptedData.length)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    debugLog(`[DECRYPT] Encrypted data preview (first 32 bytes): ${encPreview}...`);
+    
+    // Use aes-js library for proper AES-ECB decryption
+    debugLog(`[DECRYPT] Using aes-js library for AES-ECB decryption`);
+    
+    // Check if aes-js is available
+    if (typeof aesjs === 'undefined') {
+      debugError(`[DECRYPT] ABORT: aes-js library not loaded`);
+      return null;
+    }
+    
+    // Convert Uint8Array to regular array for aes-js
+    const keyArray = Array.from(channelKey);
+    const encryptedArray = Array.from(encryptedData);
+    
+    debugLog(`[DECRYPT] Decrypting ${encryptedData.length} bytes with AES-ECB...`);
+    
+    // Create AES-ECB decryption instance
+    const aesCbc = new aesjs.ModeOfOperation.ecb(keyArray);
+    
+    // Decrypt block by block (ECB processes each 16-byte block independently)
+    const blockSize = 16;
+    const decryptedBytes = new Uint8Array(encryptedArray.length);
+    
+    for (let i = 0; i < encryptedArray.length; i += blockSize) {
+      const block = encryptedArray.slice(i, i + blockSize);
+      
+      // Pad last block if necessary
+      while (block.length < blockSize) {
+        block.push(0);
+      }
+      
+      const decryptedBlock = aesCbc.decrypt(block);
+      decryptedBytes.set(decryptedBlock, i);
+    }
+    
+    debugLog(`[DECRYPT] Decryption completed successfully`);
+    debugLog(`[DECRYPT] Decrypted data length: ${decryptedBytes.length} bytes`);
+    
+    // Log decrypted bytes for debugging
+    const decPreview = Array.from(decryptedBytes.slice(0, Math.min(32, decryptedBytes.length)))
+      .map(b => b.toString(16).padStart(2, '0')).join(' ');
+    debugLog(`[DECRYPT] Decrypted data preview (first 32 bytes): ${decPreview}...`);
+    
+    // Decrypted structure: [4 bytes timestamp][1 byte flags][message text]
+    if (decryptedBytes.length < 5) {
+      debugLog(`[DECRYPT] ABORT: Decrypted data too short (${decryptedBytes.length} bytes, need at least 5)`);
+      return null;
+    }
+    
+    // Extract timestamp (4 bytes, little-endian)
+    const timestamp = decryptedBytes[0] | (decryptedBytes[1] << 8) | (decryptedBytes[2] << 16) | (decryptedBytes[3] << 24);
+    debugLog(`[DECRYPT] Timestamp: ${timestamp} (${new Date(timestamp * 1000).toISOString()})`);
+    
+    // Extract flags (1 byte)
+    const flags = decryptedBytes[4];
+    debugLog(`[DECRYPT] Flags: 0x${flags.toString(16).padStart(2, '0')}`);
+    
+    // Extract message (remaining bytes)
+    const messageBytes = decryptedBytes.slice(5);
+    debugLog(`[DECRYPT] Message bytes length: ${messageBytes.length}`);
+    
+    // Decode as UTF-8 and strip null terminators
+    const decoder = new TextDecoder('utf-8');
+    const messageText = decoder.decode(messageBytes).replace(/\0+$/, '').trim();
+    
+    debugLog(`[DECRYPT] ✅ Message decrypted successfully: "${messageText}"`);
+    debugLog(`[DECRYPT] Message length: ${messageText.length} characters`);
+    
+    return messageText;
+    
+  } catch (error) {
+    debugError(`[DECRYPT] ❌ Failed to decrypt GroupText payload: ${error.message}`);
+    debugError(`[DECRYPT] Error stack: ${error.stack}`);
+    return null;
+  }
+}
+
+/**
+ * Start listening for repeater echoes via rx_log
+ * Uses the pre-computed WARDRIVING_CHANNEL_HASH for message correlation
+ * @param {string} payload - The ping payload that was sent
+ * @param {number} channelIdx - The channel index where the ping was sent
+ */
+function startRepeaterTracking(payload, channelIdx) {
+  debugLog(`Starting repeater echo tracking for ping: "${payload}" on channel ${channelIdx}`);
+  debugLog(`7-second rx_log listening window opened at ${new Date().toISOString()}`);
+  
+  // Verify we have the channel hash
+  if (WARDRIVING_CHANNEL_HASH === null) {
+    debugError(`Cannot start repeater tracking: channel hash not initialized`);
+    return;
+  }
+  
+  // Clear any existing tracking state
+  stopRepeaterTracking();
+  
+  debugLog(`Using pre-computed channel hash for correlation: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
+  
+  // Initialize tracking state
+  state.repeaterTracking.isListening = true;
+  state.repeaterTracking.sentTimestamp = Date.now();
+  state.repeaterTracking.sentPayload = payload;
+  state.repeaterTracking.channelIdx = channelIdx;
+  state.repeaterTracking.repeaters.clear();
+  
+  // Create the rx_log handler
+  const rxLogHandler = (data) => {
+    handleRxLogEvent(data, payload, channelIdx, WARDRIVING_CHANNEL_HASH);
+  };
+  
+  // Store the handler so we can remove it later
+  state.repeaterTracking.rxLogHandler = rxLogHandler;
+  
+  // Listen for rx_log events
+  if (state.connection) {
+    state.connection.on(Constants.PushCodes.LogRxData, rxLogHandler);
+    debugLog(`Registered LogRxData event handler`);
+  }
+  
+  // Note: The 7-second timeout to stop listening is managed by the caller (sendPing function)
+  // This allows the caller to both stop tracking AND retrieve results at the same time
+}
+
+/**
+ * Handle an rx_log event and check if it's a repeater echo of our ping
+ * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ * @param {string} originalPayload - The payload we sent
+ * @param {number} channelIdx - The channel index where we sent the ping
+ * @param {number} expectedChannelHash - The channel hash we expect (for message correlation)
+ */
+async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChannelHash) {
+  try {
+    debugLog(`Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    
+    // Parse the packet from raw data
+    const packet = Packet.fromBytes(data.raw);
+    
+    // VALIDATION STEP 1: Header validation (MUST occur before all other checks)
+    // Expected header for channel GroupText packets: 0x15
+    // Binary: 00 0101 01
+    // - Bits 0-1: Route Type = 01 (Flood)
+    // - Bits 2-5: Payload Type = 0101 (GroupText = 5)
+    // - Bits 6-7: Protocol Version = 00
+    const EXPECTED_HEADER = 0x15;
+    if (packet.header !== EXPECTED_HEADER) {
+      debugLog(`Ignoring rx_log entry: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')}, expected=0x${EXPECTED_HEADER.toString(16).padStart(2, '0')})`);
+      return;
+    }
+    
+    debugLog(`Parsed packet: header=0x${packet.header.toString(16).padStart(2, '0')}, route_type=${packet.route_type_string}, payload_type=${packet.payload_type_string}, path_len=${packet.path.length}`);
+    debugLog(`Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
+    
+    // VALIDATION STEP 2: Verify payload type is GRP_TXT (redundant with header check but kept for clarity)
+    if (packet.payload_type !== Packet.PAYLOAD_TYPE_GRP_TXT) {
+      debugLog(`Ignoring rx_log entry: not a channel message (payload_type=${packet.payload_type})`);
+      return;
+    }
+    
+    // VALIDATION STEP 3: Validate this message is for our channel by comparing channel hash
+    // Channel message payload structure: [1 byte channel_hash][2 bytes MAC][encrypted message]
+    if (packet.payload.length < 3) {
+      debugLog(`Ignoring rx_log entry: payload too short to contain channel hash`);
+      return;
+    }
+    
+    const packetChannelHash = packet.payload[0];
+    debugLog(`Message correlation check: packet_channel_hash=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')}`);
+    
+    if (packetChannelHash !== expectedChannelHash) {
+      debugLog(`Ignoring rx_log entry: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')})`);
+      return;
+    }
+    
+    debugLog(`Channel hash match confirmed - this is a message on our channel`);
+    
+    // VALIDATION STEP 4: Decrypt and verify message content matches what we sent
+    // This ensures we're tracking echoes of OUR specific ping, not other messages on the channel
+    debugLog(`[MESSAGE_CORRELATION] Starting message content verification...`);
+    
+    if (WARDRIVING_CHANNEL_KEY) {
+      debugLog(`[MESSAGE_CORRELATION] Channel key available, attempting decryption...`);
+      const decryptedMessage = await decryptGroupTextPayload(packet.payload, WARDRIVING_CHANNEL_KEY);
+      
+      if (decryptedMessage === null) {
+        debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Failed to decrypt message`);
+        return;
+      }
+      
+      debugLog(`[MESSAGE_CORRELATION] Decryption successful, comparing content...`);
+      debugLog(`[MESSAGE_CORRELATION] Decrypted: "${decryptedMessage}" (${decryptedMessage.length} chars)`);
+      debugLog(`[MESSAGE_CORRELATION] Expected:  "${originalPayload}" (${originalPayload.length} chars)`);
+      
+      // Channel messages include sender name prefix: "SenderName: Message"
+      // Check if our expected message is contained in the decrypted text
+      // This handles both exact matches and messages with sender prefixes
+      const messageMatches = decryptedMessage === originalPayload || decryptedMessage.includes(originalPayload);
+      
+      if (!messageMatches) {
+        debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Message content mismatch (not an echo of our ping)`);
+        debugLog(`[MESSAGE_CORRELATION] This is a different message on the same channel`);
+        return;
+      }
+      
+      if (decryptedMessage === originalPayload) {
+        debugLog(`[MESSAGE_CORRELATION] ✅ Exact message match confirmed - this is an echo of our ping!`);
+      } else {
+        debugLog(`[MESSAGE_CORRELATION] ✅ Message contained in decrypted text (with sender prefix) - this is an echo of our ping!`);
+      }
+    } else {
+      debugWarn(`[MESSAGE_CORRELATION] ⚠️ WARNING: Cannot verify message content - channel key not available`);
+      debugWarn(`[MESSAGE_CORRELATION] Proceeding without message content verification (less reliable)`);
+    }
+    
+    // VALIDATION STEP 5: Check path length (repeater echo vs direct transmission)
+    // For channel messages, the path contains repeater hops
+    // Each hop in the path is 1 byte (repeater ID)
+    if (packet.path.length === 0) {
+      debugLog(`Ignoring rx_log entry: no path (direct transmission, not a repeater echo)`);
+      return;
+    }
+    
+    // Extract only the first hop (first repeater ID) from the path
+    // The path may contain multiple hops (e.g., [0x22, 0xd0, 0x5d, 0x46, 0x8b])
+    // but we only care about the first repeater that echoed our message
+    // Example: path [0x22, 0xd0, 0x5d] becomes "22" (only first hop)
+    const firstHopId = packet.path[0];
+    const pathHex = firstHopId.toString(16).padStart(2, '0');
+    
+    debugLog(`Repeater echo accepted: first_hop=${pathHex}, SNR=${data.lastSnr}, full_path_length=${packet.path.length}`);
+    
+    // Check if we already have this path
+    if (state.repeaterTracking.repeaters.has(pathHex)) {
+      const existing = state.repeaterTracking.repeaters.get(pathHex);
+      debugLog(`Deduplication: path ${pathHex} already seen (existing SNR=${existing.snr}, new SNR=${data.lastSnr})`);
+      
+      // Keep the best (highest) SNR
+      if (data.lastSnr > existing.snr) {
+        debugLog(`Deduplication decision: updating path ${pathHex} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
+        state.repeaterTracking.repeaters.set(pathHex, {
+          snr: data.lastSnr,
+          seenCount: existing.seenCount + 1
+        });
+      } else {
+        debugLog(`Deduplication decision: keeping existing SNR for path ${pathHex} (existing ${existing.snr} >= new ${data.lastSnr})`);
+        // Still increment seen count
+        existing.seenCount++;
+      }
+    } else {
+      // New path
+      debugLog(`Adding new repeater echo: path=${pathHex}, SNR=${data.lastSnr}`);
+      state.repeaterTracking.repeaters.set(pathHex, {
+        snr: data.lastSnr,
+        seenCount: 1
+      });
+    }
+  } catch (error) {
+    debugError(`Error processing rx_log entry: ${error.message}`, error);
+  }
+}
+
+/**
+ * Stop listening for repeater echoes and return the results
+ * @returns {Array<{repeaterId: string, snr: number}>} Array of repeater telemetry
+ */
+function stopRepeaterTracking() {
+  if (!state.repeaterTracking.isListening) {
+    return [];
+  }
+  
+  debugLog(`Stopping repeater echo tracking`);
+  
+  // Stop listening for rx_log events
+  if (state.connection && state.repeaterTracking.rxLogHandler) {
+    state.connection.off(Constants.PushCodes.LogRxData, state.repeaterTracking.rxLogHandler);
+    debugLog(`Unregistered LogRxData event handler`);
+  }
+  
+  // Clear timeout
+  if (state.repeaterTracking.listenTimeout) {
+    clearTimeout(state.repeaterTracking.listenTimeout);
+    state.repeaterTracking.listenTimeout = null;
+  }
+  
+  // Get the results
+  const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
+    repeaterId: id,
+    snr: data.snr
+  }));
+  
+  // Sort by repeater ID for deterministic output
+  repeaters.sort((a, b) => a.repeaterId.localeCompare(b.repeaterId));
+  
+  debugLog(`Final aggregated repeater list: ${repeaters.length > 0 ? repeaters.map(r => `${r.repeaterId}(${r.snr}dB)`).join(', ') : 'none'}`);
+  
+  // Reset state
+  state.repeaterTracking.isListening = false;
+  state.repeaterTracking.sentTimestamp = null;
+  state.repeaterTracking.sentPayload = null;
+  state.repeaterTracking.repeaters.clear();
+  state.repeaterTracking.rxLogHandler = null;
+  
+  return repeaters;
+}
+
+/**
+ * Format repeater telemetry for output
+ * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
+ * @returns {string} Formatted repeater string (e.g., "4e(11.5),77(9.75)" or "none")
+ */
+function formatRepeaterTelemetry(repeaters) {
+  if (repeaters.length === 0) {
+    return "None";
+  }
+  
+  // Format as: path(snr), path(snr), ...
+  // Display exact SNR values as received
+  return repeaters.map(r => `${r.repeaterId}(${r.snr})`).join(',');
 }
 
 // ---- Ping ----
@@ -1008,7 +1500,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
       debugWarn("Auto ping skipped: no GPS fix available yet");
-      setStatus("Waiting for GPS fix...", STATUS_COLORS.warning);
+      setStatus("Waiting for GPS fix", STATUS_COLORS.warning);
       return null;
     }
     
@@ -1019,7 +1511,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     if (ageMs >= maxAge) {
       debugLog(`GPS data too old for auto ping (${ageMs}ms), attempting to refresh`);
-      setStatus("GPS data old, trying to refresh position", STATUS_COLORS.warning);
+      setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
       
       try {
         return await acquireFreshGpsPosition();
@@ -1087,26 +1579,57 @@ async function getGpsCoordinatesForPing(isAutoMode) {
 }
 
 /**
- * Log ping information to the UI
+ * Log ping information to the UI with repeater telemetry
+ * Creates a session log entry that will be updated with repeater data
  * @param {string} payload - The ping message
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
+ * @returns {HTMLElement|null} The list item element for later updates, or null
  */
 function logPingToUI(payload, lat, lon) {
-  const nowStr = new Date().toLocaleString();
+  // Use ISO format for data storage but user-friendly format for display
+  const now = new Date();
+  const isoStr = now.toISOString();
   
   if (lastPingEl) {
-    lastPingEl.textContent = `${nowStr} — ${payload}`;
+    lastPingEl.textContent = `${now.toLocaleString()} — ${payload}`;
   }
 
   if (sessionPingsEl) {
-    const line = `${nowStr}  ${lat.toFixed(5)} ${lon.toFixed(5)}`;
+    // Create log entry with placeholder for repeater data
+    // Format: timestamp | lat,lon | repeaters (using ISO for consistency with requirements)
+    const line = `${isoStr} | ${lat.toFixed(5)},${lon.toFixed(5)} | ...`;
     const li = document.createElement('li');
     li.textContent = line;
+    li.setAttribute('data-timestamp', isoStr);
+    li.setAttribute('data-lat', lat.toFixed(5));
+    li.setAttribute('data-lon', lon.toFixed(5));
     sessionPingsEl.appendChild(li);
     // Auto-scroll to bottom
     sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
+    return li;
   }
+  
+  return null;
+}
+
+/**
+ * Update a ping log entry with repeater telemetry
+ * @param {HTMLElement|null} logEntry - The log entry element to update
+ * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
+ */
+function updatePingLogWithRepeaters(logEntry, repeaters) {
+  if (!logEntry) return;
+  
+  const timestamp = logEntry.getAttribute('data-timestamp');
+  const lat = logEntry.getAttribute('data-lat');
+  const lon = logEntry.getAttribute('data-lon');
+  const repeaterStr = formatRepeaterTelemetry(repeaters);
+  
+  // Update the log entry with final repeater data
+  logEntry.textContent = `${timestamp} | ${lat},${lon} | ${repeaterStr}`;
+  
+  debugLog(`Updated ping log entry with repeater telemetry: ${repeaterStr}`);
 }
 
 /**
@@ -1120,7 +1643,7 @@ async function sendPing(manual = false) {
     if (manual && isInCooldown()) {
       const remainingSec = getRemainingCooldownSeconds();
       debugLog(`Manual ping blocked by cooldown (${remainingSec}s remaining)`);
-      setStatus(`Please wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
+      setStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
       return;
     }
 
@@ -1129,14 +1652,14 @@ async function sendPing(manual = false) {
       // Manual ping during auto mode: pause the auto countdown
       debugLog("Manual ping during auto mode - pausing auto countdown");
       pauseAutoCountdown();
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     } else if (!manual && state.running) {
       // Auto ping: stop the countdown timer to avoid status conflicts
       stopAutoCountdown();
-      setStatus("Sending auto ping...", STATUS_COLORS.info);
+      setStatus("Sending auto ping", STATUS_COLORS.info);
     } else if (manual) {
       // Manual ping when auto is not running
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     }
 
     // Get GPS coordinates
@@ -1162,7 +1685,7 @@ async function sendPing(manual = false) {
       
       if (manual) {
         // Manual ping: show skip message that persists
-        setStatus("Ping skipped, outside of geo fenced region", STATUS_COLORS.warning);
+        setStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1199,6 +1722,15 @@ async function sendPing(manual = false) {
     debugLog(`Sending ping to channel: "${payload}"`);
 
     const ch = await ensureChannel();
+    
+    // Capture GPS coordinates at ping time - these will be used for API post after 7s delay
+    state.capturedPingCoords = { lat, lon, accuracy };
+    debugLog(`GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
+    
+    // Start repeater echo tracking BEFORE sending the ping
+    debugLog(`Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
+    startRepeaterTracking(payload, ch.channelIdx);
+    
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     debugLog(`Ping sent successfully to channel ${ch.channelIdx}`);
 
@@ -1214,20 +1746,57 @@ async function sendPing(manual = false) {
     startCooldown();
 
     // Update status after ping is sent
-    setStatus(manual ? "Ping sent" : "Auto ping sent", STATUS_COLORS.success);
+    setStatus("Ping sent", STATUS_COLORS.success);
     
-    // Start API countdown after brief delay to show "Ping sent" message
-    setTimeout(() => {
-      if (state.connection) {
-        startApiCountdown(MESHMAPPER_DELAY_MS);
+    // Create UI log entry with placeholder for repeater data
+    const logEntry = logPingToUI(payload, lat, lon);
+    
+    // Start RX listening countdown
+    // The minimum 500ms visibility of "Ping sent" is enforced by setStatus()
+    if (state.connection) {
+      debugLog(`Starting RX listening window for ${RX_LOG_LISTEN_WINDOW_MS}ms`);
+      startRxListeningCountdown(RX_LOG_LISTEN_WINDOW_MS);
+    }
+    
+    // Schedule the sequence: listen for 7s, THEN finalize repeats and post to API
+    // This timeout is stored in meshMapperTimer for cleanup purposes
+    state.meshMapperTimer = setTimeout(async () => {
+      debugLog(`RX listening window completed after ${RX_LOG_LISTEN_WINDOW_MS}ms`);
+      
+      // Stop listening countdown
+      stopRxListeningCountdown();
+      
+      // Stop repeater tracking and get final results
+      const repeaters = stopRepeaterTracking();
+      debugLog(`Finalized heard repeats: ${repeaters.length} unique paths detected`);
+      
+      // Update UI log with repeater data
+      updatePingLogWithRepeaters(logEntry, repeaters);
+      
+      // Format repeater data for API
+      const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
+      debugLog(`Formatted heard_repeats for API: "${heardRepeatsStr}"`);
+      
+      // Use captured coordinates for API post (not current GPS position)
+      if (state.capturedPingCoords) {
+        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = state.capturedPingCoords;
+        debugLog(`Using captured ping coordinates for API post: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
+        
+        // Post to API with heard repeats data
+        await postApiAndRefreshMap(apiLat, apiLon, apiAccuracy, heardRepeatsStr);
+      } else {
+        // This should never happen as coordinates are always captured before ping
+        debugError(`CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
+        debugError(`Skipping API post to avoid posting incorrect coordinates`);
       }
-    }, STATUS_UPDATE_DELAY_MS);
-
-    // Schedule MeshMapper API post and map refresh
-    scheduleApiPostAndMapRefresh(lat, lon, accuracy);
-    
-    // Update UI with ping info
-    logPingToUI(payload, lat, lon);
+      
+      // Clear captured coordinates after API post completes (always, regardless of path)
+      state.capturedPingCoords = null;
+      debugLog(`Cleared captured ping coordinates after API post`);
+      
+      // Clear timer reference
+      state.meshMapperTimer = null;
+    }, RX_LOG_LISTEN_WINDOW_MS);
     
     // Update distance display immediately after successful ping
     updateDistanceUi();
@@ -1244,7 +1813,7 @@ function stopAutoPing(stopGps = false) {
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -1304,7 +1873,7 @@ function startAutoPing() {
   if (isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -1344,7 +1913,7 @@ async function connect() {
     return;
   }
   connectBtn.disabled = true;
-  setStatus("Connecting…", STATUS_COLORS.info);
+  setStatus("Connecting", STATUS_COLORS.info);
 
   try {
     debugLog("Opening BLE connection...");
@@ -1389,6 +1958,7 @@ async function connect() {
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
       stopDistanceUpdater(); // Ensure distance updater stops
+      stopRepeaterTracking(); // Stop repeater echo tracking
       
       // Clean up all timers
       cleanupAllTimers();
@@ -1403,7 +1973,7 @@ async function connect() {
 
   } catch (e) {
     debugError(`BLE connection failed: ${e.message}`, e);
-    setStatus("Failed to connect", STATUS_COLORS.error);
+    setStatus("Connection failed", STATUS_COLORS.error);
     connectBtn.disabled = false;
   }
 }
@@ -1415,7 +1985,7 @@ async function disconnect() {
   }
 
   connectBtn.disabled = true;
-  setStatus("Disconnecting...", STATUS_COLORS.info);
+  setStatus("Disconnecting", STATUS_COLORS.info);
 
   // Delete the wardriving channel before disconnecting
   try {
@@ -1486,7 +2056,7 @@ export async function onLoad() {
       }
     } catch (e) {
       debugError(`Connection button error: ${e.message}`, e);
-      setStatus(e.message || "Connection error", STATUS_COLORS.error);
+      setStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
   sendPingBtn.addEventListener("click", () => {
