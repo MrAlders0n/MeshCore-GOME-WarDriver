@@ -1,6 +1,6 @@
 # MeshCore GOME WarDriver
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.2.0)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.2.1)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-orange.svg)](#platform-support)
 
@@ -13,36 +13,29 @@ A browser-based Progressive Web App for wardriving with MeshCore devices. Connec
 ## 🚀 Quick Start
 
 ### Before you start
+
 - Make sure you have the **wardriving channel** set on your companion.
 - Take a **backup of your companion** (this webapp is beyond experimental).
 
 ### Android
-1. Open the **MeshCore** app and add the Public Hashtag channel #wardriving:
-    - Click the three dots (top-right) → **Add Channel**
-    - Select **Join a hashtag channel**
-    - Type **#wardriving** → **Join channel**
-    - Click **Continue to channel**
-2. Disconnect the **MeshCore** app and close it
-3. Open **Google Chrome**
-4. Go to https://wardrive.ottawamesh.ca/
-5. **Connect** your device
-6. Pick **interval** and **power**
-7. Send a ping or start **auto ping**
-8. Move around and watch it track
+
+1. Disconnect the **MeshCore** app and close it
+2. Open **Google Chrome**
+3. Go to https://wardrive.ottawamesh.ca/
+4. **Connect** your device
+5. Pick **interval** and **power**
+6. Send a ping or start **auto ping**
+7. Move around and watch it track
 
 ### iOS
-1. Open the **MeshCore** app and add the Public Hashtag channel #wardriving:
-    - Click the three dots (top-right) → **Add Channel**
-    - Select **Join a hashtag channel**
-    - Type **#wardriving** → **Join channel**
-    - Click **Continue to channel**
-2. Disconnect the **MeshCore** app and close it
-3. Install **Bluefy** (Web BLE browser): https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055
-4. Open https://wardrive.ottawamesh.ca/ in **Bluefy**
-5. **Connect** your device
-6. Pick **interval** and **power**
-7. Send a ping or start **auto ping**
-8. Move around and watch it track
+
+1. Disconnect the **MeshCore** app and close it
+2. Install **Bluefy** (Web BLE browser): https://apps.apple.com/us/app/bluefy-web-ble-browser/id1492822055
+3. Open https://wardrive.ottawamesh.ca/ in **Bluefy**
+4. **Connect** your device
+5. Pick **interval** and **power**
+6. Send a ping or start **auto ping**
+7. Move around and watch it track
 
 > ⚠️ **Note (iOS)**: You must use **Bluefy**. Other iOS browsers (including Safari) do not support Web Bluetooth (BLE).
 
