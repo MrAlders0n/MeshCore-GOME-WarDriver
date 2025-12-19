@@ -300,7 +300,7 @@ const autoCountdownTimer = createCountdownTimer(
     }
     if (state.skipReason === "too close") {
       return { 
-        message: `Ping skipping, too close to last ping, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, too close to last ping, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
@@ -322,7 +322,7 @@ const rxListeningCountdownTimer = createCountdownTimer(
   () => state.rxListeningEndTime,
   (remainingSec) => {
     if (remainingSec === 0) {
-      return { message: "Finalizing heard repeats...", color: STATUS_COLORS.info };
+      return { message: "Finalizing heard repeats", color: STATUS_COLORS.info };
     }
     return { 
       message: `Listening for heard repeats (${remainingSec}s)`,
@@ -1500,7 +1500,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
       debugWarn("Auto ping skipped: no GPS fix available yet");
-      setStatus("Waiting for GPS fix...", STATUS_COLORS.warning);
+      setStatus("Waiting for GPS fix", STATUS_COLORS.warning);
       return null;
     }
     
@@ -1652,14 +1652,14 @@ async function sendPing(manual = false) {
       // Manual ping during auto mode: pause the auto countdown
       debugLog("Manual ping during auto mode - pausing auto countdown");
       pauseAutoCountdown();
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     } else if (!manual && state.running) {
       // Auto ping: stop the countdown timer to avoid status conflicts
       stopAutoCountdown();
-      setStatus("Sending auto ping...", STATUS_COLORS.info);
+      setStatus("Sending auto ping", STATUS_COLORS.info);
     } else if (manual) {
       // Manual ping when auto is not running
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     }
 
     // Get GPS coordinates
@@ -1913,7 +1913,7 @@ async function connect() {
     return;
   }
   connectBtn.disabled = true;
-  setStatus("Connecting…", STATUS_COLORS.info);
+  setStatus("Connecting", STATUS_COLORS.info);
 
   try {
     debugLog("Opening BLE connection...");
@@ -1985,7 +1985,7 @@ async function disconnect() {
   }
 
   connectBtn.disabled = true;
-  setStatus("Disconnecting...", STATUS_COLORS.info);
+  setStatus("Disconnecting", STATUS_COLORS.info);
 
   // Delete the wardriving channel before disconnecting
   try {
