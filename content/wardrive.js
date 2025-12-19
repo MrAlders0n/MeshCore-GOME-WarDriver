@@ -903,20 +903,21 @@ function mapTxPowerToWattage(txPowerDbm) {
  */
 function autoSelectPowerSetting(txPowerDbm) {
   const powerString = mapTxPowerToWattage(txPowerDbm);
-  debugLog(`Auto-selecting power setting: ${powerString || "N/A"} (from ${txPowerDbm} dBm)`);
+  const displayValue = powerString === "" ? "N/A" : powerString;
+  debugLog(`Auto-selecting power setting: ${displayValue} (from ${txPowerDbm} dBm)`);
   
   // Find and select the matching radio button
   const powerRadios = document.querySelectorAll('input[name="power"]');
   for (const radio of powerRadios) {
     if (radio.value === powerString) {
       radio.checked = true;
-      debugLog(`Power radio button selected: ${powerString || "N/A"}`);
+      debugLog(`Power radio button selected: value="${powerString}" (${displayValue})`);
       return;
     }
   }
   
-  // Fallback: select N/A if no match found
-  debugWarn(`No matching power option found for ${powerString}, defaulting to N/A`);
+  // Fallback: select N/A if no match found (should rarely happen)
+  debugWarn(`Could not find radio button for power value "${powerString}" (${displayValue}), attempting fallback to N/A`);
   const naRadio = document.querySelector('input[name="power"][value=""]');
   if (naRadio) {
     naRadio.checked = true;
