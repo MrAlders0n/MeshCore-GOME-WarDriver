@@ -730,22 +730,25 @@ async function deriveChannelKey(channelName) {
     );
   }
   
-  // Validate channel name format: must start with # and contain only a-z, 0-9, and dashes
+  // Validate channel name format: must start with # and contain only letters, numbers, and dashes
   if (!channelName.startsWith('#')) {
     throw new Error(`Channel name must start with # (got: "${channelName}")`);
   }
   
-  // Check that the part after # contains only lowercase letters, numbers, and dashes
-  const nameWithoutHash = channelName.slice(1);
+  // Normalize channel name to lowercase (MeshCore convention)
+  const normalizedName = channelName.toLowerCase();
+  
+  // Check that the part after # contains only letters, numbers, and dashes
+  const nameWithoutHash = normalizedName.slice(1);
   if (!/^[a-z0-9-]+$/.test(nameWithoutHash)) {
     throw new Error(
-      `Channel name "${channelName}" contains invalid characters. Only a-z, 0-9, and dashes are allowed.`
+      `Channel name "${channelName}" contains invalid characters. Only letters, numbers, and dashes are allowed.`
     );
   }
   
-  // Encode the channel name as UTF-8
+  // Encode the normalized channel name as UTF-8
   const encoder = new TextEncoder();
-  const data = encoder.encode(channelName);
+  const data = encoder.encode(normalizedName);
   
   // Hash using SHA-256
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -755,7 +758,7 @@ async function deriveChannelKey(channelName) {
   const hashArray = new Uint8Array(hashBuffer);
   const channelKey = hashArray.slice(0, 16);
   
-  debugLog(`Derived channel key for "${channelName}" (length: ${channelKey.length} bytes)`);
+  debugLog(`Channel key derived successfully (${channelKey.length} bytes)`);
   
   return channelKey;
 }
