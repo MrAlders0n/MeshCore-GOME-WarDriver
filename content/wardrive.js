@@ -289,18 +289,18 @@ const autoCountdownTimer = createCountdownTimer(
   (remainingSec) => {
     if (!state.running) return null;
     if (remainingSec === 0) {
-      return { message: "Sending auto ping...", color: STATUS_COLORS.info };
+      return { message: "Sending auto ping", color: STATUS_COLORS.info };
     }
     // If there's a skip reason, show it with the countdown in warning color
     if (state.skipReason === "outside geofence") {
       return { 
-        message: `Ping skipped, outside of geo fenced region, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, outside of geofenced region, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
     if (state.skipReason === "too close") {
       return { 
-        message: `Ping skipping, too close to last ping, waiting for next ping (${remainingSec}s)`,
+        message: `Ping skipped, too close to last ping, waiting for next ping (${remainingSec}s)`,
         color: STATUS_COLORS.warning
       };
     }
@@ -322,7 +322,7 @@ const rxListeningCountdownTimer = createCountdownTimer(
   () => state.rxListeningEndTime,
   (remainingSec) => {
     if (remainingSec === 0) {
-      return { message: "Finalizing heard repeats...", color: STATUS_COLORS.info };
+      return { message: "Finalizing heard repeats", color: STATUS_COLORS.info };
     }
     return { 
       message: `Listening for heard repeats (${remainingSec}s)`,
@@ -1054,6 +1054,9 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
   
   setStatus("Posting to API", STATUS_COLORS.info);
   
+  // Hidden 3-second delay before API POST (user sees "Posting to API" status during this time)
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
   try {
     await postToMeshMapperAPI(lat, lon, heardRepeats);
   } catch (error) {
@@ -1497,7 +1500,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
       debugWarn("Auto ping skipped: no GPS fix available yet");
-      setStatus("Waiting for GPS fix...", STATUS_COLORS.warning);
+      setStatus("Waiting for GPS fix", STATUS_COLORS.warning);
       return null;
     }
     
@@ -1508,7 +1511,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     if (ageMs >= maxAge) {
       debugLog(`GPS data too old for auto ping (${ageMs}ms), attempting to refresh`);
-      setStatus("GPS data old, trying to refresh position", STATUS_COLORS.warning);
+      setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
       
       try {
         return await acquireFreshGpsPosition();
@@ -1640,7 +1643,7 @@ async function sendPing(manual = false) {
     if (manual && isInCooldown()) {
       const remainingSec = getRemainingCooldownSeconds();
       debugLog(`Manual ping blocked by cooldown (${remainingSec}s remaining)`);
-      setStatus(`Please wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
+      setStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
       return;
     }
 
@@ -1649,14 +1652,14 @@ async function sendPing(manual = false) {
       // Manual ping during auto mode: pause the auto countdown
       debugLog("Manual ping during auto mode - pausing auto countdown");
       pauseAutoCountdown();
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     } else if (!manual && state.running) {
       // Auto ping: stop the countdown timer to avoid status conflicts
       stopAutoCountdown();
-      setStatus("Sending auto ping...", STATUS_COLORS.info);
+      setStatus("Sending auto ping", STATUS_COLORS.info);
     } else if (manual) {
       // Manual ping when auto is not running
-      setStatus("Sending manual ping...", STATUS_COLORS.info);
+      setStatus("Sending manual ping", STATUS_COLORS.info);
     }
 
     // Get GPS coordinates
@@ -1682,7 +1685,7 @@ async function sendPing(manual = false) {
       
       if (manual) {
         // Manual ping: show skip message that persists
-        setStatus("Ping skipped, outside of geo fenced region", STATUS_COLORS.warning);
+        setStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1743,7 +1746,7 @@ async function sendPing(manual = false) {
     startCooldown();
 
     // Update status after ping is sent
-    setStatus(manual ? "Ping sent" : "Auto ping sent", STATUS_COLORS.success);
+    setStatus("Ping sent", STATUS_COLORS.success);
     
     // Create UI log entry with placeholder for repeater data
     const logEntry = logPingToUI(payload, lat, lon);
@@ -1810,7 +1813,7 @@ function stopAutoPing(stopGps = false) {
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -1870,7 +1873,7 @@ function startAutoPing() {
   if (isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Please wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -1910,7 +1913,7 @@ async function connect() {
     return;
   }
   connectBtn.disabled = true;
-  setStatus("Connecting…", STATUS_COLORS.info);
+  setStatus("Connecting", STATUS_COLORS.info);
 
   try {
     debugLog("Opening BLE connection...");
@@ -1970,7 +1973,7 @@ async function connect() {
 
   } catch (e) {
     debugError(`BLE connection failed: ${e.message}`, e);
-    setStatus("Failed to connect", STATUS_COLORS.error);
+    setStatus("Connection failed", STATUS_COLORS.error);
     connectBtn.disabled = false;
   }
 }
@@ -1982,7 +1985,7 @@ async function disconnect() {
   }
 
   connectBtn.disabled = true;
-  setStatus("Disconnecting...", STATUS_COLORS.info);
+  setStatus("Disconnecting", STATUS_COLORS.info);
 
   // Delete the wardriving channel before disconnecting
   try {
@@ -2053,7 +2056,7 @@ export async function onLoad() {
       }
     } catch (e) {
       debugError(`Connection button error: ${e.message}`, e);
-      setStatus(e.message || "Connection error", STATUS_COLORS.error);
+      setStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
   sendPingBtn.addEventListener("click", () => {
