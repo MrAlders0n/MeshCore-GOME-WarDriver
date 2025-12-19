@@ -1414,6 +1414,18 @@ async function disconnect() {
   connectBtn.disabled = true;
   setStatus("Disconnecting...", STATUS_COLORS.info);
 
+  // Delete the wardriving channel before disconnecting
+  try {
+    if (state.channel && typeof state.connection.deleteChannel === "function") {
+      debugLog(`Deleting channel ${CHANNEL_NAME} at index ${state.channel.channelIdx}`);
+      await state.connection.deleteChannel(state.channel.channelIdx);
+      debugLog(`Channel ${CHANNEL_NAME} deleted successfully`);
+    }
+  } catch (e) {
+    debugWarn(`Failed to delete channel ${CHANNEL_NAME}: ${e.message}`);
+    // Don't fail disconnect if channel deletion fails
+  }
+
   try {
     // WebBleConnection typically exposes one of these.
     if (typeof state.connection.close === "function") {
