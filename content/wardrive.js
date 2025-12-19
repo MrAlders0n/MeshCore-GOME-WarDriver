@@ -1075,15 +1075,28 @@ function handleRxLogEvent(data, originalPayload, channelIdx, expectedChannelHash
     // Parse the packet from raw data
     const packet = Packet.fromBytes(data.raw);
     
-    debugLog(`Parsed packet: route_type=${packet.route_type_string}, payload_type=${packet.payload_type_string}, path_len=${packet.path.length}`);
+    // VALIDATION STEP 1: Header validation (MUST occur before all other checks)
+    // Expected header for channel GroupText packets: 0x15
+    // Binary: 00 0101 01
+    // - Bits 0-1: Route Type = 01 (Flood)
+    // - Bits 2-5: Payload Type = 0101 (GroupText = 5)
+    // - Bits 6-7: Protocol Version = 00
+    const EXPECTED_HEADER = 0x15;
+    if (packet.header !== EXPECTED_HEADER) {
+      debugLog(`Ignoring rx_log entry: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')}, expected=0x${EXPECTED_HEADER.toString(16).padStart(2, '0')})`);
+      return;
+    }
     
-    // Check if this is a channel message (GRP_TXT)
+    debugLog(`Parsed packet: header=0x${packet.header.toString(16).padStart(2, '0')}, route_type=${packet.route_type_string}, payload_type=${packet.payload_type_string}, path_len=${packet.path.length}`);
+    debugLog(`Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
+    
+    // VALIDATION STEP 2: Verify payload type is GRP_TXT (redundant with header check but kept for clarity)
     if (packet.payload_type !== Packet.PAYLOAD_TYPE_GRP_TXT) {
       debugLog(`Ignoring rx_log entry: not a channel message (payload_type=${packet.payload_type})`);
       return;
     }
     
-    // CRITICAL: Validate this message is for our channel by comparing channel hash
+    // VALIDATION STEP 3: Validate this message is for our channel by comparing channel hash
     // Channel message payload structure: [1 byte channel_hash][2 bytes MAC][encrypted message]
     if (packet.payload.length < 3) {
       debugLog(`Ignoring rx_log entry: payload too short to contain channel hash`);
