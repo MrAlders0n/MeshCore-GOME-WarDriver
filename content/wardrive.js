@@ -162,8 +162,9 @@ function setStatus(text, color = STATUS_COLORS.idle, immediate = false) {
   const now = Date.now();
   const timeSinceLastSet = now - statusMessageState.lastSetTime;
   
-  // Special case: if this is the same message, just update timestamp without changing UI
-  // This maintains accurate timing for subsequent messages
+  // Special case: if this is the same message, update timestamp without changing UI
+  // This prevents countdown timer updates from being delayed unnecessarily
+  // Example: If status is already "Waiting (10s)", the next "Waiting (9s)" won't be delayed
   if (text === statusMessageState.currentText && color === statusMessageState.currentColor) {
     debugLog(`Status update (same message): "${text}"`);
     statusMessageState.lastSetTime = now;
@@ -241,7 +242,7 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
     endTime: null,
     // Track if this is the first update after starting the countdown
     // First update respects minimum visibility of the previous status message
-    // Subsequent updates (7s→6s→5s) apply immediately for smooth countdown display
+    // Subsequent updates apply immediately for smooth countdown display (every 1 second)
     isFirstUpdate: true,
     
     start(durationMs) {
