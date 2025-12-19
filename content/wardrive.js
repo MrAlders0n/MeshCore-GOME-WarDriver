@@ -1266,14 +1266,14 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
       return;
     }
     
-    // Convert entire path to hex string for the repeater identifier
-    // This represents the complete path this message took
-    // Example: path [0x25, 0x21] becomes "2521"
-    const pathHex = Array.from(packet.path)
-      .map(byte => byte.toString(16).padStart(2, '0'))
-      .join('');
+    // Extract only the first hop (first repeater ID) from the path
+    // The path may contain multiple hops (e.g., [0x22, 0xd0, 0x5d, 0x46, 0x8b])
+    // but we only care about the first repeater that echoed our message
+    // Example: path [0x22, 0xd0, 0x5d] becomes "22" (only first hop)
+    const firstHopId = packet.path[0];
+    const pathHex = firstHopId.toString(16).padStart(2, '0');
     
-    debugLog(`Repeater echo accepted: path=${pathHex}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
+    debugLog(`Repeater echo accepted: first_hop=${pathHex}, SNR=${data.lastSnr}, full_path_length=${packet.path.length}`);
     
     // Check if we already have this path
     if (state.repeaterTracking.repeaters.has(pathHex)) {
