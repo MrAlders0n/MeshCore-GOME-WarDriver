@@ -870,7 +870,7 @@ function getGpsMaximumAge(minAge = 1000) {
  * @returns {string} Power setting string matching UI options: "1.0w", "0.6w", "0.3w", or "" (N/A)
  */
 function mapTxPowerToWattage(txPowerDbm) {
-  if (txPowerDbm == null) {
+  if (txPowerDbm === null || txPowerDbm === undefined) {
     debugLog(`Invalid txPower value: ${txPowerDbm}, defaulting to N/A`);
     return "";
   }
@@ -1430,7 +1430,7 @@ async function connect() {
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
       
       // Auto-select power setting based on device txPower
-      if (selfInfo?.txPower != null) {
+      if (selfInfo?.txPower !== null && selfInfo?.txPower !== undefined) {
         autoSelectPowerSetting(selfInfo.txPower);
       } else {
         debugWarn("Device did not provide txPower value");
