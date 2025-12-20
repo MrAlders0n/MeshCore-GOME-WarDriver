@@ -5,7 +5,7 @@
 // - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
-import { WebBleConnection, Constants, Packet } from "./mc/index.js"; // your BLE client
+import { WebBleConnection, Constants, Packet, BufferUtils } from "./mc/index.js"; // your BLE client
 
 // ---- Debug Configuration ----
 // Enable debug logging via URL parameter (?debug=true) or set default here
@@ -75,6 +75,7 @@ const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
+const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
@@ -121,6 +122,7 @@ const state = {
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
+  devicePublicKey: null, // Hex string of device's public key (used for capacity check)
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -451,6 +453,9 @@ function cleanupAllTimers() {
   
   // Clear captured ping coordinates
   state.capturedPingCoords = null;
+  
+  // Clear device public key
+  state.devicePublicKey = null;
 }
 
 function enableControls(connected) {
@@ -1005,6 +1010,73 @@ function getDeviceIdentifier() {
 }
 
 /**
+ * Check capacity / slot availability with MeshMapper API
+ * @param {string} reason - Either "connect" (acquire slot) or "disconnect" (release slot)
+ * @returns {Promise<boolean>} True if allowed to continue, false otherwise
+ */
+async function checkCapacity(reason) {
+  // Validate public key exists
+  if (!state.devicePublicKey) {
+    debugError("checkCapacity called but no public key stored");
+    return reason === "connect" ? false : true; // Fail closed on connect, allow disconnect
+  }
+
+  // Set status for connect requests
+  if (reason === "connect") {
+    setStatus("Acquiring wardriving slot", STATUS_COLORS.info);
+  }
+
+  try {
+    const payload = {
+      key: MESHMAPPER_API_KEY,
+      public_key: state.devicePublicKey,
+      who: getDeviceIdentifier(),
+      reason: reason
+    };
+
+    debugLog(`Checking capacity: reason=${reason}, public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}`);
+
+    const response = await fetch(MESHMAPPER_CAPACITY_CHECK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      debugWarn(`Capacity check API returned error status ${response.status}`);
+      // Fail open on network errors for connect
+      if (reason === "connect") {
+        debugWarn("Failing open (allowing connection) due to API error");
+        // Show network issue message briefly
+        setStatus("Network issue checking slot, proceeding anyway", STATUS_COLORS.warning);
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Show message for 1.5s
+        return true;
+      }
+      return true; // Always allow disconnect to proceed
+    }
+
+    const data = await response.json();
+    debugLog(`Capacity check response: allowed=${data.allowed}`);
+
+    return data.allowed === true;
+
+  } catch (error) {
+    debugError(`Capacity check failed: ${error.message}`);
+    
+    // Fail open on network errors for connect
+    if (reason === "connect") {
+      debugWarn("Failing open (allowing connection) due to network error");
+      // Show network issue message briefly
+      setStatus("Network issue checking slot, proceeding anyway", STATUS_COLORS.warning);
+      await new Promise(resolve => setTimeout(resolve, 1500)); // Show message for 1.5s
+      return true;
+    }
+    
+    return true; // Always allow disconnect to proceed
+  }
+}
+
+/**
  * Post wardrive ping data to MeshMapper API
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
@@ -1034,6 +1106,22 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       debugWarn(`MeshMapper API returned error status ${response.status}`);
     } else {
       debugLog(`MeshMapper API post successful (status ${response.status})`);
+      
+      // Parse response and check if we're allowed to continue
+      try {
+        const data = await response.json();
+        if (data.allowed === false) {
+          debugWarn("MeshMapper API returned allowed=false, disconnecting");
+          setStatus("WarDriving app has reached capacity or is down", STATUS_COLORS.error);
+          // Disconnect after a brief delay to ensure user sees the message
+          setTimeout(() => {
+            disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
+          }, 1500);
+        }
+      } catch (parseError) {
+        debugWarn(`Failed to parse MeshMapper API response: ${parseError.message}`);
+        // Continue operation if we can't parse the response
+      }
     }
   } catch (error) {
     // Log error but don't fail the ping
@@ -1928,6 +2016,22 @@ async function connect() {
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
       debugLog(`Device info: ${selfInfo?.name || "[No device]"}`);
+      
+      // Validate and store public key
+      if (!selfInfo?.publicKey || selfInfo.publicKey.length !== 32) {
+        debugError("Missing or invalid public key from device", selfInfo?.publicKey);
+        setStatus("Unable to read device public key; try again", STATUS_COLORS.error);
+        // Disconnect after a brief delay to ensure user sees the error message
+        setTimeout(() => {
+          disconnect().catch(err => debugError(`Disconnect after public key error failed: ${err.message}`));
+        }, 1500);
+        return;
+      }
+      
+      // Convert public key to hex and store
+      state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
+      debugLog(`Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
+      
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
       updateAutoButton();
       try { 
@@ -1939,6 +2043,17 @@ async function connect() {
       try {
         await ensureChannel();
         await primeGpsOnce();
+        
+        // Check capacity after GPS is initialized
+        const allowed = await checkCapacity("connect");
+        if (!allowed) {
+          debugWarn("Capacity check denied, disconnecting");
+          setStatus("WarDriving app has reached capacity or is down", STATUS_COLORS.error);
+          // Disconnect after a brief delay to ensure user sees the message
+          setTimeout(() => {
+            disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
+          }, 1500);
+        }
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
         setStatus(e.message || "Channel setup failed", STATUS_COLORS.error);
@@ -1952,6 +2067,7 @@ async function connect() {
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
+      state.devicePublicKey = null; // Clear public key
       stopAutoPing(true); // Ignore cooldown check on disconnect
       enableControls(false);
       updateAutoButton();
@@ -1986,6 +2102,17 @@ async function disconnect() {
 
   connectBtn.disabled = true;
   setStatus("Disconnecting", STATUS_COLORS.info);
+
+  // Release capacity slot if we have a public key
+  if (state.devicePublicKey) {
+    try {
+      debugLog("Releasing capacity slot");
+      await checkCapacity("disconnect");
+    } catch (e) {
+      debugWarn(`Failed to release capacity slot: ${e.message}`);
+      // Don't fail disconnect if capacity release fails
+    }
+  }
 
   // Delete the wardriving channel before disconnecting
   try {

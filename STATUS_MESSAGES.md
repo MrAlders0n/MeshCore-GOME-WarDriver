@@ -79,7 +79,44 @@ Status messages follow these consistent conventions:
 
 ---
 
-### 2. Ping Operation Messages
+### 2. Capacity Check Messages
+
+#### Acquiring wardriving slot
+- **Message**: `"Acquiring wardriving slot"`
+- **Color**: Sky blue (info)
+- **Used in**: `checkCapacity()`
+- **Source**: `content/wardrive.js:1026`
+- **Context**: When connecting to device and checking if a wardriving slot is available
+- **Minimum Visibility**: 500ms minimum enforced (or until API response received)
+
+#### WarDriving app has reached capacity or is down
+- **Message**: `"WarDriving app has reached capacity or is down"`
+- **Color**: Red (error)
+- **Used in**: `checkCapacity()`, `postToMeshMapperAPI()`
+- **Source**: `content/wardrive.js:2051`, `content/wardrive.js:1115`
+- **Context**: Capacity check API denies slot on connect, or wardriving API returns allowed=false during active session
+- **Minimum Visibility**: N/A (error state persists until disconnect)
+
+#### Unable to read device public key; try again
+- **Message**: `"Unable to read device public key; try again"`
+- **Color**: Red (error)
+- **Used in**: `connect()`
+- **Source**: `content/wardrive.js:2023`
+- **Context**: Device public key is missing or invalid when trying to acquire capacity slot
+- **Minimum Visibility**: N/A (error state persists until disconnect)
+
+#### Network issue checking slot, proceeding anyway
+- **Message**: `"Network issue checking slot, proceeding anyway"`
+- **Color**: Amber (warning)
+- **Used in**: `checkCapacity()`
+- **Source**: `content/wardrive.js:1051`, `content/wardrive.js:1070`
+- **Context**: Capacity check API is unreachable or returns error during connect (fail-open behavior)
+- **Minimum Visibility**: 1500ms enforced (brief warning before continuing)
+- **Notes**: Implements fail-open policy - allows connection to proceed despite API failure
+
+---
+
+### 3. Ping Operation Messages
 
 #### Sending manual ping
 - **Message**: `"Sending manual ping"`
@@ -140,7 +177,7 @@ Status messages follow these consistent conventions:
 
 ---
 
-### 3. GPS Status Messages
+### 4. GPS Status Messages
 
 #### Waiting for GPS fix
 - **Message**: `"Waiting for GPS fix"`
@@ -160,7 +197,7 @@ Status messages follow these consistent conventions:
 
 ---
 
-### 4. Countdown Timer Messages
+### 5. Countdown Timer Messages
 
 These messages use a hybrid approach: **first display respects 500ms minimum**, then updates occur immediately every second.
 
@@ -216,7 +253,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 ---
 
-### 5. API and Map Update Messages
+### 6. API and Map Update Messages
 
 #### Posting to API
 - **Message**: `"Posting to API"`
@@ -238,7 +275,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 ---
 
-### 6. Auto Mode Messages
+### 7. Auto Mode Messages
 
 #### Auto mode stopped
 - **Message**: `"Auto mode stopped"`
@@ -323,8 +360,9 @@ Result:     "Message A" (visible 500ms) → "Message C"
 
 ## Summary
 
-**Total Status Messages**: 25 unique message patterns
+**Total Status Messages**: 29 unique message patterns
 - **Connection**: 7 messages
+- **Capacity Check**: 4 messages
 - **Ping Operation**: 6 messages (consolidated "Ping sent" for both manual and auto)
 - **GPS**: 2 messages
 - **Countdown Timers**: 6 message patterns (with dynamic countdown values)
