@@ -1107,29 +1107,38 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       body: JSON.stringify(payload)
     });
 
+    debugLog(`MeshMapper API response status: ${response.status}`);
+
+    // Always try to parse the response body to check for slot revocation
+    // regardless of HTTP status code
+    try {
+      const data = await response.json();
+      debugLog(`MeshMapper API response data: ${JSON.stringify(data)}`);
+      
+      // Check if slot has been revoked
+      if (data.allowed === false) {
+        debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
+        setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
+        state.disconnectReason = "slot_revoked"; // Track disconnect reason
+        // Disconnect after a brief delay to ensure user sees the message
+        setTimeout(() => {
+          disconnect().catch(err => debugError(`Disconnect after slot revocation failed: ${err.message}`));
+        }, 1500);
+        return; // Exit early after slot revocation
+      } else if (data.allowed === true) {
+        debugLog("MeshMapper API allowed check passed: device still has an active WarDriving slot");
+      } else {
+        debugWarn(`MeshMapper API response missing 'allowed' field: ${JSON.stringify(data)}`);
+      }
+    } catch (parseError) {
+      debugWarn(`Failed to parse MeshMapper API response: ${parseError.message}`);
+      // Continue operation if we can't parse the response
+    }
+
     if (!response.ok) {
       debugWarn(`MeshMapper API returned error status ${response.status}`);
     } else {
       debugLog(`MeshMapper API post successful (status ${response.status})`);
-      
-      // Parse response and check if we're allowed to continue
-      try {
-        const data = await response.json();
-        if (data.allowed === false) {
-          debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
-          setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
-          state.disconnectReason = "slot_revoked"; // Track disconnect reason
-          // Disconnect after a brief delay to ensure user sees the message
-          setTimeout(() => {
-            disconnect().catch(err => debugError(`Disconnect after slot revocation failed: ${err.message}`));
-          }, 1500);
-        } else if (data.allowed === true) {
-          debugLog("MeshMapper API allowed check passed: device still has an active WarDriving slot");
-        }
-      } catch (parseError) {
-        debugWarn(`Failed to parse MeshMapper API response: ${parseError.message}`);
-        // Continue operation if we can't parse the response
-      }
     }
   } catch (error) {
     // Log error but don't fail the ping
