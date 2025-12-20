@@ -41,25 +41,23 @@ Status messages follow these consistent conventions:
 - **Message**: `"Disconnecting"`
 - **Color**: Sky blue (info)
 - **Used in**: `disconnect()`
-- **Source**: `content/wardrive.js:2003`
-- **Context**: When user clicks Disconnect button or automatic disconnect occurs
-- **Minimum Visibility**: 500ms minimum enforced, but typically visible until disconnect completes (1-3 seconds)
-- **Notes**: A 3-second timeout ensures this status is always replaced with a final status (either "Disconnected" or an error message) even if the disconnected event doesn't fire
+- **Source**: `content/wardrive.js:1988`
+- **Context**: When user clicks Disconnect button
+- **Minimum Visibility**: 500ms minimum enforced
 
 #### Disconnected
 - **Message**: `"Disconnected"`
 - **Color**: Red (error)
-- **Used in**: `connect()` (initial state), `conn.on("disconnected")` event handler
-- **Source**: `content/wardrive.js:2046`, `content/wardrive.js:1960`
-- **Context**: Initial state and when BLE device disconnects normally (without errors)
+- **Used in**: `connect()`, `disconnect()`, event handlers
+- **Source**: `content/wardrive.js:1950`, `content/wardrive.js:2046`
+- **Context**: Initial state and when BLE device disconnects
 - **Minimum Visibility**: N/A (persists until connection is established)
-- **Notes**: If a disconnect error occurred, that error message is preserved instead of showing generic "Disconnected"
 
 #### Connection failed
 - **Message**: `"Connection failed"` (or error message)
 - **Color**: Red (error)
 - **Used in**: `connect()`, event handlers
-- **Source**: `content/wardrive.js:1988`, `content/wardrive.js:2092`
+- **Source**: `content/wardrive.js:1976`, `content/wardrive.js:2059`
 - **Context**: BLE connection fails or connection button error
 - **Minimum Visibility**: N/A (error state persists)
 
@@ -67,21 +65,17 @@ Status messages follow these consistent conventions:
 - **Message**: `"Channel setup failed"` (or error message)
 - **Color**: Red (error)
 - **Used in**: `connect()`
-- **Source**: `content/wardrive.js:1945`
+- **Source**: `content/wardrive.js:1944`
 - **Context**: Channel creation or lookup fails during connection
 - **Minimum Visibility**: N/A (error state persists)
 
 #### Disconnect failed
-- **Message**: `"Disconnect failed"` (or specific error message)
+- **Message**: `"Disconnect failed"` (or error message)
 - **Color**: Red (error)
-- **Used in**: `disconnect()` (timeout handler and error cases)
-- **Source**: `content/wardrive.js:2032`, `content/wardrive.js:2085`
-- **Context**: Error during disconnect operation, or when no disconnect method is available
+- **Used in**: `disconnect()`
+- **Source**: `content/wardrive.js:2018`
+- **Context**: Error during disconnect operation
 - **Minimum Visibility**: N/A (error state persists)
-- **Notes**: 
-  - If disconnected event fires after an error, the error status is preserved
-  - If disconnected event doesn't fire within 3 seconds, a timeout forces cleanup and shows the error status
-  - This ensures the status never gets stuck at "Disconnecting" even when disconnect fails
 
 ---
 
