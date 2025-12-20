@@ -123,7 +123,7 @@ const state = {
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
-  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "normal")
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "error", "normal")
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -2062,7 +2062,7 @@ async function connect() {
             disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
           }, 1500);
         } else {
-          // Connection complete - NOW show Connected status
+          // Connection complete, show Connected status
           setStatus("Connected", STATUS_COLORS.success);
           debugLog("Full connection process completed successfully");
         }
@@ -2076,13 +2076,12 @@ async function connect() {
     conn.on("disconnected", () => {
       debugLog("BLE disconnected event fired");
       
-      // Only set "Disconnected" status if this wasn't an error disconnect
-      // If disconnectReason is set, keep the existing error message
-      if (!state.disconnectReason || state.disconnectReason === "normal") {
+      // Only set "Disconnected" status for normal disconnections
+      // Preserve error messages (app_down, capacity_full, error) instead of overwriting
+      if (state.disconnectReason === "normal" || !state.disconnectReason) {
         setStatus("Disconnected", STATUS_COLORS.error);
       } else {
         debugLog(`Preserving disconnect status for reason: ${state.disconnectReason}`);
-        // The error status was already set (e.g., "WarDriving app is down")
       }
       
       setConnectButton(false);
