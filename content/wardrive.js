@@ -2140,40 +2140,40 @@ async function connect() {
       // Set appropriate status message based on disconnect reason
       if (state.disconnectReason === "capacity_full") {
         debugLog("Branch: capacity_full");
-        setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error);
+        setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
         debugLog("Branch: app_down");
-        setStatus("Disconnected: WarDriving app is down", STATUS_COLORS.error);
+        setStatus("Disconnected: WarDriving app is down", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
         debugLog("Branch: slot_revoked");
-        setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
+        setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("Branch: public_key_error");
-        setStatus("Disconnected: Unable to read device public key", STATUS_COLORS.error);
+        setStatus("Disconnected: Unable to read device public key", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for public key error");
       } else if (state.disconnectReason === "channel_setup_error") {
         debugLog("Branch: channel_setup_error");
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
-        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error);
+        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
         debugLog("Setting terminal status for channel setup error");
         state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
-        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error);
+        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
         debugLog("Setting terminal status for BLE disconnect error");
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
         debugLog("Branch: normal/null/undefined");
-        setStatus("Disconnected", STATUS_COLORS.error);
+        setStatus("Disconnected", STATUS_COLORS.error, true);
       } else {
         debugLog(`Branch: else (unknown reason: ${state.disconnectReason})`);
         // For unknown disconnect reasons, show generic disconnected message
         debugLog(`Showing generic disconnected message for unknown reason: ${state.disconnectReason}`);
-        setStatus("Disconnected", STATUS_COLORS.error);
+        setStatus("Disconnected", STATUS_COLORS.error, true);
       }
       
       setConnectButton(false);
