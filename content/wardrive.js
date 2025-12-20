@@ -5,7 +5,7 @@
 // - Manual "Send Ping" and Auto mode (interval selectable: 15/30/60s)
 // - Acquire wake lock during auto mode to keep screen awake
 
-import { WebBleConnection, Constants, Packet } from "./mc/index.js"; // your BLE client
+import { WebBleConnection, Constants, Packet, BufferUtils } from "./mc/index.js"; // your BLE client
 
 // ---- Debug Configuration ----
 // Enable debug logging via URL parameter (?debug=true) or set default here
@@ -75,8 +75,15 @@ const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
+const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
+
+// ---- App Version Configuration ----
+// This constant is injected by GitHub Actions during build/deploy
+// For release builds: Contains the release version (e.g., "v1.3.0")
+// For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
+const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
@@ -121,6 +128,10 @@ const state = {
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
+  devicePublicKey: null, // Hex string of device's public key (used for capacity check)
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "normal")
+  channelSetupErrorMessage: null, // Error message from channel setup failure
+  bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -416,8 +427,19 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  sendPingBtn.disabled = !connected || inCooldown;
-  autoToggleBtn.disabled = !connected || inCooldown;
+  debugLog(`updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
+  sendPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  autoToggleBtn.disabled = !connected || inCooldown || state.pingInProgress;
+}
+
+/**
+ * Helper function to unlock ping controls after ping operation completes
+ * @param {string} reason - Debug reason for unlocking controls
+ */
+function unlockPingControls(reason) {
+  state.pingInProgress = false;
+  updateControlsForCooldown();
+  debugLog(`Ping controls unlocked (pingInProgress=false) ${reason}`);
 }
 
 // Timer cleanup
@@ -451,6 +473,12 @@ function cleanupAllTimers() {
   
   // Clear captured ping coordinates
   state.capturedPingCoords = null;
+  
+  // Clear ping in progress flag
+  state.pingInProgress = false;
+  
+  // Clear device public key
+  state.devicePublicKey = null;
 }
 
 function enableControls(connected) {
@@ -939,13 +967,16 @@ async function ensureChannel() {
     return state.channel;
   }
 
+  setStatus("Looking for #wardriving channel", STATUS_COLORS.info);
   debugLog(`Looking up channel: ${CHANNEL_NAME}`);
   let ch = await state.connection.findChannelByName(CHANNEL_NAME);
   
   if (!ch) {
+    setStatus("Channel #wardriving not found", STATUS_COLORS.info);
     debugLog(`Channel ${CHANNEL_NAME} not found, attempting to create it`);
     try {
       ch = await createWardriveChannel();
+      setStatus("Created #wardriving", STATUS_COLORS.success);
       debugLog(`Channel ${CHANNEL_NAME} created successfully`);
     } catch (e) {
       debugError(`Failed to create channel ${CHANNEL_NAME}: ${e.message}`);
@@ -955,6 +986,7 @@ async function ensureChannel() {
       );
     }
   } else {
+    setStatus("Channel #wardriving found", STATUS_COLORS.success);
     debugLog(`Channel found: ${CHANNEL_NAME} (index: ${ch.channelIdx})`);
   }
 
@@ -1005,6 +1037,74 @@ function getDeviceIdentifier() {
 }
 
 /**
+ * Check capacity / slot availability with MeshMapper API
+ * @param {string} reason - Either "connect" (acquire slot) or "disconnect" (release slot)
+ * @returns {Promise<boolean>} True if allowed to continue, false otherwise
+ */
+async function checkCapacity(reason) {
+  // Validate public key exists
+  if (!state.devicePublicKey) {
+    debugError("checkCapacity called but no public key stored");
+    return reason === "connect" ? false : true; // Fail closed on connect, allow disconnect
+  }
+
+  // Set status for connect requests
+  if (reason === "connect") {
+    setStatus("Acquiring wardriving slot", STATUS_COLORS.info);
+  }
+
+  try {
+    const payload = {
+      key: MESHMAPPER_API_KEY,
+      public_key: state.devicePublicKey,
+      who: getDeviceIdentifier(),
+      reason: reason
+    };
+
+    debugLog(`Checking capacity: reason=${reason}, public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}`);
+
+    const response = await fetch(MESHMAPPER_CAPACITY_CHECK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      debugWarn(`Capacity check API returned error status ${response.status}`);
+      // Fail closed on network errors for connect
+      if (reason === "connect") {
+        debugError("Failing closed (denying connection) due to API error");
+        state.disconnectReason = "app_down"; // Track disconnect reason
+        return false;
+      }
+      return true; // Always allow disconnect to proceed
+    }
+
+    const data = await response.json();
+    debugLog(`Capacity check response: allowed=${data.allowed}`);
+
+    // Handle capacity full vs. allowed cases separately
+    if (data.allowed === false && reason === "connect") {
+      state.disconnectReason = "capacity_full"; // Track disconnect reason
+    }
+    
+    return data.allowed === true;
+
+  } catch (error) {
+    debugError(`Capacity check failed: ${error.message}`);
+    
+    // Fail closed on network errors for connect
+    if (reason === "connect") {
+      debugError("Failing closed (denying connection) due to network error");
+      state.disconnectReason = "app_down"; // Track disconnect reason
+      return false;
+    }
+    
+    return true; // Always allow disconnect to proceed
+  }
+}
+
+/**
  * Post wardrive ping data to MeshMapper API
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
@@ -1019,16 +1119,45 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting() || "N/A",
       heard_repeats: heardRepeats,
+      ver: APP_VERSION,
       test: 0
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
+
+    debugLog(`MeshMapper API response status: ${response.status}`);
+
+    // Always try to parse the response body to check for slot revocation
+    // regardless of HTTP status code
+    try {
+      const data = await response.json();
+      debugLog(`MeshMapper API response data: ${JSON.stringify(data)}`);
+      
+      // Check if slot has been revoked
+      if (data.allowed === false) {
+        debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
+        setStatus("Error: Posting to API (Revoked)", STATUS_COLORS.error);
+        state.disconnectReason = "slot_revoked"; // Track disconnect reason
+        // Disconnect after a brief delay to ensure user sees the error message
+        setTimeout(() => {
+          disconnect().catch(err => debugError(`Disconnect after slot revocation failed: ${err.message}`));
+        }, 1500);
+        return; // Exit early after slot revocation
+      } else if (data.allowed === true) {
+        debugLog("MeshMapper API allowed check passed: device still has an active WarDriving slot");
+      } else {
+        debugWarn(`MeshMapper API response missing 'allowed' field: ${JSON.stringify(data)}`);
+      }
+    } catch (parseError) {
+      debugWarn(`Failed to parse MeshMapper API response: ${parseError.message}`);
+      // Continue operation if we can't parse the response
+    }
 
     if (!response.ok) {
       debugWarn(`MeshMapper API returned error status ${response.status}`);
@@ -1073,6 +1202,9 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
     } else {
       debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
+    
+    // Unlock ping controls now that API post is complete
+    unlockPingControls("after API post completion");
     
     // Update status based on current mode
     if (state.connection) {
@@ -1718,6 +1850,11 @@ async function sendPing(manual = false) {
     // Both validations passed - execute ping operation (Mesh + API)
     debugLog("All validations passed, executing ping operation");
     
+    // Lock ping controls for the entire ping lifecycle (until API post completes)
+    state.pingInProgress = true;
+    updateControlsForCooldown();
+    debugLog("Ping controls locked (pingInProgress=true)");
+    
     const payload = buildPayload(lat, lon);
     debugLog(`Sending ping to channel: "${payload}"`);
 
@@ -1788,6 +1925,9 @@ async function sendPing(manual = false) {
         // This should never happen as coordinates are always captured before ping
         debugError(`CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
         debugError(`Skipping API post to avoid posting incorrect coordinates`);
+        
+        // Unlock ping controls since API post is being skipped
+        unlockPingControls("after skipping API post due to missing coordinates");
       }
       
       // Clear captured coordinates after API post completes (always, regardless of path)
@@ -1803,6 +1943,9 @@ async function sendPing(manual = false) {
   } catch (e) {
     debugError(`Ping operation failed: ${e.message}`, e);
     setStatus(e.message || "Ping failed", STATUS_COLORS.error);
+    
+    // Unlock ping controls on error
+    unlockPingControls("after error");
   }
 }
 
@@ -1923,11 +2066,29 @@ async function connect() {
 
     conn.on("connected", async () => {
       debugLog("BLE connected event fired");
-      setStatus("Connected", STATUS_COLORS.success);
+      // Keep "Connecting" status visible during the full connection process
+      // Don't show "Connected" until everything is complete
       setConnectButton(true);
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
       debugLog(`Device info: ${selfInfo?.name || "[No device]"}`);
+      
+      // Validate and store public key
+      if (!selfInfo?.publicKey || selfInfo.publicKey.length !== 32) {
+        debugError("Missing or invalid public key from device", selfInfo?.publicKey);
+        state.disconnectReason = "public_key_error"; // Mark specific disconnect reason
+        // Disconnect after a brief delay to ensure "Acquiring wardriving slot" status is visible
+        // before the disconnect sequence begins with "Disconnecting"
+        setTimeout(() => {
+          disconnect().catch(err => debugError(`Disconnect after public key error failed: ${err.message}`));
+        }, 1500);
+        return;
+      }
+      
+      // Convert public key to hex and store
+      state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
+      debugLog(`Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
+      
       deviceInfoEl.textContent = selfInfo?.name || "[No device]";
       updateAutoButton();
       try { 
@@ -1937,21 +2098,92 @@ async function connect() {
         debugLog("Device time sync not available or failed");
       }
       try {
+        // Check capacity immediately after time sync, before channel setup and GPS init
+        const allowed = await checkCapacity("connect");
+        if (!allowed) {
+          debugWarn("Capacity check denied, disconnecting");
+          // disconnectReason already set by checkCapacity()
+          // Status message will be set by disconnected event handler based on disconnectReason
+          // Disconnect after a brief delay to ensure "Acquiring wardriving slot" is visible
+          setTimeout(() => {
+            disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
+          }, 1500);
+          return;
+        }
+        
+        // Capacity check passed
+        setStatus("Acquired wardriving slot", STATUS_COLORS.success);
+        debugLog("Wardriving slot acquired successfully");
+        
+        // Proceed with channel setup and GPS initialization
         await ensureChannel();
+        
+        // GPS initialization
+        setStatus("Priming GPS", STATUS_COLORS.info);
+        debugLog("Starting GPS initialization");
         await primeGpsOnce();
+        
+        // Connection complete, show Connected status
+        setStatus("Connected", STATUS_COLORS.success);
+        debugLog("Full connection process completed successfully");
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
-        setStatus(e.message || "Channel setup failed", STATUS_COLORS.error);
+        state.disconnectReason = "channel_setup_error"; // Mark specific disconnect reason
+        state.channelSetupErrorMessage = e.message || "Channel setup failed"; // Store error message
       }
     });
 
     conn.on("disconnected", () => {
       debugLog("BLE disconnected event fired");
-      setStatus("Disconnected", STATUS_COLORS.error);
+      debugLog(`Disconnect reason: ${state.disconnectReason}`);
+      
+      // Set appropriate status message based on disconnect reason
+      if (state.disconnectReason === "capacity_full") {
+        debugLog("Branch: capacity_full");
+        setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for capacity full");
+      } else if (state.disconnectReason === "app_down") {
+        debugLog("Branch: app_down");
+        setStatus("Disconnected: WarDriving app is down", STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for app down");
+      } else if (state.disconnectReason === "slot_revoked") {
+        debugLog("Branch: slot_revoked");
+        setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for slot revocation");
+      } else if (state.disconnectReason === "public_key_error") {
+        debugLog("Branch: public_key_error");
+        setStatus("Disconnected: Unable to read device public key", STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for public key error");
+      } else if (state.disconnectReason === "channel_setup_error") {
+        debugLog("Branch: channel_setup_error");
+        const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
+        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for channel setup error");
+        state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
+      } else if (state.disconnectReason === "ble_disconnect_error") {
+        debugLog("Branch: ble_disconnect_error");
+        const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
+        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for BLE disconnect error");
+        state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
+      } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
+        debugLog("Branch: normal/null/undefined");
+        setStatus("Disconnected", STATUS_COLORS.error, true);
+      } else {
+        debugLog(`Branch: else (unknown reason: ${state.disconnectReason})`);
+        // For unknown disconnect reasons, show generic disconnected message
+        debugLog(`Showing generic disconnected message for unknown reason: ${state.disconnectReason}`);
+        setStatus("Disconnected", STATUS_COLORS.error, true);
+      }
+      
       setConnectButton(false);
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
+      state.devicePublicKey = null; // Clear public key
+      state.disconnectReason = null; // Reset disconnect reason
+      state.channelSetupErrorMessage = null; // Clear error message
+      state.bleDisconnectErrorMessage = null; // Clear error message
       stopAutoPing(true); // Ignore cooldown check on disconnect
       enableControls(false);
       updateAutoButton();
@@ -1985,7 +2217,24 @@ async function disconnect() {
   }
 
   connectBtn.disabled = true;
+  
+  // Set disconnectReason to "normal" if not already set (for user-initiated disconnects)
+  if (state.disconnectReason === null || state.disconnectReason === undefined) {
+    state.disconnectReason = "normal";
+  }
+  
   setStatus("Disconnecting", STATUS_COLORS.info);
+
+  // Release capacity slot if we have a public key
+  if (state.devicePublicKey) {
+    try {
+      debugLog("Releasing capacity slot");
+      await checkCapacity("disconnect");
+    } catch (e) {
+      debugWarn(`Failed to release capacity slot: ${e.message}`);
+      // Don't fail disconnect if capacity release fails
+    }
+  }
 
   // Delete the wardriving channel before disconnecting
   try {
@@ -2015,7 +2264,8 @@ async function disconnect() {
     }
   } catch (e) {
     debugError(`BLE disconnect failed: ${e.message}`, e);
-    setStatus(e.message || "Disconnect failed", STATUS_COLORS.error);
+    state.disconnectReason = "ble_disconnect_error"; // Mark specific disconnect reason
+    state.bleDisconnectErrorMessage = e.message || "Disconnect failed"; // Store error message
   } finally {
     connectBtn.disabled = false;
   }
