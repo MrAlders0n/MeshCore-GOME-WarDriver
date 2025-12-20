@@ -277,9 +277,9 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 #### Idle
 - **Message**: `"Idle"`
 - **Color**: Slate (idle)
-- **Used in**: `postApiAndRefreshMap()`
-- **Source**: `content/wardrive.js:1091`
-- **Context**: Manual mode, after API post completes
+- **Used in**: `connect()`, `postApiAndRefreshMap()`
+- **Source**: `content/wardrive.js:2060`, `content/wardrive.js:1091`
+- **Context**: Initial connection complete after capacity check succeeds, or manual mode after API post completes
 - **Minimum Visibility**: 500ms minimum enforced
 
 ---

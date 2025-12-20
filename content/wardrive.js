@@ -2054,6 +2054,9 @@ async function connect() {
           setTimeout(() => {
             disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
           }, 1500);
+        } else {
+          // Connection complete, set status to Idle
+          setStatus("Idle", STATUS_COLORS.idle);
         }
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
