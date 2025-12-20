@@ -102,6 +102,17 @@ const gpsAccEl = document.getElementById("gpsAcc");
 const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
+
+// NEW: selectors for settings panel and controls
+const settingsPanel = $("settingsPanel");
+const settingsCloseBtn = $("settingsCloseBtn");
+const settingsGearBtn = $("settingsGearBtn");
+const connectHelperText = $("connectHelperText");
+const pingControls = $("pingControls");
+const disconnectBtn = $("disconnectBtn");
+const permBluetooth = $("permBluetooth");
+const permLocation = $("permLocation");
+
 setConnectButton(false);
 
 // NEW: selectors
@@ -135,6 +146,8 @@ const state = {
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "normal")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
+  radioPowerSelected: false,  // Track if user has selected radio power
+  settingsOpen: true,         // Track if settings panel is open
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -519,6 +532,17 @@ function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
 }
 function setConnectButton(connected) {
   if (!connectBtn) return;
+  
+  // Show/hide ping controls based on connection state
+  if (pingControls) {
+    pingControls.classList.toggle("hidden", !connected);
+  }
+  
+  // Show/hide disconnect button based on connection state
+  if (disconnectBtn) {
+    disconnectBtn.classList.toggle("hidden", !connected);
+  }
+  
   if (connected) {
     connectBtn.textContent = "Disconnect";
     connectBtn.classList.remove(
@@ -529,6 +553,10 @@ function setConnectButton(connected) {
       "bg-red-600",
       "hover:bg-red-500"
     );
+    // Hide helper text when connected
+    if (connectHelperText) {
+      connectHelperText.classList.add("hidden");
+    }
   } else {
     connectBtn.textContent = "Connect";
     connectBtn.classList.remove(
@@ -539,8 +567,80 @@ function setConnectButton(connected) {
       "bg-emerald-600",
       "hover:bg-emerald-500"
     );
+    // Update connect button state (may show helper text)
+    updateConnectButtonState();
   }
 }
+
+/**
+ * Update Connect button state based on radio power selection
+ */
+function updateConnectButtonState() {
+  const powerSelected = getCurrentPowerSetting() !== "";
+  state.radioPowerSelected = powerSelected;
+  
+  // Enable/disable Connect button
+  connectBtn.disabled = !powerSelected && !state.connection;
+  
+  // Show/hide helper text
+  if (connectHelperText) {
+    connectHelperText.classList.toggle("hidden", powerSelected || state.connection);
+  }
+  
+  // Show/hide settings close button
+  if (settingsCloseBtn) {
+    settingsCloseBtn.classList.toggle("hidden", !powerSelected);
+  }
+  
+  debugLog(`Connect button state updated: powerSelected=${powerSelected}, disabled=${connectBtn.disabled}`);
+}
+
+/**
+ * Toggle settings panel visibility
+ * @param {boolean} open - Whether to open or close the panel
+ */
+function toggleSettingsPanel(open) {
+  state.settingsOpen = open;
+  
+  if (settingsPanel) {
+    settingsPanel.classList.toggle("hidden", !open);
+  }
+  
+  if (settingsGearBtn) {
+    settingsGearBtn.classList.toggle("hidden", open);
+  }
+  
+  debugLog(`Settings panel toggled: open=${open}`);
+}
+
+/**
+ * Update permission status indicators
+ */
+async function updatePermissionStatus() {
+  // Check Bluetooth permission
+  if (permBluetooth) {
+    const hasBluetooth = "bluetooth" in navigator;
+    permBluetooth.textContent = hasBluetooth ? "✓ Available" : "✗ Unavailable";
+    permBluetooth.classList.toggle("text-emerald-400", hasBluetooth);
+    permBluetooth.classList.toggle("text-red-400", !hasBluetooth);
+  }
+  
+  // Check Location permission
+  if (permLocation) {
+    try {
+      const permission = await navigator.permissions.query({ name: "geolocation" });
+      const granted = permission.state === "granted";
+      const prompt = permission.state === "prompt";
+      permLocation.textContent = granted ? "✓ Granted" : (prompt ? "○ Not requested" : "✗ Denied");
+      permLocation.classList.toggle("text-emerald-400", granted);
+      permLocation.classList.toggle("text-amber-400", prompt);
+      permLocation.classList.toggle("text-red-400", !granted && !prompt);
+    } catch {
+      permLocation.textContent = "? Unknown";
+    }
+  }
+}
+
 
 
 
@@ -2326,6 +2426,31 @@ export async function onLoad() {
       startAutoPing();
     }
   });
+
+  // Radio power selection listener
+  document.querySelectorAll('input[name="power"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      updateConnectButtonState();
+      debugLog(`Radio power changed: ${getCurrentPowerSetting()}`);
+    });
+  });
+
+  // Settings panel toggle listeners
+  if (settingsCloseBtn) {
+    settingsCloseBtn.addEventListener("click", () => {
+      toggleSettingsPanel(false);
+    });
+  }
+
+  if (settingsGearBtn) {
+    settingsGearBtn.addEventListener("click", () => {
+      toggleSettingsPanel(true);
+    });
+  }
+
+  // Initialize states
+  updateConnectButtonState();
+  updatePermissionStatus();
 
   // Prompt location permission early (optional)
   debugLog("Requesting initial location permission");
