@@ -113,8 +113,6 @@ const disconnectBtn = $("disconnectBtn");
 const permBluetooth = $("permBluetooth");
 const permLocation = $("permLocation");
 
-setConnectButton(false);
-
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
@@ -2400,6 +2398,7 @@ export async function onLoad() {
   setStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  setConnectButton(false); // Initialize button state
 
   connectBtn.addEventListener("click", async () => {
     try {
