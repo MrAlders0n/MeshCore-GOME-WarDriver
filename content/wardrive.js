@@ -1118,14 +1118,12 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       // Check if slot has been revoked (critical check, always log to console)
       if (data.allowed === false) {
         console.warn("[SLOT REVOKED] MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
-        debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
         setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
         state.disconnectReason = "slot_revoked"; // Track disconnect reason
         // Disconnect after a brief delay to ensure user sees the message
         setTimeout(() => {
           disconnect().catch(err => {
             console.error("[SLOT REVOKED] Disconnect after slot revocation failed:", err.message);
-            debugError(`Disconnect after slot revocation failed: ${err.message}`);
           });
         }, 1500);
         return; // Exit early after slot revocation
