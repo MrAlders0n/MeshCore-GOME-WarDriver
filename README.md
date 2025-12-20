@@ -1,6 +1,6 @@
 # MeshCore GOME WarDriver
 
-[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.4.0)
+[![Version](https://img.shields.io/badge/version-1.4.1-blue.svg)](https://github.com/MrAlders0n/MeshCore-GOME-WarDriver/releases/tag/v1.4.1)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Android%20%7C%20iOS-orange.svg)](#platform-support)
 
