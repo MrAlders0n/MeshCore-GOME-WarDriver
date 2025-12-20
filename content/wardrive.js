@@ -2105,24 +2105,30 @@ async function connect() {
 
     conn.on("disconnected", () => {
       debugLog("BLE disconnected event fired");
+      debugLog(`Disconnect reason: ${state.disconnectReason}`);
       
       // Set appropriate status message based on disconnect reason
       if (state.disconnectReason === "capacity_full") {
+        debugLog("Branch: capacity_full");
         setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error);
         debugLog("Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
+        debugLog("Branch: app_down");
         setStatus("Disconnected: WarDriving app is down", STATUS_COLORS.error);
         debugLog("Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
+        debugLog("Branch: slot_revoked");
         // For slot revocation, set the terminal status message
         setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
         debugLog("Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
+        debugLog("Branch: normal/null/undefined");
         setStatus("Disconnected", STATUS_COLORS.error);
       } else {
-        // For "error" or any other disconnect reason, preserve the current status or show generic disconnected
-        debugLog(`Preserving disconnect status for reason: ${state.disconnectReason}`);
-        setStatus("Disconnected", STATUS_COLORS.error);
+        debugLog(`Branch: else (unknown reason: ${state.disconnectReason})`);
+        // For "error" disconnect reason, preserve the existing error status message
+        // Do NOT call setStatus here to avoid overwriting the error message
+        debugLog(`Preserving existing status for disconnect reason: ${state.disconnectReason}`);
       }
       
       setConnectButton(false);
