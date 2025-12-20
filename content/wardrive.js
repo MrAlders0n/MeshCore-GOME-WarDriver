@@ -436,10 +436,8 @@ function cleanupAllTimers() {
     state.cooldownUpdateTimer = null;
   }
   
-  if (state.disconnectTimeout) {
-    clearTimeout(state.disconnectTimeout);
-    state.disconnectTimeout = null;
-  }
+  // Note: state.disconnectTimeout is cleaned up by performDisconnectCleanup()
+  // to ensure proper coordination between disconnect event and timeout
   
   // Clean up status message timer
   if (statusMessageState.pendingTimer) {
@@ -1920,6 +1918,8 @@ function performDisconnectCleanup(preserveErrorStatus = false) {
   debugLog("Performing disconnect cleanup");
   
   // Clear disconnect timeout if it exists
+  // Note: When called from timeout handler, timeout has already fired and been cleared
+  // When called from disconnected event, timeout needs to be cleared to prevent firing
   if (state.disconnectTimeout) {
     clearTimeout(state.disconnectTimeout);
     state.disconnectTimeout = null;
