@@ -25,39 +25,41 @@ Status messages follow these consistent conventions:
 - **Message**: `"Connecting"`
 - **Color**: Sky blue (info)
 - **Used in**: `connect()`
-- **Source**: `content/wardrive.js:1916`
-- **Context**: When user clicks Connect button
-- **Minimum Visibility**: Natural async timing during BLE pairing (typically 2-5 seconds)
+- **Source**: `content/wardrive.js:2005`
+- **Context**: When user clicks Connect button; remains visible during entire connection process (BLE pairing, channel setup, and capacity check)
+- **Minimum Visibility**: Natural async timing during full connection process (typically 3-8 seconds including capacity check)
 
 #### Connected
 - **Message**: `"Connected"`
 - **Color**: Green (success)
 - **Used in**: `connect()`
-- **Source**: `content/wardrive.js:1926`
-- **Context**: After BLE device successfully pairs
-- **Minimum Visibility**: 500ms minimum enforced
+- **Source**: `content/wardrive.js:2060`
+- **Context**: After full connection process completes successfully (BLE paired, channel setup, and capacity check passed)
+- **Minimum Visibility**: Persists until user interacts with app buttons (send ping, start auto mode)
+- **Note**: This message now only appears after the complete connection handshake, not just after BLE pairing
 
 #### Disconnecting
 - **Message**: `"Disconnecting"`
 - **Color**: Sky blue (info)
 - **Used in**: `disconnect()`
-- **Source**: `content/wardrive.js:1988`
-- **Context**: When user clicks Disconnect button
+- **Source**: `content/wardrive.js:2118`
+- **Context**: When user clicks Disconnect button or when automatic disconnect is triggered
 - **Minimum Visibility**: 500ms minimum enforced
 
 #### Disconnected
 - **Message**: `"Disconnected"`
 - **Color**: Red (error)
 - **Used in**: `connect()`, `disconnect()`, event handlers
-- **Source**: `content/wardrive.js:1950`, `content/wardrive.js:2046`
-- **Context**: Initial state and when BLE device disconnects
+- **Source**: `content/wardrive.js:2073`, `content/wardrive.js:2177`
+- **Context**: Initial state and when BLE device disconnects normally (user-initiated or device-initiated)
 - **Minimum Visibility**: N/A (persists until connection is established)
+- **Note**: Only shown for normal disconnections; error disconnections (e.g., app down, capacity full) preserve their specific error message
 
 #### Connection failed
 - **Message**: `"Connection failed"` (or error message)
 - **Color**: Red (error)
 - **Used in**: `connect()`, event handlers
-- **Source**: `content/wardrive.js:1976`, `content/wardrive.js:2059`
+- **Source**: `content/wardrive.js:2096`, `content/wardrive.js:2190`
 - **Context**: BLE connection fails or connection button error
 - **Minimum Visibility**: N/A (error state persists)
 
@@ -65,7 +67,7 @@ Status messages follow these consistent conventions:
 - **Message**: `"Channel setup failed"` (or error message)
 - **Color**: Red (error)
 - **Used in**: `connect()`
-- **Source**: `content/wardrive.js:1944`
+- **Source**: `content/wardrive.js:2063`
 - **Context**: Channel creation or lookup fails during connection
 - **Minimum Visibility**: N/A (error state persists)
 
@@ -73,7 +75,7 @@ Status messages follow these consistent conventions:
 - **Message**: `"Disconnect failed"` (or error message)
 - **Color**: Red (error)
 - **Used in**: `disconnect()`
-- **Source**: `content/wardrive.js:2018`
+- **Source**: `content/wardrive.js:2149`
 - **Context**: Error during disconnect operation
 - **Minimum Visibility**: N/A (error state persists)
 
@@ -95,8 +97,8 @@ Status messages follow these consistent conventions:
 - **Used in**: `checkCapacity()`, `postToMeshMapperAPI()`
 - **Source**: `content/wardrive.js:1061`, `content/wardrive.js:1116`
 - **Context**: Capacity check API denies slot on connect (returns allowed=false), or wardriving API returns allowed=false during active session
-- **Minimum Visibility**: N/A (error state persists until disconnect)
-- **Notes**: Displayed when the API successfully responds but indicates capacity is full
+- **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
+- **Notes**: Displayed when the API successfully responds but indicates capacity is full. When this error occurs during connection, the automatic disconnect flow preserves this status message instead of showing "Disconnected"
 
 #### WarDriving app is down
 - **Message**: `"WarDriving app is down"`
@@ -104,8 +106,8 @@ Status messages follow these consistent conventions:
 - **Used in**: `checkCapacity()`
 - **Source**: `content/wardrive.js:1050`, `content/wardrive.js:1072`
 - **Context**: Capacity check API returns error status or network is unreachable during connect
-- **Minimum Visibility**: N/A (error state persists until disconnect)
-- **Notes**: Implements fail-closed policy - connection is denied if API fails or is unreachable
+- **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
+- **Notes**: Implements fail-closed policy - connection is denied if API fails or is unreachable. When this error occurs, the automatic disconnect flow preserves this status message instead of showing "Disconnected"
 
 #### Unable to read device public key; try again
 - **Message**: `"Unable to read device public key; try again"`
@@ -277,10 +279,11 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 #### Idle
 - **Message**: `"Idle"`
 - **Color**: Slate (idle)
-- **Used in**: `connect()`, `postApiAndRefreshMap()`
-- **Source**: `content/wardrive.js:2060`, `content/wardrive.js:1091`
-- **Context**: Initial connection complete after capacity check succeeds, or manual mode after API post completes
+- **Used in**: `postApiAndRefreshMap()`
+- **Source**: `content/wardrive.js:1091`
+- **Context**: Manual mode after API post completes
 - **Minimum Visibility**: 500ms minimum enforced
+- **Note**: No longer shown after initial connection; "Connected" status is displayed instead and persists until user action
 
 ---
 
