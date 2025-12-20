@@ -4,6 +4,7 @@
 - [Overview](#overview)
   - [Connection Overview](#connection-overview)
   - [Disconnection Overview](#disconnection-overview)
+- [Pre-Connection Requirements](#pre-connection-requirements)
 - [Connection Workflow](#connection-workflow)
 - [Disconnection Workflow](#disconnection-workflow)
 - [Workflow Diagrams](#workflow-diagrams)
@@ -48,6 +49,26 @@
 - All timers cleared
 - Connection state reset
 - Ready to initiate a new connection
+
+## Pre-Connection Requirements
+
+Before initiating a connection, the user must:
+
+1. **Select Radio Power** — Choose from N/A, 0.3w, 0.6w, or 1.0w
+   - No default is pre-selected
+   - Connect button remains disabled until selection is made
+   - Helper text "Select radio power to connect" is shown below the disabled Connect button
+   - Once selected, the close button (✕) appears on the settings panel
+
+2. **Auto Ping Interval** (Optional) — Defaults to 30s but can be changed to 15s or 60s
+   - Can be configured in the settings panel before or after connection
+
+3. **Settings Panel**
+   - Opens by default on page load
+   - Contains Radio Power selection, Auto Ping Interval, and Permissions status
+   - Can be closed after Radio Power is selected
+   - Gear icon (⚙️) appears in header when settings are closed
+   - Settings can be reopened by clicking the gear icon
 
 ## Connection Workflow
 

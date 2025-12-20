@@ -90,19 +90,34 @@ const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
-const statusEl       = $("status");
-const deviceInfoEl   = $("deviceInfo");
-const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const sendPingBtn    = $("sendPingBtn");
 const autoToggleBtn  = $("autoToggleBtn");
 const lastPingEl     = $("lastPing");
-const gpsInfoEl = document.getElementById("gpsInfo");
-const gpsAccEl = document.getElementById("gpsAcc");
-const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
-setConnectButton(false);
+
+// NEW: selectors for settings panel and controls
+const settingsPanel = $("settingsPanel");
+const settingsCloseBtn = $("settingsCloseBtn");
+const settingsGearBtn = $("settingsGearBtn");
+const connectHelperText = $("connectHelperText");
+const pingControls = $("pingControls");
+const permBluetooth = $("permBluetooth");
+const permLocation = $("permLocation");
+const channelInfo = $("channelInfo"); // Channel status in settings
+
+// NEW: Status bar elements
+const statusIndicator = $("statusIndicator");
+const statusText = $("statusText");
+const statusMessage = $("statusMessage");
+const statusMessageBox = $("statusMessageBox");
+
+// NEW: Map overlay elements
+const mapAccuracy = $("mapAccuracy");
+const mapDistance = $("mapDistance");
+const mapCoordinates = $("mapCoordinates");
+const mapGpsAge = $("mapGpsAge");
 
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
@@ -132,9 +147,12 @@ const state = {
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
+  deviceName: null, // Device name from getSelfInfo()
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "normal")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
+  radioPowerSelected: false,  // Track if user has selected radio power
+  settingsOpen: false,         // Track if settings panel is open (starts closed)
   repeaterTracking: {
     isListening: false,           // Whether we're currently listening for echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -227,8 +245,48 @@ function setStatus(text, color = STATUS_COLORS.idle, immediate = false) {
  * @param {string} color - Status color class
  */
 function applyStatusImmediately(text, color) {
-  statusEl.textContent = text;
-  statusEl.className = `font-semibold ${color}`;
+  // Determine if this is a connection status or a regular status message
+  const isConnectionStatus = text.toLowerCase().includes("connected") || text.toLowerCase().includes("disconnected");
+  
+  if (isConnectionStatus) {
+    // Update main status text (Connected/Disconnected)
+    if (statusText) {
+      // If connected and we have a device name, append it
+      let displayText = text;
+      if (text.toLowerCase().includes("connected") && !text.toLowerCase().includes("disconnected") && state.deviceName) {
+        displayText = `Connected - ${state.deviceName}`;
+      }
+      statusText.textContent = displayText;
+      statusText.className = `text-sm font-medium ${color}`;
+    }
+    
+    // Update status indicator color
+    if (statusIndicator) {
+      if (text.toLowerCase().includes("connected") && !text.toLowerCase().includes("disconnected")) {
+        statusIndicator.style.color = "#10b981"; // green
+      } else {
+        statusIndicator.style.color = "#ef4444"; // red
+      }
+    }
+    
+    // Hide status message box when showing connection status
+    if (statusMessageBox) {
+      statusMessageBox.classList.add("hidden");
+    }
+  } else {
+    // Show regular status messages in the status message box
+    if (statusMessage && statusMessageBox) {
+      statusMessage.textContent = text;
+      statusMessage.className = color; // Apply color directly
+      statusMessageBox.classList.remove("hidden");
+    }
+    
+    // Set indicator to blue for other states
+    if (statusIndicator) {
+      statusIndicator.style.color = "#0ea5e9"; // blue
+    }
+  }
+  
   statusMessageState.lastSetTime = Date.now();
   statusMessageState.currentText = text;
   statusMessageState.currentColor = color;
@@ -480,13 +538,14 @@ function cleanupAllTimers() {
   // Clear ping in progress flag
   state.pingInProgress = false;
   
-  // Clear device public key
+  // Clear device info
   state.devicePublicKey = null;
+  state.deviceName = null;
 }
 
 function enableControls(connected) {
   connectBtn.disabled     = false;
-  channelInfoEl.textContent = CHANNEL_NAME;
+  if (channelInfo) channelInfo.textContent = CHANNEL_NAME;
   updateControlsForCooldown();
 }
 function updateAutoButton() {
@@ -519,7 +578,14 @@ function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
 }
 function setConnectButton(connected) {
   if (!connectBtn) return;
+  
+  // Show/hide ping controls based on connection state
+  if (pingControls) {
+    pingControls.classList.toggle("hidden", !connected);
+  }
+  
   if (connected) {
+    // Change to Disconnect button
     connectBtn.textContent = "Disconnect";
     connectBtn.classList.remove(
       "bg-emerald-600",
@@ -529,7 +595,12 @@ function setConnectButton(connected) {
       "bg-red-600",
       "hover:bg-red-500"
     );
+    // Hide helper text when connected
+    if (connectHelperText) {
+      connectHelperText.classList.add("hidden");
+    }
   } else {
+    // Change to Connect button
     connectBtn.textContent = "Connect";
     connectBtn.classList.remove(
       "bg-red-600",
@@ -539,8 +610,80 @@ function setConnectButton(connected) {
       "bg-emerald-600",
       "hover:bg-emerald-500"
     );
+    // Update connect button state (may show helper text)
+    updateConnectButtonState();
   }
 }
+
+/**
+ * Update Connect button state based on radio power selection
+ */
+function updateConnectButtonState() {
+  const powerSelected = getCurrentPowerSetting() !== "";
+  state.radioPowerSelected = powerSelected;
+  
+  // Enable/disable Connect button (only when not connected)
+  if (!state.connection) {
+    connectBtn.disabled = !powerSelected;
+  }
+  
+  // Show/hide helper text
+  if (connectHelperText) {
+    connectHelperText.classList.toggle("hidden", powerSelected || state.connection);
+  }
+  
+  // Show/hide settings close button
+  if (settingsCloseBtn) {
+    settingsCloseBtn.classList.toggle("hidden", !powerSelected);
+  }
+  
+  debugLog(`Connect button state updated: powerSelected=${powerSelected}, disabled=${connectBtn.disabled}`);
+}
+
+/**
+ * Toggle settings panel visibility
+ * @param {boolean} open - Whether to open or close the panel
+ */
+function toggleSettingsPanel(open) {
+  state.settingsOpen = open;
+  
+  if (settingsPanel) {
+    settingsPanel.classList.toggle("hidden", !open);
+  }
+  
+  // Gear button is always visible, no need to toggle its visibility
+  
+  debugLog(`Settings panel toggled: open=${open}`);
+}
+
+/**
+ * Update permission status indicators
+ */
+async function updatePermissionStatus() {
+  // Check Bluetooth permission
+  if (permBluetooth) {
+    const hasBluetooth = "bluetooth" in navigator;
+    permBluetooth.textContent = hasBluetooth ? "✓ Available" : "✗ Unavailable";
+    permBluetooth.classList.toggle("text-emerald-400", hasBluetooth);
+    permBluetooth.classList.toggle("text-red-400", !hasBluetooth);
+  }
+  
+  // Check Location permission
+  if (permLocation) {
+    try {
+      const permission = await navigator.permissions.query({ name: "geolocation" });
+      const granted = permission.state === "granted";
+      const prompt = permission.state === "prompt";
+      permLocation.textContent = granted ? "✓ Granted" : (prompt ? "○ Not requested" : "✗ Denied");
+      permLocation.classList.toggle("text-emerald-400", granted);
+      permLocation.classList.toggle("text-amber-400", prompt);
+      permLocation.classList.toggle("text-red-400", !granted && !prompt);
+    } catch {
+      permLocation.textContent = "? Unknown";
+    }
+  }
+}
+
 
 
 
@@ -683,14 +826,15 @@ function getDistanceFromLastPing() {
  * Update the distance display in the UI
  */
 function updateDistanceUi() {
-  if (!distanceInfoEl) return;
-  
   const distance = getDistanceFromLastPing();
   
-  if (distance === null) {
-    distanceInfoEl.textContent = "-";
-  } else {
-    distanceInfoEl.textContent = `${Math.round(distance)} m`;
+  // Update map overlay
+  if (mapDistance) {
+    if (distance === null) {
+      mapDistance.textContent = "-";
+    } else {
+      mapDistance.textContent = `${Math.round(distance)}m away`;
+    }
   }
 }
 
@@ -733,29 +877,43 @@ async function getCurrentPosition() {
   });
 }
 function updateGpsUi() {
-  if (!gpsInfoEl || !gpsAccEl) return;
-
   if (!state.lastFix) {
-    // Show different messages based on GPS state
-    if (state.gpsState === "acquiring") {
-      gpsInfoEl.textContent = "Acquiring GPS fix...";
-      gpsAccEl.textContent = "Please wait";
-    } else if (state.gpsState === "error") {
-      gpsInfoEl.textContent = "GPS error - check permissions";
-      gpsAccEl.textContent = "-";
-    } else {
-      gpsInfoEl.textContent = "-";
-      gpsAccEl.textContent = "-";
+    // Update map overlays - no GPS fix
+    if (mapAccuracy) {
+      if (state.gpsState === "acquiring") {
+        mapAccuracy.textContent = "Acquiring...";
+      } else {
+        mapAccuracy.textContent = "±-";
+      }
+    }
+    if (mapCoordinates) {
+      mapCoordinates.textContent = "-";
+    }
+    if (mapGpsAge) {
+      mapGpsAge.textContent = "-";
     }
     return;
   }
 
   const { lat, lon, accM, tsMs } = state.lastFix;
-  const ageSec = Math.max(0, Math.round((Date.now() - tsMs) / 1000));
-
   state.gpsState = "acquired";
-  gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
-  gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "-";
+  
+  // Calculate age of GPS fix in seconds
+  const ageMs = Date.now() - tsMs;
+  const ageSec = Math.floor(ageMs / 1000);
+  
+  // Update map overlays
+  if (mapAccuracy) {
+    mapAccuracy.textContent = accM ? `±${Math.round(accM)}m` : "±-";
+  }
+  
+  if (mapCoordinates) {
+    mapCoordinates.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  }
+  
+  if (mapGpsAge) {
+    mapGpsAge.textContent = `${ageSec}s ago`;
+  }
 }
 
 // Start continuous GPS age display updates
@@ -995,7 +1153,7 @@ async function ensureChannel() {
 
   state.channel = ch;
   enableControls(true);
-  channelInfoEl.textContent = `${CHANNEL_NAME} (CH:${ch.channelIdx})`;
+  if (channelInfo) channelInfo.textContent = `${CHANNEL_NAME} (CH:${ch.channelIdx})`;
   return ch;
 }
 
@@ -1035,8 +1193,8 @@ function buildPayload(lat, lon) {
  * @returns {string} Device name or default identifier
  */
 function getDeviceIdentifier() {
-  const deviceText = deviceInfoEl?.textContent;
-  return (deviceText && deviceText !== "—") ? deviceText : MESHMAPPER_DEFAULT_WHO;
+  // deviceInfoEl is removed, use default identifier
+  return MESHMAPPER_DEFAULT_WHO;
 }
 
 /**
@@ -1740,9 +1898,10 @@ function logPingToUI(payload, lat, lon) {
     li.setAttribute('data-timestamp', isoStr);
     li.setAttribute('data-lat', lat.toFixed(5));
     li.setAttribute('data-lon', lon.toFixed(5));
-    sessionPingsEl.appendChild(li);
-    // Auto-scroll to bottom
-    sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
+    // Prepend to show newest logs at top
+    sessionPingsEl.insertBefore(li, sessionPingsEl.firstChild);
+    // Scroll to top to show newest entry
+    sessionPingsEl.scrollTop = 0;
     return li;
   }
   
@@ -2091,9 +2250,11 @@ async function connect() {
       
       // Convert public key to hex and store
       state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
+      state.deviceName = selfInfo?.name || null; // Store device name
       debugLog(`Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
+      debugLog(`Device name stored: ${state.deviceName}`);
       
-      deviceInfoEl.textContent = selfInfo?.name || "[No device]";
+      // deviceInfoEl.textContent = selfInfo?.name || "[No device]"; // Removed - no longer displayed
       updateAutoButton();
       try { 
         await conn.syncDeviceTime?.(); 
@@ -2181,10 +2342,11 @@ async function connect() {
       }
       
       setConnectButton(false);
-      deviceInfoEl.textContent = "—";
+      if (channelInfo) channelInfo.textContent = "—";
       state.connection = null;
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
+      state.deviceName = null; // Clear device name
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
@@ -2300,6 +2462,7 @@ export async function onLoad() {
   setStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  setConnectButton(false); // Initialize button state
 
   connectBtn.addEventListener("click", async () => {
     try {
@@ -2313,6 +2476,7 @@ export async function onLoad() {
       setStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
+  
   sendPingBtn.addEventListener("click", () => {
     debugLog("Manual ping button clicked");
     sendPing(true).catch(console.error);
@@ -2326,6 +2490,32 @@ export async function onLoad() {
       startAutoPing();
     }
   });
+
+  // Radio power selection listener
+  document.querySelectorAll('input[name="power"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      updateConnectButtonState();
+      debugLog(`Radio power changed: ${getCurrentPowerSetting()}`);
+    });
+  });
+
+  // Settings panel toggle listeners
+  if (settingsCloseBtn) {
+    settingsCloseBtn.addEventListener("click", () => {
+      toggleSettingsPanel(false);
+    });
+  }
+
+  if (settingsGearBtn) {
+    settingsGearBtn.addEventListener("click", () => {
+      // Toggle settings panel (open if closed, close if open)
+      toggleSettingsPanel(!state.settingsOpen);
+    });
+  }
+
+  // Initialize states
+  updateConnectButtonState();
+  updatePermissionStatus();
 
   // Prompt location permission early (optional)
   debugLog("Requesting initial location permission");
