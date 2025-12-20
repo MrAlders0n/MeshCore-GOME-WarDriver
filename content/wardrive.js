@@ -111,6 +111,7 @@ const channelInfo = $("channelInfo"); // Channel status in settings
 const statusIndicator = $("statusIndicator");
 const statusText = $("statusText");
 const statusMessage = $("statusMessage");
+const statusMessageBox = $("statusMessageBox");
 
 // NEW: Map overlay elements
 const mapAccuracy = $("mapAccuracy");
@@ -260,17 +261,16 @@ function applyStatusImmediately(text, color) {
       }
     }
     
-    // Clear status message when showing connection status
-    if (statusMessage) {
-      statusMessage.textContent = "";
-      statusMessage.classList.add("hidden");
+    // Hide status message box when showing connection status
+    if (statusMessageBox) {
+      statusMessageBox.classList.add("hidden");
     }
   } else {
-    // Show regular status messages below the connection status
-    if (statusMessage) {
+    // Show regular status messages in the status message box
+    if (statusMessage && statusMessageBox) {
       statusMessage.textContent = text;
-      statusMessage.className = `text-xs text-center ${color}`;
-      statusMessage.classList.remove("hidden");
+      statusMessage.className = color; // Apply color directly
+      statusMessageBox.classList.remove("hidden");
     }
     
     // Set indicator to blue for other states

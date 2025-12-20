@@ -34,22 +34,33 @@
   <main class="min-h-screen flex items-start justify-center p-4">
     <div class="w-full max-w-xl space-y-4">
 
-      <!-- Status Bar -->
-      <header class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 space-y-2">
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span id="statusIndicator" class="text-2xl">●</span>
-            <span id="statusText" class="text-sm font-medium">Disconnected</span>
-          </div>
-          <button id="settingsGearBtn" class="text-2xl text-slate-400 hover:text-slate-200 p-1" aria-label="Toggle settings">
-            ⚙️
-          </button>
-        </div>
-        <!-- Status Messages -->
-        <div id="statusMessage" class="text-xs text-slate-400 text-center hidden">
-          <!-- Status messages will appear here -->
-        </div>
+      <!-- App Title -->
+      <header class="flex items-center justify-between">
+        <h1 class="flex items-center gap-2 text-xl font-semibold">
+          <img class="h-8 w-8" src="content/wardrive.png" alt="MeshCore" />
+          MeshCore Wardrive
+        </h1>
+        <span id="appVersion" class="text-xs text-slate-400">v1.0</span>
       </header>
+
+      <!-- Status Bar -->
+      <div class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span id="statusIndicator" class="text-xl">●</span>
+          <span id="statusText" class="text-sm font-medium">Disconnected</span>
+        </div>
+        <button id="settingsGearBtn" class="text-2xl text-slate-400 hover:text-slate-200 p-1" aria-label="Toggle settings">
+          ⚙️
+        </button>
+      </div>
+
+      <!-- Status Messages Box -->
+      <section id="statusMessageBox" class="hidden bg-slate-800/80 border border-slate-700 rounded-xl p-3">
+        <div class="text-xs text-slate-400">
+          <span class="font-medium text-slate-300">Status:</span>
+          <span id="statusMessage" class="ml-2"><!-- Status messages will appear here --></span>
+        </div>
+      </section>
 
       <!-- Settings Panel -->
       <section id="settingsPanel" class="hidden bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-4">
