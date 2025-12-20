@@ -2060,10 +2060,7 @@ async function connect() {
         debugLog("Device time sync not available or failed");
       }
       try {
-        await ensureChannel();
-        await primeGpsOnce();
-        
-        // Check capacity after GPS is initialized
+        // Check capacity immediately after time sync, before channel setup and GPS init
         const allowed = await checkCapacity("connect");
         if (!allowed) {
           debugWarn("Capacity check denied, disconnecting");
@@ -2073,11 +2070,16 @@ async function connect() {
           setTimeout(() => {
             disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
           }, 1500);
-        } else {
-          // Connection complete, show Connected status
-          setStatus("Connected", STATUS_COLORS.success);
-          debugLog("Full connection process completed successfully");
+          return;
         }
+        
+        // Capacity check passed, proceed with channel setup and GPS initialization
+        await ensureChannel();
+        await primeGpsOnce();
+        
+        // Connection complete, show Connected status
+        setStatus("Connected", STATUS_COLORS.success);
+        debugLog("Full connection process completed successfully");
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
         setStatus(e.message || "Channel setup failed", STATUS_COLORS.error);

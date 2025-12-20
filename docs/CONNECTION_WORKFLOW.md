@@ -17,8 +17,8 @@
 **What "Connect" Means:**
 - Establishes a Web Bluetooth (BLE) connection to a MeshCore companion device
 - Configures the device for wardriving operations  
-- Creates or finds the `#wardriving` channel for sending GPS pings
 - Acquires an API slot from the MeshMapper backend for capacity management
+- Creates or finds the `#wardriving` channel for sending GPS pings
 - Initializes GPS tracking for location services
 - Enables the app to send wardrive pings to the mesh network
 
@@ -59,9 +59,9 @@
 4. **Protocol Handshake** → Exchanges protocol version
 5. **Device Info** → Retrieves device name, public key, settings
 6. **Time Sync** → Synchronizes device clock
-7. **Channel Setup** → Creates/finds #wardriving channel
-8. **GPS Init** → Starts GPS tracking
-9. **Capacity Check** → Acquires API slot from MeshMapper
+7. **Capacity Check** → Acquires API slot from MeshMapper
+8. **Channel Setup** → Creates/finds #wardriving channel
+9. **GPS Init** → Starts GPS tracking
 10. **Connected** → Enables all controls, ready for wardriving
 
 ### Detailed Connection Steps
@@ -116,25 +116,7 @@ connectBtn.addEventListener("click", async () => {
    - Device updates its clock
    - Optional, errors ignored
 
-7. **Setup Channel**
-   - Searches for existing `#wardriving` channel
-   - If not found, creates new channel:
-     - Finds empty channel slot
-     - Derives channel key: `SHA-256(#wardriving).slice(0, 16)`
-     - Sends setChannel command
-   - Stores channel object in `state.channel`
-   - Updates UI: "#wardriving (CH:X)"
-
-8. **Initialize GPS**
-   - Requests location permission
-   - Gets initial GPS position (30s timeout)
-   - Starts continuous GPS watch
-   - Starts GPS age updater (1s interval)
-   - Starts distance updater (3s interval)
-   - Updates UI with coordinates and accuracy
-   - Refreshes coverage map if accuracy < 100m
-
-9. **Check Capacity**
+7. **Check Capacity**
    - POSTs to MeshMapper API:
      ```json
      {
@@ -146,6 +128,24 @@ connectBtn.addEventListener("click", async () => {
      ```
    - If `allowed: false` → disconnects with error
    - If API error → disconnects (fail-closed)
+
+8. **Setup Channel**
+   - Searches for existing `#wardriving` channel
+   - If not found, creates new channel:
+     - Finds empty channel slot
+     - Derives channel key: `SHA-256(#wardriving).slice(0, 16)`
+     - Sends setChannel command
+   - Stores channel object in `state.channel`
+   - Updates UI: "#wardriving (CH:X)"
+
+9. **Initialize GPS**
+   - Requests location permission
+   - Gets initial GPS position (30s timeout)
+   - Starts continuous GPS watch
+   - Starts GPS age updater (1s interval)
+   - Starts distance updater (3s interval)
+   - Updates UI with coordinates and accuracy
+   - Refreshes coverage map if accuracy < 100m
 
 10. **Connection Complete**
     - Sets status to "Connected" (green)
@@ -271,18 +271,16 @@ sequenceDiagram
     App->>Device: syncDeviceTime()
     Device-->>App: OK
     
-    App->>Device: findChannel("#wardriving")
-    alt Not found
-        App->>Device: createChannel()
-    end
-    
-    App->>GPS: getCurrentPosition()
-    GPS-->>App: Position
-    App->>GPS: watchPosition()
-    
     App->>API: checkCapacity("connect")
     alt Allowed
         API-->>App: {allowed: true}
+        App->>Device: findChannel("#wardriving")
+        alt Not found
+            App->>Device: createChannel()
+        end
+        App->>GPS: getCurrentPosition()
+        GPS-->>App: Position
+        App->>GPS: watchPosition()
         App->>UI: Status "Connected"
     else Denied
         API-->>App: {allowed: false}
@@ -343,16 +341,16 @@ stateDiagram-v2
     BLEConnection --> DeviceInfo: GATT connected
     BLEConnection --> Disconnected: GATT fails
     
-    DeviceInfo --> ChannelSetup: Info valid
+    DeviceInfo --> CapacityCheck: Info valid
     DeviceInfo --> Disconnecting: Invalid key
+    
+    CapacityCheck --> ChannelSetup: Slot acquired
+    CapacityCheck --> Disconnecting: Denied
     
     ChannelSetup --> GPSInit: Channel ready
     ChannelSetup --> Disconnecting: Setup fails
     
-    GPSInit --> CapacityCheck: GPS started
-    
-    CapacityCheck --> Connected: Slot acquired
-    CapacityCheck --> Disconnecting: Denied
+    GPSInit --> Connected: GPS started
     
     Connected --> Disconnecting: User disconnect
     Connected --> Disconnecting: BLE lost
@@ -489,7 +487,7 @@ MeshCore-GOME-WarDriver implements a robust Web Bluetooth wardriving application
 4. **Clear State Machine**: No ambiguous states
 5. **User Transparency**: Status messages at every step
 
-**Connection:** BLE → Device Info → Channel Setup → GPS → Capacity Check → Connected
+**Connection:** BLE → Device Info → Time Sync → Capacity Check → Channel Setup → GPS → Connected
 
 **Disconnection:** Capacity Release → Channel Delete → BLE Close → Full Cleanup → Disconnected
 
