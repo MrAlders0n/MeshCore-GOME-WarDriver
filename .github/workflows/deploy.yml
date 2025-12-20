@@ -48,16 +48,19 @@ jobs:
           mkdir -p _site
           cp -r main-content/* _site/ 2>/dev/null || true
           
-          # Inject version into main branch
+          # Inject version into main branch (visual display and JS constant)
           sed -i 's|MeshCore Wardrive</h1>|MeshCore Wardrive <span class="text-sm text-slate-400">'"${RELEASE_VERSION}"'</span></h1>|' _site/index.html
+          sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "'"${RELEASE_VERSION}"'";|' _site/content/wardrive.js
           
           mkdir -p _site/dev
           cp -r dev-content/* _site/dev/ 2>/dev/null || true
           cp -r dev-content/content _site/dev/ 2>/dev/null || true
           
-          # Inject dev badge with date
+          # Inject dev badge with date (visual display and JS constant with DEV-EPOCH format)
           DEV_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          DEV_EPOCH=$(date -u +%s)
           sed -i 's|MeshCore Wardrive</h1>|MeshCore Wardrive <span class="ml-2 px-2 py-0.5 text-xs font-semibold rounded bg-amber-600/20 text-amber-400 border border-amber-600/40">DEV</span> <span class="text-xs text-slate-500">'"${DEV_DATE}"'</span></h1>|' _site/dev/index.html
+          sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "DEV-'"${DEV_EPOCH}"'";|' _site/dev/content/wardrive.js
           
           find _site -name ". git" -exec rm -rf {} + 2>/dev/null || true
           find _site -name ".github" -exec rm -rf {} + 2>/dev/null || true

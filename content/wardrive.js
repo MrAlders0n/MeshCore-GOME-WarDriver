@@ -79,6 +79,12 @@ const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 
+// ---- App Version Configuration ----
+// This constant is injected by GitHub Actions during build/deploy
+// For release builds: Contains the release version (e.g., "v1.3.0")
+// For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
+const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
+
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
@@ -1096,10 +1102,11 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting() || "N/A",
       heard_repeats: heardRepeats,
+      ver: APP_VERSION,
       test: 0
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
