@@ -2078,7 +2078,7 @@ async function connect() {
       
       // Only set "Disconnected" status for normal disconnections
       // Preserve error messages (app_down, capacity_full, error) instead of overwriting
-      if (state.disconnectReason === "normal" || !state.disconnectReason) {
+      if (state.disconnectReason === "normal" || state.disconnectReason == null) {
         setStatus("Disconnected", STATUS_COLORS.error);
       } else {
         debugLog(`Preserving disconnect status for reason: ${state.disconnectReason}`);
@@ -2125,7 +2125,7 @@ async function disconnect() {
   connectBtn.disabled = true;
   
   // Set disconnectReason to "normal" if not already set (for user-initiated disconnects)
-  if (!state.disconnectReason) {
+  if (state.disconnectReason == null) {
     state.disconnectReason = "normal";
   }
   
