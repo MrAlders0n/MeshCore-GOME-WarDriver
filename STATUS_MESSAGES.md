@@ -94,11 +94,20 @@ Status messages follow these consistent conventions:
 #### Disconnected: WarDriving app has reached capacity
 - **Message**: `"Disconnected: WarDriving app has reached capacity"`
 - **Color**: Red (error)
-- **Used in**: `checkCapacity()`, `postToMeshMapperAPI()`
-- **Source**: `content/wardrive.js:1063`, `content/wardrive.js:1120`
-- **Context**: Capacity check API denies slot on connect (returns allowed=false), or wardriving API returns allowed=false during active session
+- **Used in**: `checkCapacity()`
+- **Source**: `content/wardrive.js:1063`
+- **Context**: Capacity check API denies slot on connect (returns allowed=false)
 - **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
-- **Notes**: Displayed when the API successfully responds but indicates capacity is full. When this error occurs during connection, the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+- **Notes**: Displayed when the API successfully responds but indicates capacity is full at connection time. When this error occurs during connection, the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+
+#### Disconnected: WarDriving slot has been revoked
+- **Message**: `"Disconnected: WarDriving slot has been revoked"`
+- **Color**: Red (error)
+- **Used in**: `postToMeshMapperAPI()`
+- **Source**: `content/wardrive.js:1120`
+- **Context**: WarDriving API returns allowed=false during an active session (every POST to wardriving-api.php)
+- **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
+- **Notes**: Displayed when the API successfully responds but indicates the device's WarDriving slot has been revoked. This check happens on every POST to the API endpoint. When this error occurs, the device is immediately disconnected and the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
 
 #### Disconnected: WarDriving app is down
 - **Message**: `"Disconnected: WarDriving app is down"`
@@ -372,9 +381,9 @@ Result:     "Message A" (visible 500ms) → "Message C"
 
 ## Summary
 
-**Total Status Messages**: 30 unique message patterns
+**Total Status Messages**: 31 unique message patterns
 - **Connection**: 7 messages
-- **Capacity Check**: 4 messages (1 deprecated)
+- **Capacity Check**: 5 messages (1 deprecated, 1 new for slot revocation)
 - **Ping Operation**: 6 messages (consolidated "Ping sent" for both manual and auto)
 - **GPS**: 2 messages
 - **Countdown Timers**: 6 message patterns (with dynamic countdown values)

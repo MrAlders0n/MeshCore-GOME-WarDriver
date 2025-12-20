@@ -1116,13 +1116,15 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       try {
         const data = await response.json();
         if (data.allowed === false) {
-          debugWarn("MeshMapper API returned allowed=false, disconnecting");
-          setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error);
-          state.disconnectReason = "capacity_full"; // Track disconnect reason
+          debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
+          setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error);
+          state.disconnectReason = "slot_revoked"; // Track disconnect reason
           // Disconnect after a brief delay to ensure user sees the message
           setTimeout(() => {
-            disconnect().catch(err => debugError(`Disconnect after capacity denial failed: ${err.message}`));
+            disconnect().catch(err => debugError(`Disconnect after slot revocation failed: ${err.message}`));
           }, 1500);
+        } else if (data.allowed === true) {
+          debugLog("MeshMapper API allowed check passed: device still has an active WarDriving slot");
         }
       } catch (parseError) {
         debugWarn(`Failed to parse MeshMapper API response: ${parseError.message}`);
