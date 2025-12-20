@@ -133,8 +133,14 @@ connectBtn.addEventListener("click", async () => {
        "reason": "connect"
      }
      ```
-   - If `allowed: false` → disconnects with error
-   - If API error → disconnects (fail-closed)
+   - If `allowed: false`:
+     - Sets `state.disconnectReason = "capacity_full"`
+     - Triggers disconnect sequence after 1.5s delay
+     - **Status**: `"Disconnecting"` (blue) → `"Disconnected: WarDriving app has reached capacity"` (red)
+   - If API error:
+     - Sets `state.disconnectReason = "app_down"`
+     - Triggers disconnect sequence after 1.5s delay (fail-closed)
+     - **Status**: `"Disconnecting"` (blue) → `"Disconnected: WarDriving app is down"` (red)
    - On success → **Status**: `"Acquired wardriving slot"` (green)
 
 8. **Setup Channel**

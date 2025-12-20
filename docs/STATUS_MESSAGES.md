@@ -103,11 +103,11 @@ Status messages follow these consistent conventions:
 #### Disconnected: WarDriving app has reached capacity
 - **Message**: `"Disconnected: WarDriving app has reached capacity"`
 - **Color**: Red (error)
-- **Used in**: `checkCapacity()`
-- **Source**: `content/wardrive.js:1069`
+- **Used in**: `connect()` (disconnected event handler)
+- **Source**: `content/wardrive.js` (disconnected event handler)
 - **Context**: Capacity check API denies slot on connect (returns allowed=false)
-- **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
-- **Notes**: Displayed when the API successfully responds but indicates capacity is full at connection time. When this error occurs during connection, the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+- **Minimum Visibility**: N/A (error state persists as terminal status)
+- **Notes**: This is the final status message when capacity check fails during connection. The complete sequence is: "Connecting" → "Acquiring wardriving slot" → "Disconnecting" → "Disconnected: WarDriving app has reached capacity". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
 
 #### Error: Posting to API (Revoked)
 - **Message**: `"Error: Posting to API (Revoked)"`
@@ -130,11 +130,11 @@ Status messages follow these consistent conventions:
 #### Disconnected: WarDriving app is down
 - **Message**: `"Disconnected: WarDriving app is down"`
 - **Color**: Red (error)
-- **Used in**: `checkCapacity()`
-- **Source**: `content/wardrive.js:1057`, `content/wardrive.js:1081`
+- **Used in**: `connect()` (disconnected event handler)
+- **Source**: `content/wardrive.js` (disconnected event handler)
 - **Context**: Capacity check API returns error status or network is unreachable during connect
-- **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
-- **Notes**: Implements fail-closed policy - connection is denied if API fails or is unreachable. When this error occurs, the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+- **Minimum Visibility**: N/A (error state persists as terminal status)
+- **Notes**: Implements fail-closed policy - connection is denied if API fails or is unreachable. The complete sequence is: "Connecting" → "Acquiring wardriving slot" → "Disconnecting" → "Disconnected: WarDriving app is down". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
 
 #### Unable to read device public key; try again
 - **Message**: `"Unable to read device public key; try again"`
