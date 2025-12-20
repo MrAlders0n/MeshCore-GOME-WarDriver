@@ -2049,7 +2049,8 @@ async function connect() {
       if (!selfInfo?.publicKey || selfInfo.publicKey.length !== 32) {
         debugError("Missing or invalid public key from device", selfInfo?.publicKey);
         state.disconnectReason = "public_key_error"; // Mark specific disconnect reason
-        // Disconnect after a brief delay to ensure "Acquiring wardriving slot" is visible
+        // Disconnect after a brief delay to ensure "Acquiring wardriving slot" status is visible
+        // before the disconnect sequence begins with "Disconnecting"
         setTimeout(() => {
           disconnect().catch(err => debugError(`Disconnect after public key error failed: ${err.message}`));
         }, 1500);
@@ -2130,13 +2131,13 @@ async function connect() {
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
         setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error);
         debugLog("Setting terminal status for channel setup error");
-        state.channelSetupErrorMessage = null; // Clear after use
+        state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
         setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error);
         debugLog("Setting terminal status for BLE disconnect error");
-        state.bleDisconnectErrorMessage = null; // Clear after use
+        state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
         debugLog("Branch: normal/null/undefined");
         setStatus("Disconnected", STATUS_COLORS.error);
