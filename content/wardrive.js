@@ -426,10 +426,19 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  const pingInProgress = state.pingInProgress;
-  debugLog(`updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${pingInProgress}`);
-  sendPingBtn.disabled = !connected || inCooldown || pingInProgress;
-  autoToggleBtn.disabled = !connected || inCooldown || pingInProgress;
+  debugLog(`updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
+  sendPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  autoToggleBtn.disabled = !connected || inCooldown || state.pingInProgress;
+}
+
+/**
+ * Helper function to unlock ping controls after ping operation completes
+ * @param {string} reason - Debug reason for unlocking controls
+ */
+function unlockPingControls(reason) {
+  state.pingInProgress = false;
+  updateControlsForCooldown();
+  debugLog(`Ping controls unlocked (pingInProgress=false) ${reason}`);
 }
 
 // Timer cleanup
@@ -1197,9 +1206,7 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
     }
     
     // Unlock ping controls now that API post is complete
-    state.pingInProgress = false;
-    updateControlsForCooldown();
-    debugLog("Ping controls unlocked (pingInProgress=false) after API post completion");
+    unlockPingControls("after API post completion");
     
     // Update status based on current mode
     if (state.connection) {
@@ -1922,9 +1929,7 @@ async function sendPing(manual = false) {
         debugError(`Skipping API post to avoid posting incorrect coordinates`);
         
         // Unlock ping controls since API post is being skipped
-        state.pingInProgress = false;
-        updateControlsForCooldown();
-        debugLog("Ping controls unlocked (pingInProgress=false) after skipping API post due to missing coordinates");
+        unlockPingControls("after skipping API post due to missing coordinates");
       }
       
       // Clear captured coordinates after API post completes (always, regardless of path)
@@ -1942,9 +1947,7 @@ async function sendPing(manual = false) {
     setStatus(e.message || "Ping failed", STATUS_COLORS.error);
     
     // Unlock ping controls on error
-    state.pingInProgress = false;
-    updateControlsForCooldown();
-    debugLog("Ping controls unlocked (pingInProgress=false) after error");
+    unlockPingControls("after error");
   }
 }
 
