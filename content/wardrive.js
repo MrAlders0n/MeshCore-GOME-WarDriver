@@ -145,6 +145,7 @@ const state = {
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
+  deviceName: null, // Device name from getSelfInfo()
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "normal")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
@@ -248,7 +249,12 @@ function applyStatusImmediately(text, color) {
   if (isConnectionStatus) {
     // Update main status text (Connected/Disconnected)
     if (statusText) {
-      statusText.textContent = text;
+      // If connected and we have a device name, append it
+      let displayText = text;
+      if (text.toLowerCase().includes("connected") && !text.toLowerCase().includes("disconnected") && state.deviceName) {
+        displayText = `Connected - ${state.deviceName}`;
+      }
+      statusText.textContent = displayText;
       statusText.className = `text-sm font-medium ${color}`;
     }
     
@@ -530,8 +536,9 @@ function cleanupAllTimers() {
   // Clear ping in progress flag
   state.pingInProgress = false;
   
-  // Clear device public key
+  // Clear device info
   state.devicePublicKey = null;
+  state.deviceName = null;
 }
 
 function enableControls(connected) {
@@ -2223,7 +2230,9 @@ async function connect() {
       
       // Convert public key to hex and store
       state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
+      state.deviceName = selfInfo?.name || null; // Store device name
       debugLog(`Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
+      debugLog(`Device name stored: ${state.deviceName}`);
       
       // deviceInfoEl.textContent = selfInfo?.name || "[No device]"; // Removed - no longer displayed
       updateAutoButton();
@@ -2317,6 +2326,7 @@ async function connect() {
       state.connection = null;
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
+      state.deviceName = null; // Clear device name
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
