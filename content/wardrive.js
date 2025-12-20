@@ -2047,6 +2047,9 @@ async function disconnect() {
       // If we still have a connection reference, the disconnected event didn't fire
       debugLog("Forcing disconnect cleanup via timeout");
       
+      // Clear the timeout reference before calling cleanup (timeout has already fired)
+      state.disconnectTimeout = null;
+      
       // Ensure error status is set if not already present
       if (!state.disconnectErrorStatus) {
         state.disconnectErrorStatus = {
