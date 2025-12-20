@@ -529,6 +529,10 @@ stateDiagram-v2
 ### Auto-Ping Interactions
 - **Manual during auto**: auto pauses, resumes after
 - **7s cooldown**: prevents rapid-fire pings
+- **Control locking**: "Send Ping" and "Start Auto Ping" buttons remain locked for entire ping lifecycle:
+  - Locked when: ping sent → listening for repeats (7s) → finalizing repeats → posting to API (3s + API time)
+  - Unlocked when: API post completes or error occurs
+  - Prevents starting new pings while previous ping is still processing
 - **Page hidden**: auto stops, must restart manually
 - **Cooldown bypass**: only on disconnect
 

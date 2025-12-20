@@ -427,8 +427,19 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  sendPingBtn.disabled = !connected || inCooldown;
-  autoToggleBtn.disabled = !connected || inCooldown;
+  debugLog(`updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
+  sendPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  autoToggleBtn.disabled = !connected || inCooldown || state.pingInProgress;
+}
+
+/**
+ * Helper function to unlock ping controls after ping operation completes
+ * @param {string} reason - Debug reason for unlocking controls
+ */
+function unlockPingControls(reason) {
+  state.pingInProgress = false;
+  updateControlsForCooldown();
+  debugLog(`Ping controls unlocked (pingInProgress=false) ${reason}`);
 }
 
 // Timer cleanup
@@ -462,6 +473,9 @@ function cleanupAllTimers() {
   
   // Clear captured ping coordinates
   state.capturedPingCoords = null;
+  
+  // Clear ping in progress flag
+  state.pingInProgress = false;
   
   // Clear device public key
   state.devicePublicKey = null;
@@ -1189,6 +1203,9 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
       debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
+    // Unlock ping controls now that API post is complete
+    unlockPingControls("after API post completion");
+    
     // Update status based on current mode
     if (state.connection) {
       if (state.running) {
@@ -1833,6 +1850,11 @@ async function sendPing(manual = false) {
     // Both validations passed - execute ping operation (Mesh + API)
     debugLog("All validations passed, executing ping operation");
     
+    // Lock ping controls for the entire ping lifecycle (until API post completes)
+    state.pingInProgress = true;
+    updateControlsForCooldown();
+    debugLog("Ping controls locked (pingInProgress=true)");
+    
     const payload = buildPayload(lat, lon);
     debugLog(`Sending ping to channel: "${payload}"`);
 
@@ -1903,6 +1925,9 @@ async function sendPing(manual = false) {
         // This should never happen as coordinates are always captured before ping
         debugError(`CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
         debugError(`Skipping API post to avoid posting incorrect coordinates`);
+        
+        // Unlock ping controls since API post is being skipped
+        unlockPingControls("after skipping API post due to missing coordinates");
       }
       
       // Clear captured coordinates after API post completes (always, regardless of path)
@@ -1918,6 +1943,9 @@ async function sendPing(manual = false) {
   } catch (e) {
     debugError(`Ping operation failed: ${e.message}`, e);
     setStatus(e.message || "Ping failed", STATUS_COLORS.error);
+    
+    // Unlock ping controls on error
+    unlockPingControls("after error");
   }
 }
 
