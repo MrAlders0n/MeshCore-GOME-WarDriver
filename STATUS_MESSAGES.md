@@ -104,10 +104,10 @@ Status messages follow these consistent conventions:
 - **Message**: `"Disconnected: WarDriving slot has been revoked"`
 - **Color**: Red (error)
 - **Used in**: `postToMeshMapperAPI()`
-- **Source**: `content/wardrive.js:1120`
+- **Source**: `content/wardrive.js:1122`
 - **Context**: WarDriving API returns allowed=false during an active session (every POST to wardriving-api.php)
 - **Minimum Visibility**: N/A (error state persists; message is preserved during automatic disconnect)
-- **Notes**: Displayed when the API successfully responds but indicates the device's WarDriving slot has been revoked. This check happens on every POST to the API endpoint. When this error occurs, the device is immediately disconnected and the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+- **Notes**: Displayed when the API responds with `allowed=false`, indicating the device's WarDriving slot has been revoked. This check happens on every POST to the API endpoint, regardless of HTTP status code. Critical messages are logged to console even without debug mode enabled. When this error occurs, the device is immediately disconnected and the automatic disconnect flow preserves this status message instead of showing "Disconnected". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
 
 #### Disconnected: WarDriving app is down
 - **Message**: `"Disconnected: WarDriving app is down"`
