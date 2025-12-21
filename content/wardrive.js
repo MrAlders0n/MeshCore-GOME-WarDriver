@@ -392,6 +392,21 @@ function resumeAutoCountdown() {
   return false;
 }
 
+/**
+ * Handle manual ping failure during auto mode by resuming the paused countdown
+ * This ensures the UI returns to showing the auto countdown instead of staying stuck on the skip message
+ */
+function handleManualPingFailureDuringAutoMode() {
+  if (state.running) {
+    debugLog("Manual ping blocked during auto mode - resuming auto countdown");
+    const resumed = resumeAutoCountdown();
+    if (!resumed) {
+      debugLog("No paused countdown to resume, scheduling new auto ping");
+      scheduleNextAutoPing();
+    }
+  }
+}
+
 function startRxListeningCountdown(delayMs) {
   debugLog(`Starting RX listening countdown: ${delayMs}ms`);
   state.rxListeningEndTime = Date.now() + delayMs;
@@ -1875,13 +1890,8 @@ async function sendPing(manual = false) {
         scheduleNextAutoPing();
       }
       // For manual ping during auto mode, resume the paused countdown
-      if (manual && state.running) {
-        debugLog("Manual ping failed (no GPS) during auto mode - resuming auto countdown");
-        const resumed = resumeAutoCountdown();
-        if (!resumed) {
-          debugLog("No paused countdown to resume, scheduling new auto ping");
-          scheduleNextAutoPing();
-        }
+      if (manual) {
+        handleManualPingFailureDuringAutoMode();
       }
       return;
     }
@@ -1900,14 +1910,7 @@ async function sendPing(manual = false) {
         // Manual ping: show skip message that persists
         setDynamicStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
         // If auto mode is running, resume the paused countdown
-        if (state.running) {
-          debugLog("Manual ping blocked during auto mode - resuming auto countdown");
-          const resumed = resumeAutoCountdown();
-          if (!resumed) {
-            debugLog("No paused countdown to resume, scheduling new auto ping");
-            scheduleNextAutoPing();
-          }
-        }
+        handleManualPingFailureDuringAutoMode();
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1929,14 +1932,7 @@ async function sendPing(manual = false) {
         // Manual ping: show skip message that persists
         setDynamicStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
         // If auto mode is running, resume the paused countdown
-        if (state.running) {
-          debugLog("Manual ping blocked during auto mode - resuming auto countdown");
-          const resumed = resumeAutoCountdown();
-          if (!resumed) {
-            debugLog("No paused countdown to resume, scheduling new auto ping");
-            scheduleNextAutoPing();
-          }
-        }
+        handleManualPingFailureDuringAutoMode();
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
