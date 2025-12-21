@@ -47,23 +47,22 @@ jobs:
         run: |
           mkdir -p _site
           cp -r main-content/* _site/ 2>/dev/null || true
-          
-          # Inject version into main branch (visual display and JS constant)
-          sed -i 's|MeshCore Wardrive</h1>|MeshCore Wardrive <span class="text-sm text-slate-400">'"${RELEASE_VERSION}"'</span></h1>|' _site/index.html
+
+          # MAIN: inject release version into root site
+          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-sm text-slate-400">'"${RELEASE_VERSION}"'</span>|' _site/index.html
           sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "'"${RELEASE_VERSION}"'";|' _site/content/wardrive.js
-          
+
+          # DEV: copy dev site under /dev
           mkdir -p _site/dev
           cp -r dev-content/* _site/dev/ 2>/dev/null || true
           cp -r dev-content/content _site/dev/ 2>/dev/null || true
-          
-          # Inject DEV version (visual display) and JS constant with DEV-EPOCH format
+
+          # DEV: inject DEV-EPOCH
           DEV_EPOCH=$(date -u +%s)
-          # Replace the visible version in the dedicated span (this is what the UI shows)
           sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-sm text-slate-400">DEV-'"${DEV_EPOCH}"'</span>|' _site/dev/index.html
-          # Inject into JS constant
           sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "DEV-'"${DEV_EPOCH}"'";|' _site/dev/content/wardrive.js
 
-          find _site -name ". git" -exec rm -rf {} + 2>/dev/null || true
+          find _site -name ".git" -exec rm -rf {} + 2>/dev/null || true
           find _site -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
       - name: Upload artifact
