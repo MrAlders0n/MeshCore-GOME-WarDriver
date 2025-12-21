@@ -135,7 +135,7 @@
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-1.5 flex items-center">
         <span id="status" class="text-sm font-medium text-slate-300">—</span>
       </section>
-
+      
       <!-- Map Section with Overlays -->
       <section class="relative bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden">
         <iframe
@@ -144,11 +144,11 @@
           style="width: 100%; height: 400px; border: 0;"
           loading="lazy"
           referrerpolicy="no-referrer"
-          src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=10000">
+          src="https://yow.meshmapper.net/embed. php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=10000">
         </iframe>
         
         <!-- Top Right Overlay - GPS Accuracy & Distance Stacked -->
-        <div class="absolute top-2 right-2 flex flex-col gap-1">
+        <div class="absolute top-2 right-2 flex flex-col gap-1 z-10">
           <!-- GPS Accuracy -->
           <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-300 whitespace-nowrap text-right">
             <span id="gpsAcc">±-</span>
@@ -160,7 +160,7 @@
         </div>
         
         <!-- Bottom Overlay - GPS Coordinates Full Width -->
-        <div class="absolute bottom-2 left-2 right-2">
+        <div class="absolute bottom-2 left-2 right-2 z-10">
           <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 text-center">
             <span id="gpsInfo">-</span>
           </div>
