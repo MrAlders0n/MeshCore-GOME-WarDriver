@@ -753,7 +753,7 @@ function updateDistanceUi() {
   if (distance === null) {
     distanceInfoEl.textContent = "-";
   } else {
-    distanceInfoEl.textContent = `${Math.round(distance)} m away`;
+    distanceInfoEl.textContent = `${Math.round(distance)}m away`;
   }
 }
 
@@ -819,7 +819,7 @@ function updateGpsUi() {
 
   state.gpsState = "acquired";
   gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)} (${ageSec}s ago)`;
-  gpsAccEl.textContent = accM ? `±${Math.round(accM)} m` : "-";
+  gpsAccEl.textContent = accM ? `±${Math.round(accM)}m` : "-";
 }
 
 // Start continuous GPS age display updates
