@@ -88,6 +88,16 @@ const WARDIVE_IATA_CODE = "YOW";
 // For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
 const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
+// ---- UI helpers ----
+// Status colors for different states
+const STATUS_COLORS = {
+  idle: "text-slate-300",
+  success: "text-emerald-300",
+  warning: "text-amber-300",
+  error: "text-red-300",
+  info: "text-sky-300"
+};
+
 // ---- DOM refs (from index.html; unchanged except the two new selectors) ----
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
@@ -145,16 +155,6 @@ const state = {
     listenTimeout: null,          // Timeout handle for 7-second window
     rxLogHandler: null,           // Handler function for rx_log events
   }
-};
-
-// ---- UI helpers ----
-// Status colors for different states
-const STATUS_COLORS = {
-  idle: "text-slate-300",
-  success: "text-emerald-300",
-  warning: "text-amber-300",
-  error: "text-red-300",
-  info: "text-sky-300"
 };
 
 // Status message management with minimum visibility duration
