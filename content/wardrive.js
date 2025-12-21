@@ -804,7 +804,8 @@ function updateGpsUi() {
       gpsInfoEl.textContent = "Acquiring GPS fix...";
       gpsAccEl.textContent = "Please wait";
     } else if (state.gpsState === "error") {
-      gpsInfoEl.textContent = "GPS error - check permissions";
+      // GPS errors are now shown in Dynamic Status Bar, not in GPS block
+      gpsInfoEl.textContent = "-";
       gpsAccEl.textContent = "-";
     } else {
       gpsInfoEl.textContent = "-";
@@ -868,6 +869,8 @@ function startGeoWatch() {
     (err) => {
       debugError(`GPS watch error: ${err.code} - ${err.message}`);
       state.gpsState = "error";
+      // Display GPS error in Dynamic Status Bar
+      setDynamicStatus("GPS error - check permissions", STATUS_COLORS.error);
       // Keep UI honest if it fails
       updateGpsUi();
     },
@@ -925,6 +928,8 @@ async function primeGpsOnce() {
   } catch (e) {
     debugError(`primeGpsOnce failed: ${e.message}`);
     state.gpsState = "error";
+    // Display GPS error in Dynamic Status Bar
+    setDynamicStatus("GPS error - check permissions", STATUS_COLORS.error);
     updateGpsUi();
   }
 }
@@ -2130,6 +2135,7 @@ async function connect() {
 
   try {
     debugLog("Opening BLE connection...");
+    setDynamicStatus("BLE Connection Started", STATUS_COLORS.info); // Show BLE connection start
     const conn = await WebBleConnection.open();
     state.connection = conn;
     debugLog("BLE connection object created");
@@ -2381,7 +2387,7 @@ function updateConnectButtonState() {
     // Update dynamic status based on power selection
     if (!radioPowerSelected) {
       debugLog("Radio power not selected - showing message in status bar");
-      setDynamicStatus("Select radio power to connect", STATUS_COLORS.idle);
+      setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
     } else {
       debugLog("Radio power selected - clearing message from status bar");
       setDynamicStatus("Idle");

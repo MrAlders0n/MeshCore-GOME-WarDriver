@@ -43,7 +43,7 @@
       </header>
 
       <!-- Connection Status Bar -->
-      <div class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 flex items-center justify-between">
+      <div class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 flex items-center justify-between min-h-[42px]">
         <div class="flex items-center gap-4 text-sm">
           <div class="flex items-center gap-2">
             <span id="statusIndicator" class="text-lg">●</span>
@@ -60,7 +60,7 @@
       </div>
 
       <!-- Status Message Box (Dynamic App Status) -->
-      <section class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2">
+      <section class="bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-2 min-h-[42px] flex items-center">
         <span id="status" class="text-sm font-medium text-slate-300">—</span>
       </section>
 
@@ -68,7 +68,7 @@
       <section id="settingsPanel" class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-4">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-medium text-slate-300 uppercase tracking-wide">Settings</h2>
-          <button id="settingsCloseBtn" class="hidden text-slate-400 hover:text-slate-200 text-xl leading-none" aria-label="Close settings">
+          <button id="settingsCloseBtn" class="text-slate-400 hover:text-slate-200 text-xl leading-none" aria-label="Close settings">
             ✕
           </button>
         </div>

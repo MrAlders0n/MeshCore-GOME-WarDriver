@@ -92,6 +92,12 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 
 #### 1. Capacity Check Messages
 
+##### BLE Connection Started
+- **Message**: `"BLE Connection Started"`
+- **Color**: Sky blue (info)
+- **When**: At the beginning of the BLE connection process, before device selection dialog appears
+- **Source**: `content/wardrive.js:connect()`
+
 ##### Acquiring wardriving slot
 - **Message**: `"Acquiring wardriving slot"`
 - **Color**: Sky blue (info)
@@ -176,6 +182,14 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **Color**: Sky blue (info)
 - **When**: Starting GPS initialization during connection setup (after channel setup)
 - **Source**: `content/wardrive.js:connect()`
+
+##### GPS error - check permissions
+- **Message**: `"GPS error - check permissions"`
+- **Color**: Red (error)
+- **When**: GPS geolocation watch encounters an error or GPS permission is denied
+- **Terminal State**: Depends on context (persists until GPS is re-enabled or permissions granted)
+- **Notes**: This error is displayed in the Dynamic Status Bar. The GPS section in the map overlay remains empty (shows "-") until valid coordinates are available. This ensures GPS errors are not shown in the GPS block itself.
+- **Source**: `content/wardrive.js:startGeoWatch()`, `primeGpsOnce()`
 
 ##### Waiting for GPS fix
 - **Message**: `"Waiting for GPS fix"`
@@ -326,10 +340,10 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 ##### Select radio power to connect
 - **Message**: `"Select radio power to connect"`
-- **Color**: Slate (idle)
+- **Color**: Amber (warning)
 - **When**: On app load or when disconnected, if no radio power option is selected
 - **Terminal State**: Yes (persists until radio power is selected)
-- **Notes**: Displayed in Dynamic Status Bar as an informational message (not an error) to guide user that Connect button is disabled. Once radio power is selected, status changes to "Idle" (em dash) and Connect button becomes enabled.
+- **Notes**: Displayed in Dynamic Status Bar as a warning message to guide user that Connect button is disabled. Once radio power is selected, status changes to "Idle" (em dash) and Connect button becomes enabled.
 - **Source**: `content/wardrive.js:updateConnectButtonState()`
 
 ##### Connection failed
