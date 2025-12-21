@@ -753,7 +753,7 @@ function updateDistanceUi() {
   if (distance === null) {
     distanceInfoEl.textContent = "-";
   } else {
-    distanceInfoEl.textContent = `${Math.round(distance)} m`;
+    distanceInfoEl.textContent = `${Math.round(distance)} m away`;
   }
 }
 
