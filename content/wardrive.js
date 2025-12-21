@@ -1296,7 +1296,7 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
         }
       } else {
         debugLog("Setting dynamic status to em dash");
-        setDynamicStatus("—");
+        setDynamicStatus("Idle");
       }
     }
   }, MAP_REFRESH_DELAY_MS);
@@ -2135,7 +2135,7 @@ async function connect() {
   
   // Set connection bar to "Connecting" - will remain until GPS init completes
   setConnStatus("Connecting", STATUS_COLORS.info);
-  setDynamicStatus("—"); // Clear dynamic status
+  setDynamicStatus("Idle"); // Clear dynamic status
 
   try {
     debugLog("Opening BLE connection...");
@@ -2204,7 +2204,7 @@ async function connect() {
         
         // Connection complete, show Connected status in connection bar
         setConnStatus("Connected", STATUS_COLORS.success);
-        setDynamicStatus("—"); // Clear dynamic status to em dash
+        setDynamicStatus("Idle"); // Clear dynamic status to em dash
         debugLog("Full connection process completed successfully");
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
@@ -2251,12 +2251,12 @@ async function connect() {
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
         debugLog("Branch: normal/null/undefined");
-        setDynamicStatus("—"); // Show em dash for normal disconnect
+        setDynamicStatus("Idle"); // Show em dash for normal disconnect
       } else {
         debugLog(`Branch: else (unknown reason: ${state.disconnectReason})`);
         // For unknown disconnect reasons, show em dash
         debugLog(`Showing em dash for unknown reason: ${state.disconnectReason}`);
-        setDynamicStatus("—");
+        setDynamicStatus("Idle");
       }
       
       setConnectButton(false);
@@ -2309,7 +2309,7 @@ async function disconnect() {
   
   // Set connection bar to "Disconnecting" - will remain until cleanup completes
   setConnStatus("Disconnecting", STATUS_COLORS.info);
-  setDynamicStatus("—"); // Clear dynamic status
+  setDynamicStatus("Idle"); // Clear dynamic status
 
   // Release capacity slot if we have a public key
   if (state.devicePublicKey) {
@@ -2380,7 +2380,7 @@ document.addEventListener("visibilitychange", async () => {
 export async function onLoad() {
   debugLog("wardrive.js onLoad() called - initializing");
   setConnStatus("Disconnected", STATUS_COLORS.error);
-  setDynamicStatus("—");
+  setDynamicStatus("Idle");
   enableControls(false);
   updateAutoButton();
 
