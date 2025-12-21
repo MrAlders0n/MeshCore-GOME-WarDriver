@@ -103,7 +103,7 @@ const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
-setConnectionStatus(false);
+setConnStatus("Disconnected", STATUS_COLORS.error);
 
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
@@ -245,9 +245,9 @@ function applyStatusImmediately(text, color) {
 function applyCountdownStatus(result, defaultColor, immediate = true) {
   if (!result) return;
   if (typeof result === 'string') {
-    setStatus(result, defaultColor, immediate);
+    setDynamicStatus(result, defaultColor, immediate);
   } else {
-    setStatus(result.message, result.color || defaultColor, immediate);
+    setDynamicStatus(result.message, result.color || defaultColor, immediate);
   }
 }
 
@@ -556,20 +556,62 @@ function setConnectButton(connected) {
   }
 }
 
-// Update connection status bar (separate from dynamic app status)
-function setConnectionStatus(connected) {
+/**
+ * Set connection status bar message
+ * Updates the #connectionStatus element with one of four fixed states:
+ * - "Connected" - Device ready for wardriving after full connection (green)
+ * - "Connecting" - Connection process in progress (blue)
+ * - "Disconnected" - No device connected (red)
+ * - "Disconnecting" - Disconnection process in progress (blue)
+ * 
+ * @param {string} text - Connection status text (one of the four states above)
+ * @param {string} color - Status color class from STATUS_COLORS
+ */
+function setConnStatus(text, color) {
   const connectionStatusEl = document.getElementById("connectionStatus");
   const statusIndicatorEl = document.getElementById("statusIndicator");
   
-  if (!connectionStatusEl || !statusIndicatorEl) return;
+  if (!connectionStatusEl) return;
   
-  if (connected) {
-    connectionStatusEl.textContent = "Connected";
-    connectionStatusEl.className = "font-medium text-emerald-300";
-  } else {
-    connectionStatusEl.textContent = "Disconnected";
-    connectionStatusEl.className = "font-medium text-red-300";
+  debugLog(`Connection status: "${text}"`);
+  connectionStatusEl.textContent = text;
+  connectionStatusEl.className = `font-medium ${color}`;
+  
+  // Update status indicator dot color to match
+  if (statusIndicatorEl) {
+    statusIndicatorEl.className = `text-lg ${color}`;
   }
+}
+
+/**
+ * Set dynamic status bar message
+ * Updates the #status element with non-connection status messages.
+ * Uses 500ms minimum visibility for first display, immediate for countdown updates.
+ * 
+ * Connection status words (Connected/Connecting/Disconnecting/Disconnected) are blocked
+ * and replaced with em dash (—) placeholder.
+ * 
+ * @param {string} text - Status message text (null/empty shows "—")
+ * @param {string} color - Status color class from STATUS_COLORS
+ * @param {boolean} immediate - If true, bypass minimum visibility (for countdown timers)
+ */
+function setDynamicStatus(text, color = STATUS_COLORS.idle, immediate = false) {
+  // Normalize empty/null/whitespace to em dash
+  if (!text || text.trim() === '') {
+    text = '—';
+    color = STATUS_COLORS.idle;
+  }
+  
+  // Block connection words from dynamic bar
+  const connectionWords = ['Connected', 'Connecting', 'Disconnecting', 'Disconnected'];
+  if (connectionWords.includes(text)) {
+    debugWarn(`Attempted to show connection word "${text}" in dynamic status bar - blocked, showing em dash instead`);
+    text = '—';
+    color = STATUS_COLORS.idle;
+  }
+  
+  // Reuse existing setStatus implementation with minimum visibility
+  setStatus(text, color, immediate);
 }
 
 
@@ -1000,16 +1042,16 @@ async function ensureChannel() {
     return state.channel;
   }
 
-  setStatus("Looking for #wardriving channel", STATUS_COLORS.info);
+  setDynamicStatus("Looking for #wardriving channel", STATUS_COLORS.info);
   debugLog(`Looking up channel: ${CHANNEL_NAME}`);
   let ch = await state.connection.findChannelByName(CHANNEL_NAME);
   
   if (!ch) {
-    setStatus("Channel #wardriving not found", STATUS_COLORS.info);
+    setDynamicStatus("Channel #wardriving not found", STATUS_COLORS.info);
     debugLog(`Channel ${CHANNEL_NAME} not found, attempting to create it`);
     try {
       ch = await createWardriveChannel();
-      setStatus("Created #wardriving", STATUS_COLORS.success);
+      setDynamicStatus("Created #wardriving", STATUS_COLORS.success);
       debugLog(`Channel ${CHANNEL_NAME} created successfully`);
     } catch (e) {
       debugError(`Failed to create channel ${CHANNEL_NAME}: ${e.message}`);
@@ -1019,7 +1061,7 @@ async function ensureChannel() {
       );
     }
   } else {
-    setStatus("Channel #wardriving found", STATUS_COLORS.success);
+    setDynamicStatus("Channel #wardriving found", STATUS_COLORS.success);
     debugLog(`Channel found: ${CHANNEL_NAME} (index: ${ch.channelIdx})`);
   }
 
@@ -1083,7 +1125,7 @@ async function checkCapacity(reason) {
 
   // Set status for connect requests
   if (reason === "connect") {
-    setStatus("Acquiring wardriving slot", STATUS_COLORS.info);
+    setDynamicStatus("Acquiring wardriving slot", STATUS_COLORS.info);
   }
 
   try {
@@ -1176,7 +1218,7 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       // Check if slot has been revoked
       if (data.allowed === false) {
         debugWarn("MeshMapper API returned allowed=false, WarDriving slot has been revoked, disconnecting");
-        setStatus("Error: Posting to API (Revoked)", STATUS_COLORS.error);
+        setDynamicStatus("Error: Posting to API (Revoked)", STATUS_COLORS.error);
         state.disconnectReason = "slot_revoked"; // Track disconnect reason
         // Disconnect after a brief delay to ensure user sees the error message
         setTimeout(() => {
@@ -1215,7 +1257,7 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
 async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
   debugLog(`postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
   
-  setStatus("Posting to API", STATUS_COLORS.info);
+  setDynamicStatus("Posting to API", STATUS_COLORS.info);
   
   // Hidden 3-second delay before API POST (user sees "Posting to API" status during this time)
   await new Promise(resolve => setTimeout(resolve, 3000));
@@ -1253,8 +1295,8 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
           debugLog("Resumed auto countdown after manual ping");
         }
       } else {
-        debugLog("Setting status to idle");
-        setStatus("Idle", STATUS_COLORS.idle);
+        debugLog("Setting dynamic status to em dash");
+        setDynamicStatus("—");
       }
     }
   }, MAP_REFRESH_DELAY_MS);
@@ -1666,7 +1708,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
       debugWarn("Auto ping skipped: no GPS fix available yet");
-      setStatus("Waiting for GPS fix", STATUS_COLORS.warning);
+      setDynamicStatus("Waiting for GPS fix", STATUS_COLORS.warning);
       return null;
     }
     
@@ -1677,7 +1719,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     if (ageMs >= maxAge) {
       debugLog(`GPS data too old for auto ping (${ageMs}ms), attempting to refresh`);
-      setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
+      setDynamicStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
       
       try {
         return await acquireFreshGpsPosition();
@@ -1730,7 +1772,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
     
     // Data exists but is too old
     debugLog(`GPS data too old (${ageMs}ms), requesting fresh position`);
-    setStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
+    setDynamicStatus("GPS data too old, requesting fresh position", STATUS_COLORS.warning);
   }
   
   // Get fresh GPS coordinates for manual ping
@@ -1809,7 +1851,7 @@ async function sendPing(manual = false) {
     if (manual && isInCooldown()) {
       const remainingSec = getRemainingCooldownSeconds();
       debugLog(`Manual ping blocked by cooldown (${remainingSec}s remaining)`);
-      setStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
+      setDynamicStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
       return;
     }
 
@@ -1818,14 +1860,14 @@ async function sendPing(manual = false) {
       // Manual ping during auto mode: pause the auto countdown
       debugLog("Manual ping during auto mode - pausing auto countdown");
       pauseAutoCountdown();
-      setStatus("Sending manual ping", STATUS_COLORS.info);
+      setDynamicStatus("Sending manual ping", STATUS_COLORS.info);
     } else if (!manual && state.running) {
       // Auto ping: stop the countdown timer to avoid status conflicts
       stopAutoCountdown();
-      setStatus("Sending auto ping", STATUS_COLORS.info);
+      setDynamicStatus("Sending auto ping", STATUS_COLORS.info);
     } else if (manual) {
       // Manual ping when auto is not running
-      setStatus("Sending manual ping", STATUS_COLORS.info);
+      setDynamicStatus("Sending manual ping", STATUS_COLORS.info);
     }
 
     // Get GPS coordinates
@@ -1851,7 +1893,7 @@ async function sendPing(manual = false) {
       
       if (manual) {
         // Manual ping: show skip message that persists
-        setStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
+        setDynamicStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1871,7 +1913,7 @@ async function sendPing(manual = false) {
       
       if (manual) {
         // Manual ping: show skip message that persists
-        setStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
+        setDynamicStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1917,7 +1959,7 @@ async function sendPing(manual = false) {
     startCooldown();
 
     // Update status after ping is sent
-    setStatus("Ping sent", STATUS_COLORS.success);
+    setDynamicStatus("Ping sent", STATUS_COLORS.success);
     
     // Create UI log entry with placeholder for repeater data
     const logEntry = logPingToUI(payload, lat, lon);
@@ -1976,7 +2018,7 @@ async function sendPing(manual = false) {
     updateDistanceUi();
   } catch (e) {
     debugError(`Ping operation failed: ${e.message}`, e);
-    setStatus(e.message || "Ping failed", STATUS_COLORS.error);
+    setDynamicStatus(e.message || "Ping failed", STATUS_COLORS.error);
     
     // Unlock ping controls on error
     unlockPingControls("after error");
@@ -1990,7 +2032,7 @@ function stopAutoPing(stopGps = false) {
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setDynamicStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -2050,7 +2092,7 @@ function startAutoPing() {
   if (isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
-    setStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setDynamicStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
@@ -2090,7 +2132,10 @@ async function connect() {
     return;
   }
   connectBtn.disabled = true;
-  setStatus("Connecting", STATUS_COLORS.info);
+  
+  // Set connection bar to "Connecting" - will remain until GPS init completes
+  setConnStatus("Connecting", STATUS_COLORS.info);
+  setDynamicStatus("—"); // Clear dynamic status
 
   try {
     debugLog("Opening BLE connection...");
@@ -2103,7 +2148,6 @@ async function connect() {
       // Keep "Connecting" status visible during the full connection process
       // Don't show "Connected" until everything is complete
       setConnectButton(true);
-      setConnectionStatus(true);
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
       debugLog(`Device info: ${selfInfo?.name || "[No device]"}`);
@@ -2147,19 +2191,20 @@ async function connect() {
         }
         
         // Capacity check passed
-        setStatus("Acquired wardriving slot", STATUS_COLORS.success);
+        setDynamicStatus("Acquired wardriving slot", STATUS_COLORS.success);
         debugLog("Wardriving slot acquired successfully");
         
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
         
         // GPS initialization
-        setStatus("Priming GPS", STATUS_COLORS.info);
+        setDynamicStatus("Priming GPS", STATUS_COLORS.info);
         debugLog("Starting GPS initialization");
         await primeGpsOnce();
         
-        // Connection complete, show Connected status
-        setStatus("Connected", STATUS_COLORS.success);
+        // Connection complete, show Connected status in connection bar
+        setConnStatus("Connected", STATUS_COLORS.success);
+        setDynamicStatus("—"); // Clear dynamic status to em dash
         debugLog("Full connection process completed successfully");
       } catch (e) {
         debugError(`Channel setup failed: ${e.message}`, e);
@@ -2172,47 +2217,49 @@ async function connect() {
       debugLog("BLE disconnected event fired");
       debugLog(`Disconnect reason: ${state.disconnectReason}`);
       
-      // Set appropriate status message based on disconnect reason
+      // Always set connection bar to "Disconnected"
+      setConnStatus("Disconnected", STATUS_COLORS.error);
+      
+      // Set dynamic status based on disconnect reason (WITHOUT "Disconnected:" prefix)
       if (state.disconnectReason === "capacity_full") {
         debugLog("Branch: capacity_full");
-        setStatus("Disconnected: WarDriving app has reached capacity", STATUS_COLORS.error, true);
+        setDynamicStatus("WarDriving app has reached capacity", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
         debugLog("Branch: app_down");
-        setStatus("Disconnected: WarDriving app is down", STATUS_COLORS.error, true);
+        setDynamicStatus("WarDriving app is down", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
         debugLog("Branch: slot_revoked");
-        setStatus("Disconnected: WarDriving slot has been revoked", STATUS_COLORS.error, true);
+        setDynamicStatus("WarDriving slot has been revoked", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("Branch: public_key_error");
-        setStatus("Disconnected: Unable to read device public key", STATUS_COLORS.error, true);
+        setDynamicStatus("Unable to read device public key; try again", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for public key error");
       } else if (state.disconnectReason === "channel_setup_error") {
         debugLog("Branch: channel_setup_error");
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
-        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
+        setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("Setting terminal status for channel setup error");
         state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
-        setStatus(`Disconnected: ${errorMsg}`, STATUS_COLORS.error, true);
+        setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("Setting terminal status for BLE disconnect error");
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "normal" || state.disconnectReason === null || state.disconnectReason === undefined) {
         debugLog("Branch: normal/null/undefined");
-        setStatus("Disconnected", STATUS_COLORS.error, true);
+        setDynamicStatus("—"); // Show em dash for normal disconnect
       } else {
         debugLog(`Branch: else (unknown reason: ${state.disconnectReason})`);
-        // For unknown disconnect reasons, show generic disconnected message
-        debugLog(`Showing generic disconnected message for unknown reason: ${state.disconnectReason}`);
-        setStatus("Disconnected", STATUS_COLORS.error, true);
+        // For unknown disconnect reasons, show em dash
+        debugLog(`Showing em dash for unknown reason: ${state.disconnectReason}`);
+        setDynamicStatus("—");
       }
       
       setConnectButton(false);
-      setConnectionStatus(false);
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
@@ -2241,7 +2288,8 @@ async function connect() {
 
   } catch (e) {
     debugError(`BLE connection failed: ${e.message}`, e);
-    setStatus("Connection failed", STATUS_COLORS.error);
+    setConnStatus("Disconnected", STATUS_COLORS.error);
+    setDynamicStatus("Connection failed", STATUS_COLORS.error);
     connectBtn.disabled = false;
   }
 }
@@ -2259,7 +2307,9 @@ async function disconnect() {
     state.disconnectReason = "normal";
   }
   
-  setStatus("Disconnecting", STATUS_COLORS.info);
+  // Set connection bar to "Disconnecting" - will remain until cleanup completes
+  setConnStatus("Disconnecting", STATUS_COLORS.info);
+  setDynamicStatus("—"); // Clear dynamic status
 
   // Release capacity slot if we have a public key
   if (state.devicePublicKey) {
@@ -2315,7 +2365,7 @@ document.addEventListener("visibilitychange", async () => {
     if (state.running) {
       debugLog("Stopping auto ping due to page hidden");
       stopAutoPing(true); // Ignore cooldown check when page is hidden
-      setStatus("Lost focus, auto mode stopped", STATUS_COLORS.warning);
+      setDynamicStatus("Lost focus, auto mode stopped", STATUS_COLORS.warning);
     } else {
       debugLog("Releasing wake lock due to page hidden");
       releaseWakeLock();
@@ -2329,7 +2379,8 @@ document.addEventListener("visibilitychange", async () => {
 // ---- Bind UI & init ----
 export async function onLoad() {
   debugLog("wardrive.js onLoad() called - initializing");
-  setStatus("Disconnected", STATUS_COLORS.error);
+  setConnStatus("Disconnected", STATUS_COLORS.error);
+  setDynamicStatus("—");
   enableControls(false);
   updateAutoButton();
 
@@ -2342,7 +2393,7 @@ export async function onLoad() {
       }
     } catch (e) {
       debugError(`Connection button error: ${e.message}`, e);
-      setStatus(e.message || "Connection failed", STATUS_COLORS.error);
+      setDynamicStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
   sendPingBtn.addEventListener("click", () => {
@@ -2353,7 +2404,7 @@ export async function onLoad() {
     debugLog("Auto toggle button clicked");
     if (state.running) {
       stopAutoPing();
-      setStatus("Auto mode stopped", STATUS_COLORS.idle);
+      setDynamicStatus("Auto mode stopped", STATUS_COLORS.idle);
     } else {
       startAutoPing();
     }

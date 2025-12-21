@@ -4,398 +4,380 @@ This document provides a comprehensive inventory of all status messages displaye
 
 ## Overview
 
-All status messages enforce a **minimum visibility duration of 500ms** to ensure readability. This applies to non-timed messages. Countdown timers respect this minimum for their first display, but subsequent updates occur immediately.
+The application uses **two independent status bars**:
 
-## Standardization Rules
+1. **Connection Status Bar** (`#connectionStatus`) - Shows connection state ONLY
+2. **Dynamic App Status Bar** (`#status`) - Shows all non-connection operational messages
 
-Status messages follow these consistent conventions:
-- **No trailing punctuation** (no ellipsis or periods for short statuses)
-- **Sentence case** capitalization
-- **Present progressive tense** (-ing) for ongoing actions
-- **Past tense** for completed actions
-- **Concise and readable** phrasing
+All dynamic status messages enforce a **minimum visibility duration of 500ms** to ensure readability. This applies to non-timed messages. Countdown timers respect this minimum for their first display, but subsequent updates occur immediately.
 
 ---
 
-## Status Messages by Category
+## Two-Bar System
 
-### 1. Connection Status Messages
+### Connection Status Bar (`#connectionStatus`)
+- **Purpose**: Display ONLY the connection state of the BLE device
+- **Location**: Top status bar with status indicator dot
+- **Messages**: Exactly **four fixed states** (see below)
+- **Behavior**: Updates immediately (no minimum visibility delay)
+- **Controlled by**: `setConnStatus(text, color)` function
 
-#### Connecting
-- **Message**: `"Connecting"`
-- **Color**: Sky blue (info)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2021`
-- **Context**: When user clicks Connect button; remains visible during entire connection process (BLE pairing, capacity check, and channel setup)
-- **Minimum Visibility**: Natural async timing during full connection process (typically 3-8 seconds including capacity check)
+### Dynamic App Status Bar (`#status`)
+- **Purpose**: Display all operational messages EXCEPT connection state
+- **Location**: Status message box below connection bar
+- **Messages**: All progress, error, countdown, and informational messages
+- **Behavior**: 500ms minimum visibility for first display, immediate for countdown updates
+- **Placeholder**: Shows em dash (`—`) when no message is present
+- **Protection**: Connection words (Connected/Connecting/Disconnecting/Disconnected) are blocked
+- **Controlled by**: `setDynamicStatus(text, color, immediate)` function
 
-#### Connected
+---
+
+## Connection Status Bar Messages
+
+These **four messages** are the ONLY messages that appear in the Connection Status Bar:
+
+### Connected
 - **Message**: `"Connected"`
 - **Color**: Green (success)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2080`
-- **Context**: After full connection process completes successfully (BLE paired, capacity check passed, channel setup, and GPS initialized)
-- **Minimum Visibility**: Persists until user interacts with app buttons (send ping, start auto mode)
-- **Note**: This message now only appears after the complete connection handshake, not just after BLE pairing
+- **When**: Device is fully connected and ready for wardriving after complete workflow:
+  1. User clicks Connect
+  2. BLE GATT connection established
+  3. Protocol handshake complete
+  4. Device info retrieved
+  5. Time sync complete
+  6. Capacity check passed (API slot acquired)
+  7. Channel setup complete (#wardriving found or created)
+  8. GPS initialization complete
+  9. **Then "Connected" is shown**
+- **Source**: `content/wardrive.js` - `connect()` function after GPS init
 
-#### Disconnecting
-- **Message**: `"Disconnecting"`
+### Connecting
+- **Message**: `"Connecting"`
 - **Color**: Sky blue (info)
-- **Used in**: `disconnect()`
-- **Source**: `content/wardrive.js:2118`
-- **Context**: When user clicks Disconnect button or when automatic disconnect is triggered
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: During the ENTIRE connection process from step 1 (user clicks Connect) through step 8 (GPS init in progress)
+- **Duration**: Remains visible until GPS init completes successfully
+- **Source**: `content/wardrive.js` - `connect()` function at start
 
-#### Disconnected
+### Disconnected
 - **Message**: `"Disconnected"`
 - **Color**: Red (error)
-- **Used in**: `connect()`, `disconnect()`, event handlers
-- **Source**: `content/wardrive.js:2073`, `content/wardrive.js:2177`
-- **Context**: Initial state and when BLE device disconnects normally (user-initiated or device-initiated)
-- **Minimum Visibility**: N/A (persists until connection is established)
-- **Note**: Only shown for normal disconnections; error disconnections (e.g., app down, capacity full) preserve their specific error message
+- **When**: 
+  - Initial state when app loads
+  - After disconnect sequence completes
+  - After BLE connection is lost
+- **Source**: `content/wardrive.js` - BLE disconnected event handler
 
-#### Connection failed
-- **Message**: `"Connection failed"` (or error message)
-- **Color**: Red (error)
-- **Used in**: `connect()`, event handlers
-- **Source**: `content/wardrive.js:2096`, `content/wardrive.js:2190`
-- **Context**: BLE connection fails or connection button error
-- **Minimum Visibility**: N/A (error state persists)
-
-#### Channel setup failed
-- **Message**: `"Channel setup failed"` (or error message)
-- **Color**: Red (error)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2063`
-- **Context**: Channel creation or lookup fails during connection
-- **Minimum Visibility**: N/A (error state persists)
-
-#### Disconnect failed
-- **Message**: `"Disconnect failed"` (or error message)
-- **Color**: Red (error)
-- **Used in**: `disconnect()`
-- **Source**: `content/wardrive.js:2149`
-- **Context**: Error during disconnect operation
-- **Minimum Visibility**: N/A (error state persists)
+### Disconnecting
+- **Message**: `"Disconnecting"`
+- **Color**: Sky blue (info)
+- **When**: During the ENTIRE disconnection process:
+  1. User clicks Disconnect (or error triggers disconnect)
+  2. Disconnect function called
+  3. Capacity slot released (API call)
+  4. Channel deleted from device
+  5. BLE GATT disconnected
+  6. Cleanup operations (timers, GPS, wake locks)
+  7. State reset
+  8. **Then "Disconnected" is shown**
+- **Source**: `content/wardrive.js` - `disconnect()` function
 
 ---
 
-### 2. Capacity Check Messages
+## Dynamic App Status Bar Messages
 
-#### Acquiring wardriving slot
+These messages appear in the Dynamic App Status Bar. They NEVER include connection state words.
+
+### Message Categories
+
+#### 1. Capacity Check Messages
+
+##### Acquiring wardriving slot
 - **Message**: `"Acquiring wardriving slot"`
 - **Color**: Sky blue (info)
-- **Used in**: `checkCapacity()`
-- **Source**: `content/wardrive.js:1033`
-- **Context**: When connecting to device, after time sync and before channel setup, checking if a wardriving slot is available
-- **Minimum Visibility**: 500ms minimum enforced (or until API response received)
+- **When**: During connection, after time sync, checking with MeshMapper API for slot availability
+- **Source**: `content/wardrive.js:checkCapacity()`
 
-#### Acquired wardriving slot
+##### Acquired wardriving slot
 - **Message**: `"Acquired wardriving slot"`
 - **Color**: Green (success)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2087`
-- **Context**: Capacity check passed successfully, slot acquired from MeshMapper API
-- **Minimum Visibility**: 500ms minimum enforced
-- **Notes**: This message appears after "Acquiring wardriving slot" when the API confirms slot availability. Fixes spelling from previous "Aquired" typo.
+- **When**: Capacity check passed successfully, slot acquired from MeshMapper API
+- **Source**: `content/wardrive.js:connect()`
 
-#### Disconnected: WarDriving app has reached capacity
-- **Message**: `"Disconnected: WarDriving app has reached capacity"`
+##### WarDriving app has reached capacity
+- **Message**: `"WarDriving app has reached capacity"`
 - **Color**: Red (error)
-- **Used in**: `connect()` (disconnected event handler)
-- **Source**: `content/wardrive.js` (disconnected event handler)
-- **Context**: Capacity check API denies slot on connect (returns allowed=false)
-- **Minimum Visibility**: N/A (error state persists as terminal status)
-- **Notes**: This is the final status message when capacity check fails during connection. The complete sequence is: "Connecting" → "Acquiring wardriving slot" → "Disconnecting" → "Disconnected: WarDriving app has reached capacity". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
+- **When**: Capacity check API denies slot on connect (returns allowed=false)
+- **Terminal State**: Yes (persists until user takes action)
+- **Notes**: Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "WarDriving app has reached capacity" (terminal)
 
-#### Error: Posting to API (Revoked)
+##### WarDriving app is down
+- **Message**: `"WarDriving app is down"`
+- **Color**: Red (error)
+- **When**: Capacity check API returns error status or network is unreachable during connect
+- **Terminal State**: Yes (persists until user takes action)
+- **Notes**: Implements fail-closed policy - connection denied if API fails. Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "WarDriving app is down" (terminal)
+
+##### WarDriving slot has been revoked
+- **Message**: `"WarDriving slot has been revoked"`
+- **Color**: Red (error)
+- **When**: During active session, API returns allowed=false during ping posting
+- **Terminal State**: Yes (persists until user takes action)
+- **Sequence**: 
+  1. "Posting to API" (blue)
+  2. "Error: Posting to API (Revoked)" (red, 1.5s)
+  3. Connection bar: "Disconnecting" → "Disconnected"
+  4. Dynamic bar: "WarDriving slot has been revoked" (terminal)
+
+##### Error: Posting to API (Revoked)
 - **Message**: `"Error: Posting to API (Revoked)"`
 - **Color**: Red (error)
-- **Used in**: `postToMeshMapperAPI()`
-- **Source**: `content/wardrive.js:1128`
-- **Context**: Intermediate status shown when WarDriving API returns allowed=false during an active session
-- **Minimum Visibility**: 1500ms (enforced by setTimeout delay before disconnect)
-- **Notes**: This is the first status message shown when slot revocation is detected during API posting. After the delay, the disconnect sequence begins with "Disconnecting", followed by the terminal status "Disconnected: WarDriving slot has been revoked".
+- **When**: Intermediate status shown when slot revocation detected during API posting
+- **Duration**: 1.5 seconds (visible before disconnect begins)
+- **Notes**: First status in revocation sequence, followed by disconnect flow
 
-#### Disconnected: WarDriving slot has been revoked
-- **Message**: `"Disconnected: WarDriving slot has been revoked"`
-- **Color**: Red (error)
-- **Used in**: `connect()` (disconnected event handler)
-- **Source**: `content/wardrive.js:2123`
-- **Context**: Terminal status shown when WarDriving slot is revoked during an active session
-- **Minimum Visibility**: N/A (error state persists as terminal status)
-- **Notes**: This is the final status message in the slot revocation flow. The complete sequence is: "Posting to API" → "Error: Posting to API (Revoked)" → "Disconnecting" → "Disconnected: WarDriving slot has been revoked". This message is set by the disconnect event handler when state.disconnectReason is "slot_revoked". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
-
-#### Disconnected: WarDriving app is down
-- **Message**: `"Disconnected: WarDriving app is down"`
-- **Color**: Red (error)
-- **Used in**: `connect()` (disconnected event handler)
-- **Source**: `content/wardrive.js` (disconnected event handler)
-- **Context**: Capacity check API returns error status or network is unreachable during connect
-- **Minimum Visibility**: N/A (error state persists as terminal status)
-- **Notes**: Implements fail-closed policy - connection is denied if API fails or is unreachable. The complete sequence is: "Connecting" → "Acquiring wardriving slot" → "Disconnecting" → "Disconnected: WarDriving app is down". Message format standardized with "Disconnected: " prefix to clearly indicate disconnect state.
-
-#### Unable to read device public key; try again
+##### Unable to read device public key; try again
 - **Message**: `"Unable to read device public key; try again"`
 - **Color**: Red (error)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2048`
-- **Context**: Device public key is missing or invalid when trying to acquire capacity slot
-- **Minimum Visibility**: N/A (error state persists until disconnect)
+- **When**: Device public key is missing or invalid during connection
+- **Terminal State**: Yes
+- **Notes**: Triggers automatic disconnect
 
-#### Network issue checking slot, proceeding anyway
-- **Message**: `"Network issue checking slot, proceeding anyway"` (DEPRECATED - no longer used)
-- **Color**: Amber (warning)
-- **Used in**: N/A (removed)
-- **Source**: Previously `content/wardrive.js:1051`, `content/wardrive.js:1070`
-- **Context**: This message is no longer shown. Network issues now result in connection denial (fail-closed)
-- **Notes**: Replaced by fail-closed policy - connection is now denied on network errors
+#### 2. Channel Setup Messages
 
----
-
-### 3. Channel Setup Messages
-
-#### Looking for #wardriving channel
+##### Looking for #wardriving channel
 - **Message**: `"Looking for #wardriving channel"`
 - **Color**: Sky blue (info)
-- **Used in**: `ensureChannel()`
-- **Source**: `content/wardrive.js:954`
-- **Context**: During connection setup, after capacity check, searching for existing #wardriving channel
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: During connection setup, after capacity check, searching for existing channel
+- **Source**: `content/wardrive.js:ensureChannel()`
 
-#### Channel #wardriving found
+##### Channel #wardriving found
 - **Message**: `"Channel #wardriving found"`
 - **Color**: Green (success)
-- **Used in**: `ensureChannel()`
-- **Source**: `content/wardrive.js:971`
-- **Context**: Existing #wardriving channel found on device
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: Existing #wardriving channel found on device
+- **Source**: `content/wardrive.js:ensureChannel()`
 
-#### Channel #wardriving not found
+##### Channel #wardriving not found
 - **Message**: `"Channel #wardriving not found"`
 - **Color**: Sky blue (info)
-- **Used in**: `ensureChannel()`
-- **Source**: `content/wardrive.js:958`
-- **Context**: #wardriving channel does not exist, will attempt to create it
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: Channel does not exist, will attempt to create it
+- **Source**: `content/wardrive.js:ensureChannel()`
 
-#### Created #wardriving
+##### Created #wardriving
 - **Message**: `"Created #wardriving"`
 - **Color**: Green (success)
-- **Used in**: `ensureChannel()`
-- **Source**: `content/wardrive.js:962`
-- **Context**: Successfully created new #wardriving channel on device
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: Successfully created new #wardriving channel on device
+- **Source**: `content/wardrive.js:ensureChannel()`
 
----
+#### 3. GPS Initialization Messages
 
-### 4. GPS Initialization Messages
-
-#### Priming GPS
+##### Priming GPS
 - **Message**: `"Priming GPS"`
 - **Color**: Sky blue (info)
-- **Used in**: `connect()`
-- **Source**: `content/wardrive.js:2101`
-- **Context**: Starting GPS initialization during connection setup
-- **Minimum Visibility**: 500ms minimum enforced (or until GPS initialization completes)
-- **Notes**: This status is shown after channel setup and before the final "Connected" status.
+- **When**: Starting GPS initialization during connection setup (after channel setup)
+- **Source**: `content/wardrive.js:connect()`
 
----
-
-### 5. Ping Operation Messages
-
-#### Sending manual ping
-- **Message**: `"Sending manual ping"`
-- **Color**: Sky blue (info)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1655`, `content/wardrive.js:1662`
-- **Context**: When ping button clicked
-- **Minimum Visibility**: 500ms minimum enforced
-
-#### Sending auto ping
-- **Message**: `"Sending auto ping"`
-- **Color**: Sky blue (info)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1659`
-- **Context**: Auto ping triggers
-- **Minimum Visibility**: 500ms minimum enforced
-
-#### Ping sent
-- **Message**: `"Ping sent"`
-- **Color**: Green (success)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1749`
-- **Context**: After successful ping transmission to mesh device (both manual and auto pings)
-- **Minimum Visibility**: 500ms minimum enforced
-- **Notes**: Consolidated from separate "Ping sent" and "Auto ping sent" messages
-
-#### Ping failed
-- **Message**: `"Ping failed"` (or error message)
-- **Color**: Red (error)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1805`
-- **Context**: Ping operation encounters an error
-- **Minimum Visibility**: N/A (error state persists)
-
-#### Ping skipped, outside of geofenced region
-- **Message**: `"Ping skipped, outside of geofenced region"`
-- **Color**: Amber (warning)
-- **Used in**: `sendPing()`, `autoCountdownTimer`
-- **Source**: `content/wardrive.js:1688`, `content/wardrive.js:297`
-- **Context**: GPS coordinates outside Ottawa 150km radius
-- **Minimum Visibility**: 500ms minimum enforced
-
-#### Ping skipped, too close to last ping
-- **Message**: `"Ping skipped, too close to last ping"`
-- **Color**: Amber (warning)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1708`
-- **Context**: Current location < 25m from last successful ping
-- **Minimum Visibility**: 500ms minimum enforced
-
-#### Wait Xs before sending another ping
-- **Message**: `"Wait Xs before sending another ping"` (X is dynamic countdown)
-- **Color**: Amber (warning)
-- **Used in**: `sendPing()`
-- **Source**: `content/wardrive.js:1646`
-- **Context**: User attempts manual ping during 7-second cooldown
-- **Minimum Visibility**: 500ms minimum enforced
-
----
-
-### 6. GPS Status Messages
-
-#### Waiting for GPS fix
+##### Waiting for GPS fix
 - **Message**: `"Waiting for GPS fix"`
 - **Color**: Amber (warning)
-- **Used in**: `getGpsCoordinatesForPing()`
-- **Source**: `content/wardrive.js:1614`
-- **Context**: Auto ping triggered but no GPS lock acquired yet
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: Auto ping triggered but no GPS lock acquired yet
+- **Source**: `content/wardrive.js:getGpsCoordinatesForPing()`
 
-#### GPS data too old, requesting fresh position
+##### GPS data too old, requesting fresh position
 - **Message**: `"GPS data too old, requesting fresh position"`
 - **Color**: Amber (warning)
-- **Used in**: `getGpsCoordinatesForPing()`
-- **Source**: `content/wardrive.js:1625`, `content/wardrive.js:1678`
-- **Context**: GPS data is stale and needs refresh (used in both auto and manual ping modes)
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: GPS data is stale and needs refresh (auto or manual ping modes)
+- **Source**: `content/wardrive.js:getGpsCoordinatesForPing()`
 
----
+#### 4. Ping Operation Messages
 
-### 7. Countdown Timer Messages
+##### Sending manual ping
+- **Message**: `"Sending manual ping"`
+- **Color**: Sky blue (info)
+- **When**: User clicks "Send Ping" button
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Sending auto ping
+- **Message**: `"Sending auto ping"`
+- **Color**: Sky blue (info)
+- **When**: Auto ping timer triggers
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Ping sent
+- **Message**: `"Ping sent"`
+- **Color**: Green (success)
+- **When**: After successful ping transmission to mesh device
+- **Minimum Visibility**: 500ms enforced
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Ping failed
+- **Message**: `"Ping failed"` or specific error message
+- **Color**: Red (error)
+- **When**: Ping operation encounters an error
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Ping skipped, outside of geofenced region
+- **Message**: `"Ping skipped, outside of geofenced region"`
+- **Color**: Amber (warning)
+- **When**: GPS coordinates outside Ottawa 150km radius
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Ping skipped, too close to last ping
+- **Message**: `"Ping skipped, too close to last ping"`
+- **Color**: Amber (warning)
+- **When**: Current location < 25m from last successful ping
+- **Source**: `content/wardrive.js:sendPing()`
+
+##### Wait Xs before sending another ping
+- **Message**: `"Wait Xs before sending another ping"` (X is dynamic countdown)
+- **Color**: Amber (warning)
+- **When**: User attempts manual ping during 7-second cooldown
+- **Source**: `content/wardrive.js:sendPing()`
+
+#### 5. Countdown Timer Messages
 
 These messages use a hybrid approach: **first display respects 500ms minimum**, then updates occur immediately every second.
 
-#### Listening for heard repeats (Xs)
+##### Listening for heard repeats (Xs)
 - **Message**: `"Listening for heard repeats (Xs)"` (X is dynamic countdown)
 - **Color**: Sky blue (info)
-- **Used in**: `rxListeningCountdownTimer`
-- **Source**: `content/wardrive.js:328`
-- **Context**: After successful ping, listening for repeater echoes
+- **When**: After successful ping, listening for repeater echoes
 - **Duration**: 7 seconds total
 - **Minimum Visibility**: 500ms for first message, immediate for countdown updates
+- **Source**: `content/wardrive.js:rxListeningCountdownTimer`
 
-#### Finalizing heard repeats
+##### Finalizing heard repeats
 - **Message**: `"Finalizing heard repeats"`
 - **Color**: Sky blue (info)
-- **Used in**: `rxListeningCountdownTimer`
-- **Source**: `content/wardrive.js:325`
-- **Context**: Countdown reached 0, processing repeater data
+- **When**: Countdown reached 0, processing repeater data
 - **Minimum Visibility**: Immediate (countdown update)
+- **Source**: `content/wardrive.js:rxListeningCountdownTimer`
 
-#### Waiting for next auto ping (Xs)
+##### Waiting for next auto ping (Xs)
 - **Message**: `"Waiting for next auto ping (Xs)"` (X is dynamic countdown)
 - **Color**: Slate (idle)
-- **Used in**: `autoCountdownTimer`
-- **Source**: `content/wardrive.js:314`
-- **Context**: Auto mode active, between pings
+- **When**: Auto mode active, between pings
 - **Duration**: 15s, 30s, or 60s (user-selectable)
 - **Minimum Visibility**: 500ms for first message, immediate for countdown updates
+- **Source**: `content/wardrive.js:autoCountdownTimer`
 
-#### Ping skipped, outside of geofenced region, waiting for next ping (Xs)
+##### Ping skipped, outside of geofenced region, waiting for next ping (Xs)
 - **Message**: `"Ping skipped, outside of geofenced region, waiting for next ping (Xs)"` (X is dynamic countdown)
 - **Color**: Amber (warning)
-- **Used in**: `autoCountdownTimer`
-- **Source**: `content/wardrive.js:297`
-- **Context**: Auto ping skipped due to geofence, showing countdown
+- **When**: Auto ping skipped due to geofence, showing countdown
 - **Minimum Visibility**: 500ms for first message, immediate for updates
+- **Source**: `content/wardrive.js:autoCountdownTimer`
 
-#### Ping skipped, too close to last ping, waiting for next ping (Xs)
+##### Ping skipped, too close to last ping, waiting for next ping (Xs)
 - **Message**: `"Ping skipped, too close to last ping, waiting for next ping (Xs)"` (X is dynamic countdown)
 - **Color**: Amber (warning)
-- **Used in**: `autoCountdownTimer`
-- **Source**: `content/wardrive.js:303`
-- **Context**: Auto ping skipped due to distance check, showing countdown
+- **When**: Auto ping skipped due to distance check, showing countdown
 - **Minimum Visibility**: 500ms for first message, immediate for updates
+- **Source**: `content/wardrive.js:autoCountdownTimer`
 
-#### Skipped (X), next ping (Ys)
+##### Skipped (X), next ping (Ys)
 - **Message**: `"Skipped (X), next ping (Ys)"` (X is skip reason, Y is countdown)
 - **Color**: Amber (warning)
-- **Used in**: `autoCountdownTimer`
-- **Source**: `content/wardrive.js:309`
-- **Context**: Auto ping skipped for generic reason (e.g., "gps too old"), showing countdown
+- **When**: Auto ping skipped for generic reason (e.g., "gps too old")
 - **Minimum Visibility**: 500ms for first message, immediate for updates
+- **Source**: `content/wardrive.js:autoCountdownTimer`
 
----
+#### 6. API and Map Update Messages
 
-### 8. API and Map Update Messages
-
-#### Posting to API
+##### Posting to API
 - **Message**: `"Posting to API"`
 - **Color**: Sky blue (info)
-- **Used in**: `postApiAndRefreshMap()`
-- **Source**: `content/wardrive.js:1167`
-- **Context**: After RX listening window, posting ping data to MeshMapper API
+- **When**: After RX listening window, posting ping data to MeshMapper API
 - **Timing**: Visible during API POST operation (3-second hidden delay + API call time, typically ~3.5-4.5s total)
-- **Minimum Visibility**: 500ms minimum enforced (naturally ~4s due to 3s delay + API timing)
-- **Notes**: A 3-second hidden delay occurs before the actual API call to ensure good visibility
+- **Source**: `content/wardrive.js:postApiAndRefreshMap()`
 
-#### Idle
-- **Message**: `"Idle"`
+##### — (em dash)
+- **Message**: `"—"` (em dash character)
 - **Color**: Slate (idle)
-- **Used in**: `postApiAndRefreshMap()`
-- **Source**: `content/wardrive.js:1203`
-- **Context**: Manual mode after API post completes
-- **Minimum Visibility**: 500ms minimum enforced
-- **Note**: No longer shown after initial connection; "Connected" status is displayed instead and persists until user action
+- **When**: 
+  - Manual mode after API post completes
+  - After successful connection (shows "Connected" in connection bar)
+  - Normal disconnect (shows "Disconnected" in connection bar)
+  - Any time there is no active message to display
+- **Purpose**: Placeholder to indicate "no message" state
+- **Source**: Multiple locations - `content/wardrive.js`
 
----
+#### 7. Auto Mode Messages
 
-### 9. Auto Mode Messages
-
-#### Auto mode stopped
+##### Auto mode stopped
 - **Message**: `"Auto mode stopped"`
 - **Color**: Slate (idle)
-- **Used in**: `disconnect()` (event handler for stopping auto mode)
-- **Source**: `content/wardrive.js:2247`
-- **Context**: User clicks "Stop Auto Ping" button
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: User clicks "Stop Auto Ping" button
+- **Source**: `content/wardrive.js:autoToggleBtn click handler`
 
-#### Lost focus, auto mode stopped
+##### Lost focus, auto mode stopped
 - **Message**: `"Lost focus, auto mode stopped"`
 - **Color**: Amber (warning)
-- **Used in**: `disconnect()` (page visibility handler)
-- **Source**: `content/wardrive.js:2209`
-- **Context**: Browser tab hidden while auto mode running
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: Browser tab hidden while auto mode running
+- **Source**: `content/wardrive.js:visibilitychange handler`
 
-#### Wait Xs before toggling auto mode
+##### Wait Xs before toggling auto mode
 - **Message**: `"Wait Xs before toggling auto mode"` (X is dynamic countdown)
 - **Color**: Amber (warning)
-- **Used in**: `stopAutoPing()`, `startAutoPing()`
-- **Source**: `content/wardrive.js:1928`, `content/wardrive.js:1988`
-- **Context**: User attempts to toggle auto mode during cooldown period
-- **Minimum Visibility**: 500ms minimum enforced
+- **When**: User attempts to toggle auto mode during cooldown period
+- **Source**: `content/wardrive.js:stopAutoPing()`, `startAutoPing()`
+
+#### 8. Error Messages
+
+##### Connection failed
+- **Message**: `"Connection failed"` or specific error message
+- **Color**: Red (error)
+- **When**: BLE connection fails or connection button error
+- **Source**: `content/wardrive.js:connect()`, event handlers
 
 ---
 
 ## Implementation Details
 
+### Status Setter Functions
+
+#### setConnStatus(text, color)
+```javascript
+/**
+ * Set connection status bar message
+ * Updates the #connectionStatus element with one of four fixed states
+ */
+function setConnStatus(text, color) {
+  // Updates connection bar immediately (no minimum visibility delay)
+  connectionStatusEl.textContent = text;
+  connectionStatusEl.className = `font-medium ${color}`;
+  // Also updates status indicator dot color
+}
+```
+
+#### setDynamicStatus(text, color, immediate)
+```javascript
+/**
+ * Set dynamic status bar message
+ * Uses 500ms minimum visibility for first display, immediate for countdown updates
+ * Blocks connection words and shows em dash for empty messages
+ */
+function setDynamicStatus(text, color, immediate) {
+  // Normalize empty/null/whitespace to em dash
+  if (!text || text.trim() === '') {
+    text = '—';
+  }
+  
+  // Block connection words from dynamic bar
+  const connectionWords = ['Connected', 'Connecting', 'Disconnecting', 'Disconnected'];
+  if (connectionWords.includes(text)) {
+    debugWarn(`Connection word blocked from dynamic bar`);
+    text = '—';
+  }
+  
+  // Use existing setStatus implementation with minimum visibility
+  setStatus(text, color, immediate);
+}
+```
+
 ### Minimum Visibility Enforcement
 
-The `setStatus()` function implements minimum visibility using:
+The `setStatus()` function (internal) implements minimum visibility:
 
 ```javascript
 const MIN_STATUS_VISIBILITY_MS = 500; // 500ms minimum
@@ -416,8 +398,7 @@ function setStatus(text, color, immediate = false) {
   }
   
   // Otherwise, queue the message with appropriate delay
-  const delayNeeded = MIN_STATUS_VISIBILITY_MS - timeSinceLastSet;
-  // ... queue message ...
+  // (last-write-wins strategy)
 }
 ```
 
@@ -427,46 +408,39 @@ Countdown timers use a hybrid approach:
 - **First update**: Respects 500ms minimum visibility of previous message
 - **Subsequent updates**: Immediate (using `immediate = true` flag)
 
-This ensures that important status messages (like "Ping sent") are visible for at least 500ms before being replaced by countdown timers, while still allowing countdown updates to occur smoothly every second.
+This ensures important status messages (like "Ping sent") are visible for at least 500ms before being replaced by countdown timers, while allowing smooth countdown updates every second.
 
-### Message Queue Strategy
+---
 
-When multiple messages arrive within the 500ms window:
-- Only the **most recent** message is kept in the queue
-- Previous queued messages are discarded (last-write-wins)
-- This prevents a backlog of stale messages
+## Standardization Rules
 
-Example:
-```
-Time 0ms:   "Message A" displayed
-Time 100ms: "Message B" queued (will display at 500ms)
-Time 200ms: "Message C" queued (replaces B, will display at 500ms)
-Result:     "Message A" (visible 500ms) → "Message C"
-```
+Status messages follow these consistent conventions:
+- **No trailing punctuation** (no ellipsis or periods for short statuses)
+- **Sentence case** capitalization
+- **Present progressive tense** (-ing) for ongoing actions
+- **Past tense** for completed actions
+- **Concise and readable** phrasing
+- **No "Disconnected:" prefix** - error reasons shown without prefix in dynamic bar
 
 ---
 
 ## Summary
 
-**Total Status Messages**: 38 unique message patterns
-- **Connection**: 7 messages
-- **Capacity Check**: 7 messages (1 deprecated, includes new "Acquired wardriving slot" and "Error: Posting to API (Revoked)")
-- **Channel Setup**: 4 messages (new section for channel lookup and creation)
-- **GPS Initialization**: 1 message (new "Priming GPS")
-- **Ping Operation**: 6 messages (consolidated "Ping sent" for both manual and auto)
-- **GPS Status**: 2 messages
-- **Countdown Timers**: 6 message patterns (with dynamic countdown values)
-- **API/Map**: 2 messages
-- **Auto Mode**: 3 messages
+**Connection Status Bar**: 4 fixed messages (Connected, Connecting, Disconnected, Disconnecting)
 
-**Minimum Visibility**: All non-countdown messages enforce **500ms minimum visibility**. Countdown messages respect this minimum on first display, then update immediately.
+**Dynamic App Status Bar**: ~30 unique message patterns covering:
+- Capacity check: 7 messages
+- Channel setup: 4 messages
+- GPS initialization: 3 messages
+- Ping operations: 6 messages
+- Countdown timers: 6 message patterns
+- API/Map: 2 messages (including em dash placeholder)
+- Auto mode: 3 messages
+- Errors: Various context-specific messages
 
-**Standardization**: All messages follow consistent conventions:
-- No trailing punctuation
-- Sentence case capitalization
-- Present progressive tense (-ing) for ongoing actions
-- Past tense for completed actions
-- Consistent "X failed" format for error messages
-- Consistent tone (direct, technical) - removed "Please" from wait messages
-- Proper compound words ("geofenced" not "geo fenced")
-- Correct spelling: "Acquired" (not "Aquired")
+**Key Behaviors**:
+- Connection bar updates immediately
+- Dynamic bar enforces 500ms minimum visibility (except countdown updates)
+- Em dash (`—`) placeholder for empty dynamic status
+- Connection words blocked from dynamic bar
+- All error reasons appear WITHOUT "Disconnected:" prefix

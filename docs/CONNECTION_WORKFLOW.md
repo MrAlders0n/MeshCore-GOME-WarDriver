@@ -41,7 +41,8 @@
 - Returns the application to idle state, ready for a new connection
 
 **Expected App State After Disconnect:**
-- Status: "Disconnected" (red)
+- Connection Status: "Disconnected" (red)
+- Dynamic Status: Em dash (`—`) for normal disconnect, or error message for error disconnects
 - All controls disabled except "Connect" button
 - GPS tracking stopped
 - Auto-ping mode disabled
@@ -85,14 +86,16 @@ connectBtn.addEventListener("click", async () => {
    - Checks `navigator.bluetooth` exists
    - Alerts user if not supported
    - Fails fast if unavailable
-   - **Status**: N/A (alert shown)
+   - **Connection Status**: N/A
+   - **Dynamic Status**: N/A (alert shown)
 
 2. **Open BLE Connection**
    - Calls `WebBleConnection.open()` (web_ble_connection.js:15-41)
    - Shows browser's native device picker
    - Filters for MeshCore BLE service UUID
    - User selects device or cancels
-   - **Status**: `"Connecting"` (blue)
+   - **Connection Status**: `"Connecting"` (blue) - remains until GPS init completes
+   - **Dynamic Status**: `"—"` (em dash - cleared)
 
 3. **Initialize BLE**
    - Connects to GATT server
@@ -100,12 +103,14 @@ connectBtn.addEventListener("click", async () => {
    - Starts notifications on TX characteristic
    - Sets up frame listener for incoming data
    - Fires "connected" event
-   - **Status**: `"Connecting"` (blue, maintained)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"—"` (em dash)
 
 4. **Device Query**
    - Sends protocol version query
    - Non-critical, errors ignored
-   - **Status**: `"Connecting"` (blue, maintained)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"—"` (em dash)
 
 5. **Get Device Info**
    - Retrieves device name, public key (32 bytes), settings
@@ -114,16 +119,19 @@ connectBtn.addEventListener("click", async () => {
    - Stores in `state.devicePublicKey`
    - Updates UI with device name
    - Changes button to "Disconnect" (red)
-   - **Status**: `"Connecting"` (blue, maintained)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"—"` (em dash)
 
 6. **Sync Device Time**
    - Sends current Unix timestamp
    - Device updates its clock
    - Optional, errors ignored
-   - **Status**: `"Connecting"` (blue, maintained)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"—"` (em dash)
 
 7. **Check Capacity**
-   - **Status**: `"Acquiring wardriving slot"` (blue)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"Acquiring wardriving slot"` (blue)
    - POSTs to MeshMapper API:
      ```json
      {
@@ -136,32 +144,38 @@ connectBtn.addEventListener("click", async () => {
    - If `allowed: false`:
      - Sets `state.disconnectReason = "capacity_full"`
      - Triggers disconnect sequence after 1.5s delay
-     - **Status**: `"Disconnecting"` (blue) → `"Disconnected: WarDriving app has reached capacity"` (red)
+     - **Connection Status**: `"Connecting"` → `"Disconnecting"` → `"Disconnected"` (red)
+     - **Dynamic Status**: `"Acquiring wardriving slot"` → `"WarDriving app has reached capacity"` (red, terminal)
    - If API error:
      - Sets `state.disconnectReason = "app_down"`
      - Triggers disconnect sequence after 1.5s delay (fail-closed)
-     - **Status**: `"Disconnecting"` (blue) → `"Disconnected: WarDriving app is down"` (red)
-   - On success → **Status**: `"Acquired wardriving slot"` (green)
+     - **Connection Status**: `"Connecting"` → `"Disconnecting"` → `"Disconnected"` (red)
+     - **Dynamic Status**: `"Acquiring wardriving slot"` → `"WarDriving app is down"` (red, terminal)
+   - On success:
+     - **Connection Status**: `"Connecting"` (blue, maintained)
+     - **Dynamic Status**: `"Acquired wardriving slot"` (green)
 
 8. **Setup Channel**
-   - **Status**: `"Looking for #wardriving channel"` (blue)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"Looking for #wardriving channel"` (blue)
    - Searches for existing `#wardriving` channel
    - If found:
-     - **Status**: `"Channel #wardriving found"` (green)
+     - **Dynamic Status**: `"Channel #wardriving found"` (green)
      - Stores channel object in `state.channel`
      - Updates UI: "#wardriving (CH:X)"
    - If not found:
-     - **Status**: `"Channel #wardriving not found"` (blue)
+     - **Dynamic Status**: `"Channel #wardriving not found"` (blue)
      - Creates new channel:
        - Finds empty channel slot
        - Derives channel key: `SHA-256(#wardriving).slice(0, 16)`
        - Sends setChannel command
-     - **Status**: `"Created #wardriving"` (green)
+     - **Dynamic Status**: `"Created #wardriving"` (green)
      - Stores channel object in `state.channel`
      - Updates UI: "#wardriving (CH:X)"
 
 9. **Initialize GPS**
-   - **Status**: `"Priming GPS"` (blue)
+   - **Connection Status**: `"Connecting"` (blue, maintained)
+   - **Dynamic Status**: `"Priming GPS"` (blue)
    - Requests location permission
    - Gets initial GPS position (30s timeout)
    - Starts continuous GPS watch
@@ -171,7 +185,8 @@ connectBtn.addEventListener("click", async () => {
    - Refreshes coverage map if accuracy < 100m
 
 10. **Connection Complete**
-    - **Status**: `"Connected"` (green)
+    - **Connection Status**: `"Connected"` (green) - **NOW shown after GPS init**
+    - **Dynamic Status**: `"—"` (em dash - cleared to show empty state)
     - Enables all UI controls
     - Ready for wardriving operations
 
@@ -180,13 +195,13 @@ connectBtn.addEventListener("click", async () => {
 ### Disconnection Steps (High-Level)
 
 1. **Disconnect Trigger** → User clicks "Disconnect" or error occurs
-2. **Status Update** → Shows "Disconnecting"
+2. **Status Update** → Connection Status shows "Disconnecting", Dynamic Status cleared to em dash
 3. **Capacity Release** → Returns API slot to MeshMapper
 4. **Channel Deletion** → Removes #wardriving channel from device
 5. **BLE Disconnect** → Closes GATT connection
 6. **Cleanup** → Stops timers, GPS, wake locks
 7. **State Reset** → Clears all connection state
-8. **Disconnected** → Returns to idle state
+8. **Disconnected** → Connection Status shows "Disconnected", Dynamic Status shows em dash or error message
 
 ### Detailed Disconnection Steps
 
@@ -212,7 +227,8 @@ See `content/wardrive.js` lines 2119-2179 for the main `disconnect()` function.
    - "slot_revoked" - slot revoked during active session
 
 3. **Update Status**
-   - Sets status to "Disconnecting" (blue)
+   - **Connection Status**: `"Disconnecting"` (blue) - remains until cleanup completes
+   - **Dynamic Status**: `"—"` (em dash - cleared)
 
 4. **Release Capacity**
    - POSTs to MeshMapper API with `reason: "disconnect"`
@@ -230,6 +246,15 @@ See `content/wardrive.js` lines 2119-2179 for the main `disconnect()` function.
 
 7. **Disconnected Event Handler**
    - Fires on BLE disconnect
+   - **Connection Status**: `"Disconnected"` (red) - ALWAYS set regardless of reason
+   - **Dynamic Status**: Set based on `state.disconnectReason` (WITHOUT "Disconnected:" prefix):
+     - `capacity_full` → `"WarDriving app has reached capacity"` (red)
+     - `app_down` → `"WarDriving app is down"` (red)
+     - `slot_revoked` → `"WarDriving slot has been revoked"` (red)
+     - `public_key_error` → `"Unable to read device public key; try again"` (red)
+     - `channel_setup_error` → Error message (red)
+     - `ble_disconnect_error` → Error message (red)
+     - `normal` / `null` / `undefined` → `"—"` (em dash)
    - Runs comprehensive cleanup:
      - Stops auto-ping mode
      - Clears auto-ping timer
@@ -257,7 +282,8 @@ See `content/wardrive.js` lines 2119-2179 for the main `disconnect()` function.
    - `state.gpsState = "idle"`
 
 10. **Disconnected Complete**
-    - Status: "Disconnected" (red) or error message
+    - **Connection Status**: `"Disconnected"` (red)
+    - **Dynamic Status**: `"—"` (em dash) or error message based on disconnect reason
     - All resources released
     - Ready for new connection
 
@@ -278,33 +304,32 @@ When a wardriving slot is revoked during an active session (detected during API 
    - Detected in `postToMeshMapperAPI()` response handler
 
 2. **Initial Status**
-   - **Status**: `"Error: Posting to API (Revoked)"` (red)
+   - **Dynamic Status**: `"Error: Posting to API (Revoked)"` (red)
    - Sets `state.disconnectReason = "slot_revoked"`
    - Visible for 1.5 seconds
 
 3. **Disconnect Initiated**
    - Calls `disconnect()` after 1.5s delay
-   - **Status**: `"Disconnecting"` (blue)
+   - **Connection Status**: `"Disconnecting"` (blue)
+   - **Dynamic Status**: `"—"` (em dash - cleared during disconnect)
    - Proceeds with normal disconnect cleanup
 
 4. **Terminal Status**
    - Disconnect event handler detects `slot_revoked` reason
-   - **Status**: `"Disconnected: WarDriving slot has been revoked"` (red)
-   - This is the final terminal status (does NOT revert to "Idle")
+   - **Connection Status**: `"Disconnected"` (red)
+   - **Dynamic Status**: `"WarDriving slot has been revoked"` (red, terminal - NO "Disconnected:" prefix)
+   - This is the final terminal status
 
 **Complete Revocation Flow:**
 ```
-"Posting to API" (blue)
-  → "Error: Posting to API (Revoked)" (red, 1.5s)
-  → "Disconnecting" (blue)
-  → "Disconnected: WarDriving slot has been revoked" (red, terminal)
+Connection Status: (unchanged) → "Disconnecting" → "Disconnected"
+Dynamic Status: "Posting to API" → "Error: Posting to API (Revoked)" → "—" → "WarDriving slot has been revoked"
 ```
 
 **Key Differences from Normal Disconnect:**
-- Normal disconnect: ends with "Disconnected" (red)
-- Revocation: ends with "Disconnected: WarDriving slot has been revoked" (red)
+- Normal disconnect: Dynamic Status shows `"—"` (em dash)
+- Revocation: Dynamic Status shows `"WarDriving slot has been revoked"` (red error, no prefix)
 - Revocation shows intermediate "Error: Posting to API (Revoked)" state
-- Terminal status is preserved and does not loop to "Idle"
 
 ## Workflow Diagrams
 
@@ -458,7 +483,9 @@ stateDiagram-v2
 
 ### State Management
 - **Global state**: `wardrive.js` lines 102-136 (`const state = {...}`)
-- **Status management**: `wardrive.js:setStatus()` (lines 165-225)
+- **Connection Status management**: `wardrive.js:setConnStatus(text, color)` - Updates connection status bar
+- **Dynamic Status management**: `wardrive.js:setDynamicStatus(text, color, immediate)` - Updates dynamic status bar
+- **Internal status**: `wardrive.js:setStatus()` (lines 165-225) - Internal implementation with minimum visibility
 - **Button state**: `wardrive.js:setConnectButton()` (lines 495-518)
 - **Control state**: `wardrive.js:enableControls()` (lines 462-466)
 
