@@ -2435,18 +2435,34 @@ export async function onLoad() {
   const settingsGearBtn = document.getElementById("settingsGearBtn");
   const settingsPanel = document.getElementById("settingsPanel");
   const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+  const connectionBar = document.getElementById("connectionBar");
   
-  if (settingsGearBtn && settingsPanel) {
+  if (settingsGearBtn && settingsPanel && connectionBar) {
     settingsGearBtn.addEventListener("click", () => {
       debugLog("Settings gear button clicked");
+      const isHidden = settingsPanel.classList.contains("hidden");
       settingsPanel.classList.toggle("hidden");
+      
+      // Update connection bar border radius based on settings panel state
+      if (isHidden) {
+        // Settings panel is opening - remove bottom rounded corners from connection bar
+        connectionBar.classList.remove("rounded-xl");
+        connectionBar.classList.add("rounded-t-xl");
+      } else {
+        // Settings panel is closing - restore full rounded corners to connection bar
+        connectionBar.classList.remove("rounded-t-xl");
+        connectionBar.classList.add("rounded-xl");
+      }
     });
   }
   
-  if (settingsCloseBtn && settingsPanel) {
+  if (settingsCloseBtn && settingsPanel && connectionBar) {
     settingsCloseBtn.addEventListener("click", () => {
       debugLog("Settings close button clicked");
       settingsPanel.classList.add("hidden");
+      // Restore full rounded corners to connection bar
+      connectionBar.classList.remove("rounded-t-xl");
+      connectionBar.classList.add("rounded-xl");
     });
   }
 
