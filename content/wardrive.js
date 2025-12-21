@@ -1890,6 +1890,7 @@ function updateLogSummary() {
   if (count === 0) {
     logLastTime.textContent = 'No data';
     logLastSnr.textContent = '—';
+    debugLog('Session log summary updated: no entries');
     return;
   }
   
@@ -1897,13 +1898,15 @@ function updateLogSummary() {
   const date = new Date(lastEntry.timestamp);
   logLastTime.textContent = date.toLocaleTimeString();
   
-  // Show SNR from first event if available
-  if (lastEntry.events.length > 0) {
-    const firstEvent = lastEntry.events[0];
-    logLastSnr.textContent = `${firstEvent.type} ${firstEvent.value.toFixed(1)} dB`;
-    logLastSnr.className = `text-xs font-mono ${getSnrSeverityClass(firstEvent.value).replace('snr-', 'text-')}`;
+  // Count total heard repeats in the latest ping
+  const heardCount = lastEntry.events.length;
+  debugLog(`Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
+  
+  if (heardCount > 0) {
+    logLastSnr.textContent = `Heard ${heardCount}`;
+    logLastSnr.className = 'text-xs font-mono text-slate-300';
   } else {
-    logLastSnr.textContent = 'None';
+    logLastSnr.textContent = 'Heard 0';
     logLastSnr.className = 'text-xs font-mono text-slate-500';
   }
 }
