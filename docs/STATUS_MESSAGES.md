@@ -234,12 +234,18 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **Message**: `"Ping skipped, outside of geofenced region"`
 - **Color**: Amber (warning)
 - **When**: GPS coordinates outside Ottawa 150km radius
+- **Behavior**: 
+  - In manual mode (auto OFF): Message persists until next action
+  - In manual mode (auto ON): Message shown briefly, then auto countdown resumes
 - **Source**: `content/wardrive.js:sendPing()`
 
 ##### Ping skipped, too close to last ping
 - **Message**: `"Ping skipped, too close to last ping"`
 - **Color**: Amber (warning)
 - **When**: Current location < 25m from last successful ping
+- **Behavior**: 
+  - In manual mode (auto OFF): Message persists until next action
+  - In manual mode (auto ON): Message shown briefly, then auto countdown resumes
 - **Source**: `content/wardrive.js:sendPing()`
 
 ##### Wait Xs before sending another ping

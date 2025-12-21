@@ -1874,6 +1874,15 @@ async function sendPing(manual = false) {
       if (!manual && state.running) {
         scheduleNextAutoPing();
       }
+      // For manual ping during auto mode, resume the paused countdown
+      if (manual && state.running) {
+        debugLog("Manual ping failed (no GPS) during auto mode - resuming auto countdown");
+        const resumed = resumeAutoCountdown();
+        if (!resumed) {
+          debugLog("No paused countdown to resume, scheduling new auto ping");
+          scheduleNextAutoPing();
+        }
+      }
       return;
     }
     
@@ -1890,6 +1899,15 @@ async function sendPing(manual = false) {
       if (manual) {
         // Manual ping: show skip message that persists
         setDynamicStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
+        // If auto mode is running, resume the paused countdown
+        if (state.running) {
+          debugLog("Manual ping blocked during auto mode - resuming auto countdown");
+          const resumed = resumeAutoCountdown();
+          if (!resumed) {
+            debugLog("No paused countdown to resume, scheduling new auto ping");
+            scheduleNextAutoPing();
+          }
+        }
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
@@ -1910,6 +1928,15 @@ async function sendPing(manual = false) {
       if (manual) {
         // Manual ping: show skip message that persists
         setDynamicStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
+        // If auto mode is running, resume the paused countdown
+        if (state.running) {
+          debugLog("Manual ping blocked during auto mode - resuming auto countdown");
+          const resumed = resumeAutoCountdown();
+          if (!resumed) {
+            debugLog("No paused countdown to resume, scheduling new auto ping");
+            scheduleNextAutoPing();
+          }
+        }
       } else if (state.running) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
