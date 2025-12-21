@@ -2197,24 +2197,8 @@ function updateCurrentLogEntryWithLiveRepeaters() {
   // Sort by repeater ID for deterministic output
   repeaters.sort((a, b) => a.repeaterId.localeCompare(b.repeaterId));
   
-  const repeaterStr = formatRepeaterTelemetry(repeaters);
-  
-  // Find and update the entry in sessionLogState
-  const entryIndex = sessionLogState.entries.findIndex(
-    e => e.timestamp === logData.timestamp && e.lat === logData.lat && e.lon === logData.lon
-  );
-  
-  if (entryIndex !== -1) {
-    // Update the entry with current repeater data
-    const logLine = `${logData.timestamp} | ${logData.lat},${logData.lon} | ${repeaterStr}`;
-    const updatedEntry = parseLogEntry(logLine);
-    
-    if (updatedEntry) {
-      sessionLogState.entries[entryIndex] = updatedEntry;
-      renderLogEntries();
-      updateLogSummary();
-    }
-  }
+  // Reuse the existing updatePingLogWithRepeaters function
+  updatePingLogWithRepeaters(logData, repeaters);
   
   debugLog(`Incrementally updated ping log entry: ${repeaters.length} repeater(s) detected so far`);
 }
