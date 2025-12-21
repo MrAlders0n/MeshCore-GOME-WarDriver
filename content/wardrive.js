@@ -103,6 +103,7 @@ const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from
 const sessionPingsEl = document.getElementById("sessionPings"); // optional
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
+setConnectionStatus(false);
 
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
@@ -488,6 +489,19 @@ function enableControls(connected) {
   connectBtn.disabled     = false;
   channelInfoEl.textContent = CHANNEL_NAME;
   updateControlsForCooldown();
+  
+  // Show/hide ping controls based on connection state
+  const pingControls = document.getElementById("pingControls");
+  const connectHelperText = document.getElementById("connectHelperText");
+  if (pingControls && connectHelperText) {
+    if (connected) {
+      pingControls.classList.remove("hidden");
+      connectHelperText.classList.add("hidden");
+    } else {
+      pingControls.classList.add("hidden");
+      connectHelperText.classList.remove("hidden");
+    }
+  }
 }
 function updateAutoButton() {
   if (state.running) {
@@ -539,6 +553,22 @@ function setConnectButton(connected) {
       "bg-emerald-600",
       "hover:bg-emerald-500"
     );
+  }
+}
+
+// Update connection status bar (separate from dynamic app status)
+function setConnectionStatus(connected) {
+  const connectionStatusEl = document.getElementById("connectionStatus");
+  const statusIndicatorEl = document.getElementById("statusIndicator");
+  
+  if (!connectionStatusEl || !statusIndicatorEl) return;
+  
+  if (connected) {
+    connectionStatusEl.textContent = "Connected";
+    connectionStatusEl.className = "font-medium text-emerald-300";
+  } else {
+    connectionStatusEl.textContent = "Disconnected";
+    connectionStatusEl.className = "font-medium text-red-300";
   }
 }
 
@@ -2073,6 +2103,7 @@ async function connect() {
       // Keep "Connecting" status visible during the full connection process
       // Don't show "Connected" until everything is complete
       setConnectButton(true);
+      setConnectionStatus(true);
       connectBtn.disabled = false;
       const selfInfo = await conn.getSelfInfo();
       debugLog(`Device info: ${selfInfo?.name || "[No device]"}`);
@@ -2181,6 +2212,7 @@ async function connect() {
       }
       
       setConnectButton(false);
+      setConnectionStatus(false);
       deviceInfoEl.textContent = "—";
       state.connection = null;
       state.channel = null;
@@ -2326,6 +2358,25 @@ export async function onLoad() {
       startAutoPing();
     }
   });
+
+  // Settings panel toggle (for modernized UI)
+  const settingsGearBtn = document.getElementById("settingsGearBtn");
+  const settingsPanel = document.getElementById("settingsPanel");
+  const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+  
+  if (settingsGearBtn && settingsPanel) {
+    settingsGearBtn.addEventListener("click", () => {
+      debugLog("Settings gear button clicked");
+      settingsPanel.classList.toggle("hidden");
+    });
+  }
+  
+  if (settingsCloseBtn && settingsPanel) {
+    settingsCloseBtn.addEventListener("click", () => {
+      debugLog("Settings close button clicked");
+      settingsPanel.classList.add("hidden");
+    });
+  }
 
   // Prompt location permission early (optional)
   debugLog("Requesting initial location permission");
