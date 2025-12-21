@@ -181,7 +181,7 @@ body,
 
 /* Mobile Session Log Bottom Sheet */
 #logBottomSheet.open {
-  transform: translateY(0);
+    translate: 0 0;
 }
 
 /* Log Entry Styling */
