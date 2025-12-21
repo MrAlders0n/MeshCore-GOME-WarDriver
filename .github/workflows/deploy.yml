@@ -58,9 +58,11 @@ jobs:
           
           # Inject DEV version (visual display) and JS constant with DEV-EPOCH format
           DEV_EPOCH=$(date -u +%s)
-          sed -i 's|MeshCore Wardrive</h1>|MeshCore Wardrive <span class="text-sm text-slate-400">DEV-'"${DEV_EPOCH}"'</span></h1>|' _site/dev/index.html
+          # Replace the visible version in the dedicated span (this is what the UI shows)
+          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-sm text-slate-400">DEV-'"${DEV_EPOCH}"'</span>|' _site/dev/index.html
+          # Inject into JS constant
           sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "DEV-'"${DEV_EPOCH}"'";|' _site/dev/content/wardrive.js
-          
+
           find _site -name ". git" -exec rm -rf {} + 2>/dev/null || true
           find _site -name ".github" -exec rm -rf {} + 2>/dev/null || true
 
