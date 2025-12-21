@@ -1817,7 +1817,7 @@ function createChipElement(type, value) {
   
   const snrSpan = document.createElement('span');
   snrSpan.className = 'chipSnr';
-  snrSpan.textContent = value.toFixed(2);
+  snrSpan.textContent = `${value.toFixed(2)} dB`;
   
   chip.appendChild(idSpan);
   chip.appendChild(snrSpan);
@@ -1831,6 +1831,7 @@ function createChipElement(type, value) {
  * @returns {HTMLElement} Log entry element
  */
 function createLogEntryElement(entry) {
+  debugLog(`Creating log entry element for timestamp: ${entry.timestamp}`);
   const logEntry = document.createElement('div');
   logEntry.className = 'logEntry';
   
@@ -1860,16 +1861,20 @@ function createLogEntryElement(entry) {
     noneSpan.className = 'text-xs text-slate-500 italic';
     noneSpan.textContent = 'No repeats heard';
     chipsRow.appendChild(noneSpan);
+    debugLog(`Log entry has no events (no repeats heard)`);
   } else {
+    debugLog(`Log entry has ${entry.events.length} event(s)`);
     entry.events.forEach(event => {
       const chip = createChipElement(event.type, event.value);
       chipsRow.appendChild(chip);
+      debugLog(`Added chip for repeater ${event.type} with SNR ${event.value} dB`);
     });
   }
   
   logEntry.appendChild(topRow);
   logEntry.appendChild(chipsRow);
   
+  debugLog(`Log entry element created successfully with class: ${logEntry.className}`);
   return logEntry;
 }
 
@@ -1895,7 +1900,7 @@ function updateLogSummary() {
   // Show SNR from first event if available
   if (lastEntry.events.length > 0) {
     const firstEvent = lastEntry.events[0];
-    logLastSnr.textContent = `${firstEvent.type} ${firstEvent.value.toFixed(1)}`;
+    logLastSnr.textContent = `${firstEvent.type} ${firstEvent.value.toFixed(1)} dB`;
     logLastSnr.className = `text-xs font-mono ${getSnrSeverityClass(firstEvent.value).replace('snr-', 'text-')}`;
   } else {
     logLastSnr.textContent = 'None';
@@ -1909,6 +1914,7 @@ function updateLogSummary() {
 function renderLogEntries() {
   if (!sessionPingsEl) return;
   
+  debugLog(`Rendering ${sessionLogState.entries.length} log entries`);
   sessionPingsEl.innerHTML = '';
   
   if (sessionLogState.entries.length === 0) {
@@ -1917,21 +1923,26 @@ function renderLogEntries() {
     placeholder.className = 'text-xs text-slate-500 italic text-center py-4';
     placeholder.textContent = 'No pings logged yet';
     sessionPingsEl.appendChild(placeholder);
+    debugLog(`Rendered placeholder (no entries)`);
     return;
   }
   
   // Render newest first
   const entries = [...sessionLogState.entries].reverse();
   
-  entries.forEach(entry => {
+  entries.forEach((entry, index) => {
     const element = createLogEntryElement(entry);
     sessionPingsEl.appendChild(element);
+    debugLog(`Appended log entry ${index + 1}/${entries.length} to sessionPingsEl`);
   });
   
   // Auto-scroll to top (newest)
   if (sessionLogState.autoScroll && logScrollContainer) {
     logScrollContainer.scrollTop = 0;
+    debugLog(`Auto-scrolled to top of log container`);
   }
+  
+  debugLog(`Finished rendering all log entries`);
 }
 
 /**
