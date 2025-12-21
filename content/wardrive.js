@@ -1969,6 +1969,8 @@ async function sendPing(manual = false) {
     
     // Schedule the sequence: listen for 7s, THEN finalize repeats and post to API
     // This timeout is stored in meshMapperTimer for cleanup purposes
+    // Capture coordinates locally to prevent race conditions with concurrent pings
+    const capturedCoords = state.capturedPingCoords;
     state.meshMapperTimer = setTimeout(async () => {
       debugLog(`RX listening window completed after ${RX_LOG_LISTEN_WINDOW_MS}ms`);
       
@@ -1987,8 +1989,8 @@ async function sendPing(manual = false) {
       debugLog(`Formatted heard_repeats for API: "${heardRepeatsStr}"`);
       
       // Use captured coordinates for API post (not current GPS position)
-      if (state.capturedPingCoords) {
-        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = state.capturedPingCoords;
+      if (capturedCoords) {
+        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = capturedCoords;
         debugLog(`Using captured ping coordinates for API post: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
         
         // Post to API with heard repeats data
@@ -2000,11 +2002,13 @@ async function sendPing(manual = false) {
         
         // Unlock ping controls since API post is being skipped
         unlockPingControls("after skipping API post due to missing coordinates");
+        
+        // Fix 2: Schedule next auto ping if in auto mode to prevent getting stuck
+        if (state.running && !state.autoTimerId) {
+          debugLog("Scheduling next auto ping after skipped API post");
+          scheduleNextAutoPing();
+        }
       }
-      
-      // Clear captured coordinates after API post completes (always, regardless of path)
-      state.capturedPingCoords = null;
-      debugLog(`Cleared captured ping coordinates after API post`);
       
       // Clear timer reference
       state.meshMapperTimer = null;
