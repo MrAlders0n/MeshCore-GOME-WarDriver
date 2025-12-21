@@ -178,3 +178,95 @@ body,
   flex: 0 0 auto;
   white-space: nowrap;
 }
+
+/* Mobile Session Log Bottom Sheet */
+#logBottomSheet.open {
+  transform: translateY(0);
+}
+
+/* Log Entry Styling */
+.logEntry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(51, 65, 85, 0.7);
+  border-radius: 0.5rem;
+}
+
+.logRowTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  color: #cbd5e1;
+}
+
+.logTime {
+  font-weight: 500;
+}
+
+.logCoords {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+/* Heard Repeats Chips Container */
+.heardChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  align-items: center;
+}
+
+/* Chip Base Styling */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 500;
+  background: rgba(51, 65, 85, 0.6);
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.chipId {
+  font-weight: 600;
+}
+
+.chipSnr {
+  font-weight: 400;
+}
+
+/* SNR Color Coding */
+.snr-red .chipSnr {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.snr-orange .chipSnr {
+  color: #fb923c;
+  font-weight: 600;
+}
+
+.snr-green .chipSnr {
+  color: #4ade80;
+  font-weight: 600;
+}
+
+/* Desktop log compatibility */
+@media (min-width: 768px) {
+  #logSummaryBar {
+    display: none;
+  }
+}

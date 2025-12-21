@@ -119,6 +119,23 @@ setConnStatus("Disconnected", STATUS_COLORS.error);
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
 
+// Mobile Session Log Bottom Sheet selectors
+const logSummaryBar = $("logSummaryBar");
+const logBottomSheet = $("logBottomSheet");
+const logCollapseBtn = $("logCollapseBtn");
+const logScrollContainer = $("logScrollContainer");
+const logCount = $("logCount");
+const logLastTime = $("logLastTime");
+const logLastSnr = $("logLastSnr");
+const sessionPingsDesktop = $("sessionPingsDesktop");
+
+// Session log state
+const sessionLogState = {
+  entries: [],  // Array of parsed log entries
+  isExpanded: false,
+  autoScroll: true
+};
+
 // ---- State ----
 const state = {
   connection: null,
@@ -1729,6 +1746,228 @@ function formatRepeaterTelemetry(repeaters) {
   return repeaters.map(r => `${r.repeaterId}(${r.snr})`).join(',');
 }
 
+// ---- Mobile Session Log Bottom Sheet ----
+
+/**
+ * Parse log entry string into structured data
+ * @param {string} logLine - Log line in format "timestamp | lat,lon | events"
+ * @returns {Object} Parsed log entry with timestamp, coords, and events
+ */
+function parseLogEntry(logLine) {
+  const parts = logLine.split(' | ');
+  if (parts.length !== 3) {
+    return null;
+  }
+  
+  const [timestamp, coords, eventsStr] = parts;
+  const [lat, lon] = coords.split(',').map(s => s.trim());
+  
+  // Parse events: "4e(12),b7(0)" or "None"
+  const events = [];
+  if (eventsStr && eventsStr !== 'None' && eventsStr !== '...') {
+    const eventTokens = eventsStr.split(',');
+    for (const token of eventTokens) {
+      const match = token.match(/^([a-f0-9]+)\(([^)]+)\)$/i);
+      if (match) {
+        events.push({
+          type: match[1],
+          value: parseFloat(match[2])
+        });
+      }
+    }
+  }
+  
+  return {
+    timestamp,
+    lat,
+    lon,
+    events
+  };
+}
+
+/**
+ * Get SNR severity class based on value
+ * Red: -12 to -1
+ * Orange: 0 to 5
+ * Green: 6 to 13+
+ * @param {number} snr - SNR value
+ * @returns {string} CSS class name
+ */
+function getSnrSeverityClass(snr) {
+  if (snr <= -1) {
+    return 'snr-red';
+  } else if (snr <= 5) {
+    return 'snr-orange';
+  } else {
+    return 'snr-green';
+  }
+}
+
+/**
+ * Create chip element for a heard repeat
+ * @param {string} type - Event type (repeater ID)
+ * @param {number} value - SNR value
+ * @returns {HTMLElement} Chip element
+ */
+function createChipElement(type, value) {
+  const chip = document.createElement('span');
+  chip.className = `chip ${getSnrSeverityClass(value)}`;
+  
+  const idSpan = document.createElement('span');
+  idSpan.className = 'chipId';
+  idSpan.textContent = type;
+  
+  const snrSpan = document.createElement('span');
+  snrSpan.className = 'chipSnr';
+  snrSpan.textContent = value.toFixed(2);
+  
+  chip.appendChild(idSpan);
+  chip.appendChild(snrSpan);
+  
+  return chip;
+}
+
+/**
+ * Create log entry element for mobile view
+ * @param {Object} entry - Parsed log entry
+ * @returns {HTMLElement} Log entry element
+ */
+function createLogEntryElement(entry) {
+  const logEntry = document.createElement('div');
+  logEntry.className = 'logEntry';
+  
+  // Top row: time + coords
+  const topRow = document.createElement('div');
+  topRow.className = 'logRowTop';
+  
+  const time = document.createElement('span');
+  time.className = 'logTime';
+  // Format timestamp to show only time (HH:MM:SS)
+  const date = new Date(entry.timestamp);
+  time.textContent = date.toLocaleTimeString();
+  
+  const coords = document.createElement('span');
+  coords.className = 'logCoords';
+  coords.textContent = `${entry.lat},${entry.lon}`;
+  
+  topRow.appendChild(time);
+  topRow.appendChild(coords);
+  
+  // Chips row: heard repeats
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'heardChips';
+  
+  if (entry.events.length === 0) {
+    const noneSpan = document.createElement('span');
+    noneSpan.className = 'text-xs text-slate-500 italic';
+    noneSpan.textContent = 'No repeats heard';
+    chipsRow.appendChild(noneSpan);
+  } else {
+    entry.events.forEach(event => {
+      const chip = createChipElement(event.type, event.value);
+      chipsRow.appendChild(chip);
+    });
+  }
+  
+  logEntry.appendChild(topRow);
+  logEntry.appendChild(chipsRow);
+  
+  return logEntry;
+}
+
+/**
+ * Update summary bar with latest log data
+ */
+function updateLogSummary() {
+  if (!logCount || !logLastTime || !logLastSnr) return;
+  
+  const count = sessionLogState.entries.length;
+  logCount.textContent = count === 1 ? '1 ping' : `${count} pings`;
+  
+  if (count === 0) {
+    logLastTime.textContent = 'No data';
+    logLastSnr.textContent = '—';
+    return;
+  }
+  
+  const lastEntry = sessionLogState.entries[count - 1];
+  const date = new Date(lastEntry.timestamp);
+  logLastTime.textContent = date.toLocaleTimeString();
+  
+  // Show SNR from first event if available
+  if (lastEntry.events.length > 0) {
+    const firstEvent = lastEntry.events[0];
+    logLastSnr.textContent = `${firstEvent.type} ${firstEvent.value.toFixed(1)}`;
+    logLastSnr.className = `text-xs font-mono ${getSnrSeverityClass(firstEvent.value).replace('snr-', 'text-')}`;
+  } else {
+    logLastSnr.textContent = 'None';
+    logLastSnr.className = 'text-xs font-mono text-slate-500';
+  }
+}
+
+/**
+ * Render all log entries to the mobile view
+ */
+function renderLogEntries() {
+  if (!sessionPingsEl) return;
+  
+  sessionPingsEl.innerHTML = '';
+  
+  // Render newest first for mobile
+  const entries = [...sessionLogState.entries].reverse();
+  
+  entries.forEach(entry => {
+    const element = createLogEntryElement(entry);
+    sessionPingsEl.appendChild(element);
+  });
+  
+  // Auto-scroll to top (newest)
+  if (sessionLogState.autoScroll && logScrollContainer) {
+    logScrollContainer.scrollTop = 0;
+  }
+}
+
+/**
+ * Toggle bottom sheet expanded/collapsed
+ */
+function toggleBottomSheet() {
+  sessionLogState.isExpanded = !sessionLogState.isExpanded;
+  
+  if (logBottomSheet) {
+    if (sessionLogState.isExpanded) {
+      logBottomSheet.classList.add('open');
+    } else {
+      logBottomSheet.classList.remove('open');
+    }
+  }
+}
+
+/**
+ * Add entry to session log
+ * @param {string} timestamp - ISO timestamp
+ * @param {string} lat - Latitude
+ * @param {string} lon - Longitude
+ * @param {string} eventsStr - Events string (e.g., "4e(12),b7(0)" or "None")
+ */
+function addLogEntry(timestamp, lat, lon, eventsStr) {
+  const logLine = `${timestamp} | ${lat},${lon} | ${eventsStr}`;
+  const entry = parseLogEntry(logLine);
+  
+  if (entry) {
+    sessionLogState.entries.push(entry);
+    renderLogEntries();
+    updateLogSummary();
+    
+    // Also update desktop log if it exists
+    if (sessionPingsDesktop) {
+      const li = document.createElement('li');
+      li.textContent = logLine;
+      sessionPingsDesktop.appendChild(li);
+      sessionPingsDesktop.scrollTop = sessionPingsDesktop.scrollHeight;
+    }
+  }
+}
+
 // ---- Ping ----
 /**
  * Acquire fresh GPS coordinates and update state
@@ -1849,7 +2088,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
  * @param {string} payload - The ping message
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
- * @returns {HTMLElement|null} The list item element for later updates, or null
+ * @returns {Object|null} The log entry object for later updates, or null
  */
 function logPingToUI(payload, lat, lon) {
   // Use ISO format for data storage but user-friendly format for display
@@ -1860,39 +2099,55 @@ function logPingToUI(payload, lat, lon) {
     lastPingEl.textContent = `${now.toLocaleString()} — ${payload}`;
   }
 
-  if (sessionPingsEl) {
-    // Create log entry with placeholder for repeater data
-    // Format: timestamp | lat,lon | repeaters (using ISO for consistency with requirements)
-    const line = `${isoStr} | ${lat.toFixed(5)},${lon.toFixed(5)} | ...`;
-    const li = document.createElement('li');
-    li.textContent = line;
-    li.setAttribute('data-timestamp', isoStr);
-    li.setAttribute('data-lat', lat.toFixed(5));
-    li.setAttribute('data-lon', lon.toFixed(5));
-    sessionPingsEl.appendChild(li);
-    // Auto-scroll to bottom
-    sessionPingsEl.scrollTop = sessionPingsEl.scrollHeight;
-    return li;
-  }
+  // Create log entry with placeholder for repeater data
+  const logData = {
+    timestamp: isoStr,
+    lat: lat.toFixed(5),
+    lon: lon.toFixed(5),
+    eventsStr: '...'
+  };
   
-  return null;
+  // Add to session log (this will handle both mobile and desktop)
+  addLogEntry(logData.timestamp, logData.lat, logData.lon, logData.eventsStr);
+  
+  return logData;
 }
 
 /**
  * Update a ping log entry with repeater telemetry
- * @param {HTMLElement|null} logEntry - The log entry element to update
+ * @param {Object|null} logData - The log data object to update
  * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
  */
-function updatePingLogWithRepeaters(logEntry, repeaters) {
-  if (!logEntry) return;
+function updatePingLogWithRepeaters(logData, repeaters) {
+  if (!logData) return;
   
-  const timestamp = logEntry.getAttribute('data-timestamp');
-  const lat = logEntry.getAttribute('data-lat');
-  const lon = logEntry.getAttribute('data-lon');
   const repeaterStr = formatRepeaterTelemetry(repeaters);
   
-  // Update the log entry with final repeater data
-  logEntry.textContent = `${timestamp} | ${lat},${lon} | ${repeaterStr}`;
+  // Find and update the entry in sessionLogState
+  const entryIndex = sessionLogState.entries.findIndex(
+    e => e.timestamp === logData.timestamp && e.lat === logData.lat && e.lon === logData.lon
+  );
+  
+  if (entryIndex !== -1) {
+    // Update the entry
+    const logLine = `${logData.timestamp} | ${logData.lat},${logData.lon} | ${repeaterStr}`;
+    const updatedEntry = parseLogEntry(logLine);
+    
+    if (updatedEntry) {
+      sessionLogState.entries[entryIndex] = updatedEntry;
+      renderLogEntries();
+      updateLogSummary();
+    }
+  }
+  
+  // Also update desktop log if it exists
+  if (sessionPingsDesktop) {
+    const listItems = sessionPingsDesktop.querySelectorAll('li');
+    const lastItem = listItems[listItems.length - 1];
+    if (lastItem && lastItem.textContent.includes('...')) {
+      lastItem.textContent = `${logData.timestamp} | ${logData.lat},${logData.lon} | ${repeaterStr}`;
+    }
+  }
   
   debugLog(`Updated ping log entry with repeater telemetry: ${repeaterStr}`);
 }
@@ -2552,6 +2807,31 @@ export async function onLoad() {
       updateConnectButtonState();
     });
   });
+
+  // Mobile Session Log Bottom Sheet event listeners
+  if (logSummaryBar) {
+    logSummaryBar.addEventListener("click", () => {
+      debugLog("Log summary bar clicked - expanding bottom sheet");
+      toggleBottomSheet();
+    });
+  }
+  
+  if (logCollapseBtn) {
+    logCollapseBtn.addEventListener("click", () => {
+      debugLog("Log collapse button clicked");
+      toggleBottomSheet();
+    });
+  }
+  
+  // Close bottom sheet when tapping outside
+  if (logBottomSheet) {
+    logBottomSheet.addEventListener("click", (e) => {
+      if (e.target === logBottomSheet) {
+        debugLog("Clicked outside bottom sheet - collapsing");
+        toggleBottomSheet();
+      }
+    });
+  }
 
   // Prompt location permission early (optional)
   debugLog("Requesting initial location permission");
