@@ -179,9 +179,13 @@ body,
   white-space: nowrap;
 }
 
-/* Mobile Session Log Bottom Sheet */
+/* Session Log - Static Expandable Section */
 #logBottomSheet.open {
-    translate: 0 0;
+    display: block !important;
+}
+
+#logExpandArrow.expanded {
+    transform: rotate(180deg);
 }
 
 /* Log Entry Styling */
@@ -262,11 +266,4 @@ body,
 .snr-green .chipSnr {
   color: #4ade80;
   font-weight: 600;
-}
-
-/* Desktop log compatibility */
-@media (min-width: 768px) {
-  #logSummaryBar {
-    display: none;
-  }
 }

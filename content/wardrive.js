@@ -119,15 +119,13 @@ setConnStatus("Disconnected", STATUS_COLORS.error);
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
 
-// Mobile Session Log Bottom Sheet selectors
+// Session Log selectors
 const logSummaryBar = $("logSummaryBar");
 const logBottomSheet = $("logBottomSheet");
-const logCollapseBtn = $("logCollapseBtn");
 const logScrollContainer = $("logScrollContainer");
 const logCount = $("logCount");
 const logLastTime = $("logLastTime");
 const logLastSnr = $("logLastSnr");
-const sessionPingsDesktop = $("sessionPingsDesktop");
 
 // Session log state
 const sessionLogState = {
@@ -1906,14 +1904,23 @@ function updateLogSummary() {
 }
 
 /**
- * Render all log entries to the mobile view
+ * Render all log entries to the session log
  */
 function renderLogEntries() {
   if (!sessionPingsEl) return;
   
   sessionPingsEl.innerHTML = '';
   
-  // Render newest first for mobile
+  if (sessionLogState.entries.length === 0) {
+    // Show placeholder when no entries
+    const placeholder = document.createElement('div');
+    placeholder.className = 'text-xs text-slate-500 italic text-center py-4';
+    placeholder.textContent = 'No pings logged yet';
+    sessionPingsEl.appendChild(placeholder);
+    return;
+  }
+  
+  // Render newest first
   const entries = [...sessionLogState.entries].reverse();
   
   entries.forEach(entry => {
@@ -1928,7 +1935,7 @@ function renderLogEntries() {
 }
 
 /**
- * Toggle bottom sheet expanded/collapsed
+ * Toggle session log expanded/collapsed
  */
 function toggleBottomSheet() {
   sessionLogState.isExpanded = !sessionLogState.isExpanded;
@@ -1936,8 +1943,20 @@ function toggleBottomSheet() {
   if (logBottomSheet) {
     if (sessionLogState.isExpanded) {
       logBottomSheet.classList.add('open');
+      logBottomSheet.classList.remove('hidden');
     } else {
       logBottomSheet.classList.remove('open');
+      logBottomSheet.classList.add('hidden');
+    }
+  }
+  
+  // Toggle arrow rotation
+  const logExpandArrow = document.getElementById('logExpandArrow');
+  if (logExpandArrow) {
+    if (sessionLogState.isExpanded) {
+      logExpandArrow.classList.add('expanded');
+    } else {
+      logExpandArrow.classList.remove('expanded');
     }
   }
 }
@@ -1957,14 +1976,6 @@ function addLogEntry(timestamp, lat, lon, eventsStr) {
     sessionLogState.entries.push(entry);
     renderLogEntries();
     updateLogSummary();
-    
-    // Also update desktop log if it exists
-    if (sessionPingsDesktop) {
-      const li = document.createElement('li');
-      li.textContent = logLine;
-      sessionPingsDesktop.appendChild(li);
-      sessionPingsDesktop.scrollTop = sessionPingsDesktop.scrollHeight;
-    }
   }
 }
 
@@ -2137,15 +2148,6 @@ function updatePingLogWithRepeaters(logData, repeaters) {
       sessionLogState.entries[entryIndex] = updatedEntry;
       renderLogEntries();
       updateLogSummary();
-    }
-  }
-  
-  // Also update desktop log if it exists
-  if (sessionPingsDesktop) {
-    const listItems = sessionPingsDesktop.querySelectorAll('li');
-    const lastItem = listItems[listItems.length - 1];
-    if (lastItem && lastItem.textContent.includes('...')) {
-      lastItem.textContent = `${logData.timestamp} | ${logData.lat},${logData.lon} | ${repeaterStr}`;
     }
   }
   
@@ -2808,28 +2810,11 @@ export async function onLoad() {
     });
   });
 
-  // Mobile Session Log Bottom Sheet event listeners
+  // Session Log event listener
   if (logSummaryBar) {
     logSummaryBar.addEventListener("click", () => {
-      debugLog("Log summary bar clicked - expanding bottom sheet");
+      debugLog("Log summary bar clicked - toggling session log");
       toggleBottomSheet();
-    });
-  }
-  
-  if (logCollapseBtn) {
-    logCollapseBtn.addEventListener("click", () => {
-      debugLog("Log collapse button clicked");
-      toggleBottomSheet();
-    });
-  }
-  
-  // Close bottom sheet when tapping outside
-  if (logBottomSheet) {
-    logBottomSheet.addEventListener("click", (e) => {
-      if (e.target === logBottomSheet) {
-        debugLog("Clicked outside bottom sheet - collapsing");
-        toggleBottomSheet();
-      }
     });
   }
 
