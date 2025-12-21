@@ -229,7 +229,7 @@ function setStatus(text, color = STATUS_COLORS.idle, immediate = false) {
  */
 function applyStatusImmediately(text, color) {
   statusEl.textContent = text;
-  statusEl.className = `font-semibold ${color}`;
+  statusEl.className = `text-sm font-medium ${color}`;
   statusMessageState.lastSetTime = Date.now();
   statusMessageState.currentText = text;
   statusMessageState.currentColor = color;
