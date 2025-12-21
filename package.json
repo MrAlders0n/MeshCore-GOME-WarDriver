@@ -1,0 +1,22 @@
+{
+  "name": "meshcore-gome-wardriver",
+  "version": "1.4.1",
+  "description": "Browser-based Progressive Web App for wardriving with MeshCore devices",
+  "private": true,
+  "scripts": {
+    "build:css": "npx @tailwindcss/cli -i content/tailwind-in.css -o content/tailwind.css",
+    "watch:css": "npx @tailwindcss/cli -i content/tailwind-in.css -o content/tailwind.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.0",
+    "tailwindcss": "^4.1.0"
+  },
+  "keywords": [
+    "meshcore",
+    "wardrive",
+    "bluetooth",
+    "pwa"
+  ],
+  "author": "MrAlders0n",
+  "license": "MIT"
+}
