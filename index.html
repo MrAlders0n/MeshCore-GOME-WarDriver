@@ -31,7 +31,7 @@
 
 <body class="bg-slate-900 text-slate-100">
   <main class="min-h-screen flex items-start justify-center p-4">
-    <div class="w-full max-w-xl space-y-4">
+    <div class="w-full max-w-xl space-y-2">
 
       <!-- App Title -->
       <header class="flex items-center justify-between">
@@ -144,21 +144,21 @@
           src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=10000">
         </iframe>
         
-        <!-- Map Overlays - Horizontal Layout -->
-        <div class="absolute bottom-2 left-2 right-2 flex gap-2 justify-between items-end">
+        <!-- Map Overlays - Single Row Horizontal Layout -->
+        <div class="absolute bottom-2 left-2 right-2 flex gap-2 justify-between items-center">
           <!-- GPS Accuracy - Left -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap">
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap flex-shrink-0">
             <span id="gpsAcc">±-</span>
           </div>
           
-          <!-- GPS Coordinates - Center (flexible) -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 text-center flex-1">
-            <div id="gpsInfo">-</div>
-            <div id="mapGpsAge" class="text-slate-500 mt-0.5">-</div>
+          <!-- GPS Coordinates - Center (flexible but constrained) -->
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 text-center flex-1 min-w-0">
+            <div id="gpsInfo" class="truncate">-</div>
+            <div id="mapGpsAge" class="text-slate-500 mt-0.5 truncate">-</div>
           </div>
           
           <!-- Distance from Last Ping - Right -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap">
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap flex-shrink-0">
             <span id="distanceInfo">-</span>
           </div>
         </div>
@@ -166,25 +166,21 @@
 
       <!-- Control Buttons -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
-        <p id="connectHelperText" class="text-xs text-slate-400 text-center">
-          Select radio power to connect
-        </p>
-
-        <!-- Ping controls (visible when connected) -->
-        <div id="pingControls" class="grid grid-cols-2 gap-2 hidden">
+        <!-- Ping controls (always visible, disabled when not connected) -->
+        <div id="pingControls" class="grid grid-cols-2 gap-2">
           <button id="sendPingBtn"
-            class="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white disabled:opacity-40">
+            class="px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
             Send Ping
           </button>
           <button id="autoToggleBtn"
-            class="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40">
+            class="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
             Start Auto Ping
           </button>
         </div>
 
         <!-- Connect/Disconnect button (always visible, changes text/color) -->
         <button id="connectBtn"
-          class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white disabled:opacity-40">
+          class="w-full px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
           Connect
         </button>
       </section>

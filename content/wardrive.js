@@ -490,18 +490,9 @@ function enableControls(connected) {
   channelInfoEl.textContent = CHANNEL_NAME;
   updateControlsForCooldown();
   
-  // Show/hide ping controls based on connection state
-  const pingControls = document.getElementById("pingControls");
-  const connectHelperText = document.getElementById("connectHelperText");
-  if (pingControls && connectHelperText) {
-    if (connected) {
-      pingControls.classList.remove("hidden");
-      connectHelperText.classList.add("hidden");
-    } else {
-      pingControls.classList.add("hidden");
-      connectHelperText.classList.remove("hidden");
-    }
-  }
+  // Keep ping controls always visible but disable when not connected
+  // This is handled by updateControlsForCooldown() which sets disabled state
+  // No need to show/hide the controls anymore
 }
 function updateAutoButton() {
   if (state.running) {
@@ -2376,13 +2367,37 @@ document.addEventListener("visibilitychange", async () => {
   }
 });
 
+/**
+ * Update Connect button state based on radio power selection
+ */
+function updateConnectButtonState() {
+  const radioPowerSelected = getCurrentPowerSetting() !== "";
+  const isConnected = !!state.connection;
+  
+  if (!isConnected) {
+    // Only enable Connect if radio power is selected
+    connectBtn.disabled = !radioPowerSelected;
+    
+    // Update dynamic status based on power selection
+    if (!radioPowerSelected) {
+      debugLog("Radio power not selected - showing warning in status bar");
+      setDynamicStatus("Select radio power to connect", STATUS_COLORS.error);
+    } else {
+      debugLog("Radio power selected - clearing warning from status bar");
+      setDynamicStatus("Idle");
+    }
+  }
+}
+
 // ---- Bind UI & init ----
 export async function onLoad() {
   debugLog("wardrive.js onLoad() called - initializing");
   setConnStatus("Disconnected", STATUS_COLORS.error);
-  setDynamicStatus("Idle");
   enableControls(false);
   updateAutoButton();
+  
+  // Initialize Connect button state based on radio power
+  updateConnectButtonState();
 
   connectBtn.addEventListener("click", async () => {
     try {
@@ -2428,6 +2443,15 @@ export async function onLoad() {
       settingsPanel.classList.add("hidden");
     });
   }
+
+  // Add event listeners to radio power options to update Connect button state
+  const powerRadios = document.querySelectorAll('input[name="power"]');
+  powerRadios.forEach(radio => {
+    radio.addEventListener("change", () => {
+      debugLog(`Radio power changed to: ${getCurrentPowerSetting()}`);
+      updateConnectButtonState();
+    });
+  });
 
   // Prompt location permission early (optional)
   debugLog("Requesting initial location permission");

@@ -324,6 +324,14 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 #### 8. Error Messages
 
+##### Select radio power to connect
+- **Message**: `"Select radio power to connect"`
+- **Color**: Red (error)
+- **When**: On app load or when disconnected, if no radio power option is selected
+- **Terminal State**: Yes (persists until radio power is selected)
+- **Notes**: Displayed in Dynamic Status Bar to alert user that Connect button is disabled. Once radio power is selected, status changes to "Idle" (em dash) and Connect button becomes enabled.
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
 ##### Connection failed
 - **Message**: `"Connection failed"` or specific error message
 - **Color**: Red (error)
