@@ -143,7 +143,8 @@ const state = {
   distanceUpdateTimer: null, // Timer for updating distance display
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
-  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "normal")
+  wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
   repeaterTracking: {
@@ -505,6 +506,9 @@ function cleanupAllTimers() {
   
   // Clear device public key
   state.devicePublicKey = null;
+  
+  // Clear wardrive session ID
+  state.wardriveSessionId = null;
 }
 
 function enableControls(connected) {
@@ -1174,11 +1178,33 @@ async function checkCapacity(reason) {
     }
 
     const data = await response.json();
-    debugLog(`Capacity check response: allowed=${data.allowed}`);
+    debugLog(`Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}`);
 
     // Handle capacity full vs. allowed cases separately
     if (data.allowed === false && reason === "connect") {
       state.disconnectReason = "capacity_full"; // Track disconnect reason
+      return false;
+    }
+    
+    // For connect requests, validate session_id is present when allowed === true
+    if (reason === "connect" && data.allowed === true) {
+      if (!data.session_id) {
+        debugError("Capacity check returned allowed=true but session_id is missing");
+        state.disconnectReason = "session_id_error"; // Track disconnect reason
+        return false;
+      }
+      
+      // Store the session_id for use in MeshMapper API posts
+      state.wardriveSessionId = data.session_id;
+      debugLog(`Wardrive session ID received and stored: ${state.wardriveSessionId}`);
+    }
+    
+    // For disconnect requests, clear the session_id
+    if (reason === "disconnect") {
+      if (state.wardriveSessionId) {
+        debugLog(`Clearing wardrive session ID on disconnect: ${state.wardriveSessionId}`);
+        state.wardriveSessionId = null;
+      }
     }
     
     return data.allowed === true;
@@ -1205,6 +1231,18 @@ async function checkCapacity(reason) {
  */
 async function postToMeshMapperAPI(lat, lon, heardRepeats) {
   try {
+    // Validate session_id exists before posting
+    if (!state.wardriveSessionId) {
+      debugError("Cannot post to MeshMapper API: no session_id available");
+      setDynamicStatus("Error: No session ID for API post", STATUS_COLORS.error);
+      state.disconnectReason = "session_id_error"; // Track disconnect reason
+      // Disconnect after a brief delay to ensure user sees the error message
+      setTimeout(() => {
+        disconnect().catch(err => debugError(`Disconnect after missing session_id failed: ${err.message}`));
+      }, 1500);
+      return; // Exit early
+    }
+    
     const payload = {
       key: MESHMAPPER_API_KEY,
       lat,
@@ -1214,10 +1252,11 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       heard_repeats: heardRepeats,
       ver: APP_VERSION,
       test: 0,
-      iata: WARDIVE_IATA_CODE
+      iata: WARDIVE_IATA_CODE,
+      session_id: state.wardriveSessionId
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -2264,6 +2303,10 @@ async function connect() {
         debugLog("Branch: slot_revoked");
         setDynamicStatus("WarDriving slot has been revoked", STATUS_COLORS.error, true);
         debugLog("Setting terminal status for slot revocation");
+      } else if (state.disconnectReason === "session_id_error") {
+        debugLog("Branch: session_id_error");
+        setDynamicStatus("Session ID error; try reconnecting", STATUS_COLORS.error, true);
+        debugLog("Setting terminal status for session_id error");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("Branch: public_key_error");
         setDynamicStatus("Unable to read device public key; try again", STATUS_COLORS.error, true);
@@ -2295,6 +2338,7 @@ async function connect() {
       state.connection = null;
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
+      state.wardriveSessionId = null; // Clear wardrive session ID
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message

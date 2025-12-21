@@ -149,6 +149,24 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **Terminal State**: Yes
 - **Notes**: Triggers automatic disconnect
 
+##### Session ID error; try reconnecting
+- **Message**: `"Session ID error; try reconnecting"`
+- **Color**: Red (error)
+- **When**: 
+  - Capacity check returns allowed=true but session_id is missing during connection
+  - Attempting to post to MeshMapper API without a valid session_id
+- **Terminal State**: Yes (persists until user takes action)
+- **Notes**: Implements fail-closed policy - connection/posting denied if session_id is missing. Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "Session ID error; try reconnecting" (terminal)
+- **Source**: `content/wardrive.js:checkCapacity()`, `content/wardrive.js:postToMeshMapperAPI()`
+
+##### Error: No session ID for API post
+- **Message**: `"Error: No session ID for API post"`
+- **Color**: Red (error)
+- **When**: Intermediate status shown when attempting to post to MeshMapper API without a valid session_id
+- **Duration**: 1.5 seconds (visible before disconnect begins)
+- **Notes**: First status in session_id error sequence during API posting, followed by disconnect flow
+- **Source**: `content/wardrive.js:postToMeshMapperAPI()`
+
 #### 2. Channel Setup Messages
 
 ##### Looking for #wardriving channel
@@ -456,8 +474,8 @@ Status messages follow these consistent conventions:
 
 **Connection Status Bar**: 4 fixed messages (Connected, Connecting, Disconnected, Disconnecting)
 
-**Dynamic App Status Bar**: ~30 unique message patterns covering:
-- Capacity check: 7 messages
+**Dynamic App Status Bar**: ~30+ unique message patterns covering:
+- Capacity check: 9 messages (including session_id error messages)
 - Channel setup: 4 messages
 - GPS initialization: 3 messages
 - Ping operations: 6 messages
