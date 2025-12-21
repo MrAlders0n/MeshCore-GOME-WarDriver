@@ -170,6 +170,7 @@ const state = {
     repeaters: new Map(),         // Map<repeaterId, {snr, seenCount}>
     listenTimeout: null,          // Timeout handle for 7-second window
     rxLogHandler: null,           // Handler function for rx_log events
+    currentLogEntry: null,        // Current log entry being updated (for incremental UI updates)
   }
 };
 
@@ -1667,6 +1668,9 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
           snr: data.lastSnr,
           seenCount: existing.seenCount + 1
         });
+        
+        // Trigger incremental UI update since SNR changed
+        updateCurrentLogEntryWithLiveRepeaters();
       } else {
         debugLog(`Deduplication decision: keeping existing SNR for path ${pathHex} (existing ${existing.snr} >= new ${data.lastSnr})`);
         // Still increment seen count
@@ -1679,6 +1683,9 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
         snr: data.lastSnr,
         seenCount: 1
       });
+      
+      // Trigger incremental UI update for the new repeater
+      updateCurrentLogEntryWithLiveRepeaters();
     }
   } catch (error) {
     debugError(`Error processing rx_log entry: ${error.message}`, error);
@@ -1725,6 +1732,7 @@ function stopRepeaterTracking() {
   state.repeaterTracking.sentPayload = null;
   state.repeaterTracking.repeaters.clear();
   state.repeaterTracking.rxLogHandler = null;
+  state.repeaterTracking.currentLogEntry = null;
   
   return repeaters;
 }
@@ -1903,10 +1911,10 @@ function updateLogSummary() {
   debugLog(`Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
   
   if (heardCount > 0) {
-    logLastSnr.textContent = `Heard ${heardCount}`;
+    logLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
     logLastSnr.className = 'text-xs font-mono text-slate-300';
   } else {
-    logLastSnr.textContent = 'Heard 0';
+    logLastSnr.textContent = '0 Repeats';
     logLastSnr.className = 'text-xs font-mono text-slate-500';
   }
 }
@@ -2169,6 +2177,49 @@ function updatePingLogWithRepeaters(logData, repeaters) {
 }
 
 /**
+ * Incrementally update the current ping log entry as repeaters are detected
+ * This provides real-time updates during the RX listening window
+ */
+function updateCurrentLogEntryWithLiveRepeaters() {
+  // Only update if we're actively listening and have a current log entry
+  if (!state.repeaterTracking.isListening || !state.repeaterTracking.currentLogEntry) {
+    return;
+  }
+  
+  const logData = state.repeaterTracking.currentLogEntry;
+  
+  // Convert current repeaters Map to array format
+  const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
+    repeaterId: id,
+    snr: data.snr
+  }));
+  
+  // Sort by repeater ID for deterministic output
+  repeaters.sort((a, b) => a.repeaterId.localeCompare(b.repeaterId));
+  
+  const repeaterStr = formatRepeaterTelemetry(repeaters);
+  
+  // Find and update the entry in sessionLogState
+  const entryIndex = sessionLogState.entries.findIndex(
+    e => e.timestamp === logData.timestamp && e.lat === logData.lat && e.lon === logData.lon
+  );
+  
+  if (entryIndex !== -1) {
+    // Update the entry with current repeater data
+    const logLine = `${logData.timestamp} | ${logData.lat},${logData.lon} | ${repeaterStr}`;
+    const updatedEntry = parseLogEntry(logLine);
+    
+    if (updatedEntry) {
+      sessionLogState.entries[entryIndex] = updatedEntry;
+      renderLogEntries();
+      updateLogSummary();
+    }
+  }
+  
+  debugLog(`Incrementally updated ping log entry: ${repeaters.length} repeater(s) detected so far`);
+}
+
+/**
  * Send a wardrive ping with current GPS coordinates
  * @param {boolean} manual - Whether this is a manual ping (true) or auto ping (false)
  */
@@ -2299,6 +2350,9 @@ async function sendPing(manual = false) {
     
     // Create UI log entry with placeholder for repeater data
     const logEntry = logPingToUI(payload, lat, lon);
+    
+    // Store log entry in repeater tracking state for incremental updates
+    state.repeaterTracking.currentLogEntry = logEntry;
     
     // Start RX listening countdown
     // The minimum 500ms visibility of "Ping sent" is enforced by setStatus()
