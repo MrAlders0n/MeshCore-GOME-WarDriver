@@ -147,21 +147,24 @@
           src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=10000">
         </iframe>
 
-        <!-- Map Overlays - Single Row Horizontal Layout -->
-        <div class="absolute bottom-2 left-2 right-2 flex gap-2 justify-between items-center">
-          <!-- GPS Accuracy - Left -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap flex-shrink-0">
+        <!-- Map Overlays -->
+        <!-- Top-right corner: GPS Accuracy and Distance stacked vertically -->
+        <div class="absolute top-2 right-2 z-10 flex flex-col gap-2 text-right">
+          <!-- GPS Accuracy -->
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300">
             <span id="gpsAcc">±-</span>
           </div>
           
-          <!-- GPS Coordinates - Center (flexible but constrained) -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 text-center flex-1 min-w-0">
-            <div id="gpsInfo" class="truncate">-</div>
-          </div>
-          
-          <!-- Distance from Last Ping - Right -->
-          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 whitespace-nowrap flex-shrink-0">
+          <!-- Distance from Last Ping -->
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300">
             <span id="distanceInfo">-</span>
+          </div>
+        </div>
+        
+        <!-- Bottom: GPS Coordinates spanning full width -->
+        <div class="absolute bottom-2 left-2 right-2 z-10">
+          <div class="bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-300 text-center">
+            <div id="gpsInfo">-</div>
           </div>
         </div>
       </section>
