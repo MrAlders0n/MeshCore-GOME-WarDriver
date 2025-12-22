@@ -1616,7 +1616,7 @@ async function handleSessionLogTracking(packet, data) {
     debugLog(`[SESSION LOG] Processing rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
     
     // VALIDATION STEP 1: Header validation for echo detection
-    // Only GroupText packets (0x15) can be echoes of our channel messages
+    // Only GroupText packets (CHANNEL_GROUP_TEXT_HEADER) can be echoes of our channel messages
     if (packet.header !== CHANNEL_GROUP_TEXT_HEADER) {
       debugLog(`[SESSION LOG] Ignoring: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')})`);
       return false;
@@ -1807,7 +1807,7 @@ async function handleUnifiedRxLogEvent(data) {
     debugLog(`[UNIFIED RX] Packet header: 0x${packet.header.toString(16).padStart(2, '0')}`);
     
     // DELEGATION: If Session Log is actively tracking, delegate to it first
-    // Session Log requires header validation (CHANNEL_GROUP_TEXT_HEADER) and will handle validation internally
+    // Session Log requires header validation (CHANNEL_GROUP_TEXT_HEADER = 0x15 for GroupText packets) and will handle validation internally
     if (state.repeaterTracking.isListening) {
       debugLog(`[UNIFIED RX] Session Log is tracking - delegating to Session Log handler`);
       const wasTracked = await handleSessionLogTracking(packet, data);
