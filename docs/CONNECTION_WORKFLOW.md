@@ -313,7 +313,7 @@ When a wardriving slot is revoked during an active session (detected during API 
 **Revocation Sequence:**
 
 1. **Detection**
-   - During "Posting to API" operation
+   - During background API POST operation (runs asynchronously after RX window)
    - API returns `{"allowed": false, ...}`
    - Detected in `postToMeshMapperAPI()` response handler
 
@@ -321,6 +321,7 @@ When a wardriving slot is revoked during an active session (detected during API 
    - **Dynamic Status**: `"Error: Posting to API (Revoked)"` (red)
    - Sets `state.disconnectReason = "slot_revoked"`
    - Visible for 1.5 seconds
+   - **Note**: User may already be seeing "Idle" or "Waiting for next ping" before this error appears (because API runs in background)
 
 3. **Disconnect Initiated**
    - Calls `disconnect()` after 1.5s delay
@@ -334,16 +335,23 @@ When a wardriving slot is revoked during an active session (detected during API 
    - **Dynamic Status**: `"WarDriving slot has been revoked"` (red, terminal - NO "Disconnected:" prefix)
    - This is the final terminal status
 
-**Complete Revocation Flow:**
+**Complete Revocation Flow (Updated for background API posting):**
 ```
 Connection Status: (unchanged) → "Disconnecting" → "Disconnected"
-Dynamic Status: "Posting to API" → "Error: Posting to API (Revoked)" → "—" → "WarDriving slot has been revoked"
+Dynamic Status: "Idle"/"Waiting for next ping" → "Error: Posting to API (Revoked)" → "—" → "WarDriving slot has been revoked"
 ```
+**Timeline:**
+- T+0s: RX window completes, status shows "Idle" or "Waiting for next ping", next timer starts
+- T+0-3s: Background API post running (3s delay, then POST) - silent
+- T+3-4s: Revocation detected, "Error: Posting to API (Revoked)" shown (1.5s)
+- T+4.5s: Disconnect initiated
+- T+5s: Terminal status "WarDriving slot has been revoked"
 
 **Key Differences from Normal Disconnect:**
 - Normal disconnect: Dynamic Status shows `"—"` (em dash)
 - Revocation: Dynamic Status shows `"WarDriving slot has been revoked"` (red error, no prefix)
 - Revocation shows intermediate "Error: Posting to API (Revoked)" state
+- With the new ping/repeat flow, revocation may be detected after user already sees "Idle" or "Waiting for next ping" (because API runs in background)
 
 ## Workflow Diagrams
 
@@ -589,6 +597,120 @@ stateDiagram-v2
 - Clear transitions
 - Error → Disconnected
 - Recovery always possible
+
+## Ping/Repeat Listener Flow
+
+### Overview
+
+The ping/repeat listener flow manages the complete lifecycle of a wardrive ping operation, from sending the ping to listening for repeater echoes to posting data to the MeshMapper API.
+
+**Key Design Change (v1.4.2+):** API posting now runs in the background (asynchronously) to prevent blocking the main ping cycle. This allows the next ping timer to start immediately after the RX listening window completes, without waiting for the API POST to finish.
+
+### New Ping/Repeat Flow (v1.4.2+)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. Ping Sent                                                        │
+│    - Send ping to mesh network                                      │
+│    - Start repeater echo tracking                                   │
+│    - Show "Ping sent" status                                        │
+│    - Lock ping controls                                             │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 2. RX Listening Window (10 seconds)                                 │
+│    - Listen for repeater echoes                                     │
+│    - Show "Listening for heard repeats (Xs)" countdown              │
+│    - Track all repeaters that forward the ping                      │
+│    - Update session log in real-time                                │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 3. RX Window Complete - IMMEDIATE ACTIONS                           │
+│    - Stop RX listening countdown                                    │
+│    - Finalize heard repeats (stop tracking)                         │
+│    - Update UI log with final repeater data                         │
+│    - **Unlock ping controls** ← NEW: Don't wait for API             │
+│    - **Start next ping timer** ← NEW: Don't wait for API            │
+│    - **Set status to "Idle"/"Waiting for next ping"**               │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ 4. Background API Posting (Async, Non-Blocking)                     │
+│    - Delay 3 seconds (silent, no status message)                    │
+│    - POST ping data to MeshMapper API                               │
+│    - **Success**: Silent (no UI notification)                       │
+│    - **Error**: Show "Error: API post failed"                       │
+│    - Refresh coverage map after POST completes                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Changes from Previous Flow (v1.4.1 and earlier)
+
+**Old Flow:**
+1. Ping sent
+2. Listen for repeats (7 seconds)
+3. **Wait for API post to complete** (3s delay + POST time)
+4. **Then** unlock controls and start next timer
+5. Status: "Ping sent" → "Listening (7s)" → "Posting to API" → "Idle"/"Waiting"
+
+**New Flow:**
+1. Ping sent
+2. Listen for repeats (10 seconds) ← **Increased from 7s to 10s**
+3. **Immediately** unlock controls and start next timer ← **Key change**
+4. **Background** API post (silent on success, error only if fails)
+5. Status: "Ping sent" → "Listening (10s)" → "Idle"/"Waiting" ← **No "Posting to API"**
+
+### Benefits
+
+1. **Faster cycle times**: Next ping can start immediately after 10s RX window, not waiting for API
+2. **Better UX**: User sees smooth progression without API delays blocking the UI
+3. **More repeater data**: 10-second listen window (vs 7s) captures more mesh echoes
+4. **Cleaner UI**: API success messages suppressed, only errors shown
+5. **Non-blocking**: API failures don't stall the ping cycle
+
+### Implementation Details
+
+**Functions:**
+- `postApiInBackground(lat, lon, accuracy, heardRepeats)` - New async function for background API posting
+- `sendPing(manual)` - Refactored to start next timer immediately after RX window
+- `RX_LOG_LISTEN_WINDOW_MS` - Increased from 7000ms to 10000ms
+
+**Error Handling:**
+- API POST failures are caught with `.catch()` handler
+- Error message shown to user: "Error: API post failed"
+- Main ping cycle continues unaffected by API failures
+- Background failures don't crash or stall the application
+
+**Debug Logging:**
+- `[DEBUG] Backgrounding API post for coordinates: ...`
+- `[DEBUG] Starting 3-second delay before API POST`
+- `[DEBUG] 3-second delay complete, posting to API`
+- `[DEBUG] Background API post completed successfully`
+- `[DEBUG] Background API post failed: ...`
+
+### Status Message Behavior
+
+**Visible to User:**
+- "Ping sent" (500ms minimum)
+- "Listening for heard repeats (10s)" (countdown, 10 seconds)
+- "Idle" or "Waiting for next ping (Xs)" (immediately after RX window)
+- "Error: API post failed" (only if background API fails)
+
+**Not Visible (Suppressed):**
+- ~~"Posting to API"~~ - No longer shown for successful API posts
+- API success confirmation - Silent operation
+
+### Timing Analysis
+
+**Total time from ping to next ping (Auto mode, 30s interval):**
+- Old flow: 10s (ping) + 7s (listen) + 3s (delay) + 0.5s (API) + 30s (interval) = ~50.5s between pings
+- New flow: 10s (ping) + 10s (listen) + 30s (interval) = ~50s between pings (API runs in parallel)
+
+**Actual improvement:** Next timer starts ~3.5s earlier (no waiting for API), better responsiveness
 
 ## Passive RX Log Listening
 

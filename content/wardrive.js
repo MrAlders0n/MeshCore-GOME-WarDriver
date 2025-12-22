@@ -44,7 +44,7 @@ const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping se
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second) to pause
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
-const RX_LOG_LISTEN_WINDOW_MS = 7000;          // Listen window for repeater echoes (7 seconds)
+const RX_LOG_LISTEN_WINDOW_MS = 10000;         // Listen window for repeater echoes (10 seconds)
 
 // Pre-computed channel hash and key for the wardriving channel
 // These will be computed once at startup and used for message correlation and decryption
@@ -1320,6 +1320,47 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
     // Log error but don't fail the ping
     debugError(`MeshMapper API post failed: ${error.message}`);
   }
+}
+
+/**
+ * Post to MeshMapper API in background (non-blocking)
+ * This function runs asynchronously after the RX listening window completes
+ * UI status messages are suppressed for successful posts, errors are shown
+ * @param {number} lat - Latitude
+ * @param {number} lon - Longitude
+ * @param {number} accuracy - GPS accuracy in meters
+ * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
+ */
+async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
+  debugLog(`postApiInBackground called with heard_repeats="${heardRepeats}"`);
+  
+  // Hidden 3-second delay before API POST (no user-facing status message)
+  debugLog("Starting 3-second delay before API POST");
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  debugLog("3-second delay complete, posting to API");
+  try {
+    await postToMeshMapperAPI(lat, lon, heardRepeats);
+    debugLog("Background API post completed successfully");
+    // No success status message - suppress from UI
+  } catch (error) {
+    debugError("Background API post failed:", error);
+    // Errors are propagated to caller for user notification
+    throw error;
+  }
+  
+  // Update map after API post
+  debugLog("Scheduling coverage map refresh");
+  setTimeout(() => {
+    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
+    
+    if (shouldRefreshMap) {
+      debugLog(`Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
+      scheduleCoverageRefresh(lat, lon);
+    } else {
+      debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
+    }
+  }, MAP_REFRESH_DELAY_MS);
 }
 
 /**
@@ -2712,7 +2753,7 @@ async function sendPing(manual = false) {
 
     const ch = await ensureChannel();
     
-    // Capture GPS coordinates at ping time - these will be used for API post after 7s delay
+    // Capture GPS coordinates at ping time - these will be used for API post after 10s delay
     state.capturedPingCoords = { lat, lon, accuracy };
     debugLog(`GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
     
@@ -2750,7 +2791,7 @@ async function sendPing(manual = false) {
       startRxListeningCountdown(RX_LOG_LISTEN_WINDOW_MS);
     }
     
-    // Schedule the sequence: listen for 7s, THEN finalize repeats and post to API
+    // Schedule the sequence: listen for 10s, THEN finalize repeats and background the API post
     // This timeout is stored in meshMapperTimer for cleanup purposes
     // Capture coordinates locally to prevent race conditions with concurrent pings
     const capturedCoords = state.capturedPingCoords;
@@ -2771,26 +2812,44 @@ async function sendPing(manual = false) {
       const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
       debugLog(`Formatted heard_repeats for API: "${heardRepeatsStr}"`);
       
+      // Update status and start next timer IMMEDIATELY (before API post)
+      // This is the key change: we don't wait for API to complete
+      if (state.connection) {
+        if (state.running) {
+          // Check if we should resume a paused auto countdown (manual ping during auto mode)
+          const resumed = resumeAutoCountdown();
+          if (!resumed) {
+            // No paused timer to resume, schedule new auto ping (this was an auto ping)
+            debugLog("Scheduling next auto ping immediately after RX window");
+            scheduleNextAutoPing();
+          } else {
+            debugLog("Resumed auto countdown after manual ping");
+          }
+        } else {
+          debugLog("Setting dynamic status to Idle (manual mode)");
+          setDynamicStatus("Idle");
+        }
+      }
+      
+      // Unlock ping controls immediately (don't wait for API)
+      unlockPingControls("after RX listening window completion");
+      
+      // Background the API posting (runs asynchronously, doesn't block)
       // Use captured coordinates for API post (not current GPS position)
       if (capturedCoords) {
         const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = capturedCoords;
-        debugLog(`Using captured ping coordinates for API post: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
+        debugLog(`Backgrounding API post for coordinates: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
         
-        // Post to API with heard repeats data
-        await postApiAndRefreshMap(apiLat, apiLon, apiAccuracy, heardRepeatsStr);
+        // Post to API in background (async, fire-and-forget with error handling)
+        postApiInBackground(apiLat, apiLon, apiAccuracy, heardRepeatsStr).catch(error => {
+          debugError(`Background API post failed: ${error.message}`, error);
+          // Show error to user only if API fails
+          setDynamicStatus("Error: API post failed", STATUS_COLORS.error);
+        });
       } else {
         // This should never happen as coordinates are always captured before ping
         debugError(`CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
         debugError(`Skipping API post to avoid posting incorrect coordinates`);
-        
-        // Unlock ping controls since API post is being skipped
-        unlockPingControls("after skipping API post due to missing coordinates");
-        
-        // Fix 2: Schedule next auto ping if in auto mode to prevent getting stuck
-        if (state.running && !state.autoTimerId) {
-          debugLog("Scheduling next auto ping after skipped API post");
-          scheduleNextAutoPing();
-        }
       }
       
       // Clear timer reference

@@ -127,20 +127,22 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 ##### WarDriving slot has been revoked
 - **Message**: `"WarDriving slot has been revoked"`
 - **Color**: Red (error)
-- **When**: During active session, API returns allowed=false during ping posting
+- **When**: During active session, API returns allowed=false during background ping posting
 - **Terminal State**: Yes (persists until user takes action)
-- **Sequence**: 
-  1. "Posting to API" (blue)
-  2. "Error: Posting to API (Revoked)" (red, 1.5s)
-  3. Connection bar: "Disconnecting" → "Disconnected"
-  4. Dynamic bar: "WarDriving slot has been revoked" (terminal)
+- **Sequence** (Updated for background API posting): 
+  1. RX listening window completes → Status shows "Idle" or "Waiting for next ping"
+  2. Background API post detects revocation (silent, no status change yet)
+  3. "Error: Posting to API (Revoked)" (red, 1.5s)
+  4. Connection bar: "Disconnecting" → "Disconnected"
+  5. Dynamic bar: "WarDriving slot has been revoked" (terminal)
+- **Notes**: With the new ping/repeat flow, revocation is detected during the background API post (which runs after the RX window completes and next timer starts)
 
 ##### Error: Posting to API (Revoked)
 - **Message**: `"Error: Posting to API (Revoked)"`
 - **Color**: Red (error)
-- **When**: Intermediate status shown when slot revocation detected during API posting
+- **When**: Intermediate status shown when slot revocation detected during background API posting
 - **Duration**: 1.5 seconds (visible before disconnect begins)
-- **Notes**: First status in revocation sequence, followed by disconnect flow
+- **Notes**: First visible status in revocation sequence, followed by disconnect flow. Appears after background API post detects revocation.
 
 ##### Unable to read device public key; try again
 - **Message**: `"Unable to read device public key; try again"`
@@ -280,7 +282,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Message**: `"Listening for heard repeats (Xs)"` (X is dynamic countdown)
 - **Color**: Sky blue (info)
 - **When**: After successful ping, listening for repeater echoes
-- **Duration**: 7 seconds total
+- **Duration**: 10 seconds total (changed from 7 seconds)
 - **Minimum Visibility**: 500ms for first message, immediate for countdown updates
 - **Source**: `content/wardrive.js:rxListeningCountdownTimer`
 
@@ -322,22 +324,31 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 #### 6. API and Map Update Messages
 
-##### Posting to API
+##### Posting to API (DEPRECATED - No longer shown)
 - **Message**: `"Posting to API"`
 - **Color**: Sky blue (info)
-- **When**: After RX listening window, posting ping data to MeshMapper API
-- **Timing**: Visible during API POST operation (3-second hidden delay + API call time, typically ~3.5-4.5s total)
-- **Source**: `content/wardrive.js:postApiAndRefreshMap()`
+- **When**: ~~After RX listening window, posting ping data to MeshMapper API~~ **NO LONGER SHOWN**
+- **Timing**: ~~Visible during API POST operation (3-second hidden delay + API call time, typically ~3.5-4.5s total)~~ **SUPPRESSED**
+- **Notes**: As of the ping/repeat listener refactoring, API posting now runs in the background without showing status messages. Success is silent; only errors are displayed.
+- **Source**: ~~`content/wardrive.js:postApiAndRefreshMap()`~~ Replaced by `postApiInBackground()`
+
+##### Error: API post failed
+- **Message**: `"Error: API post failed"`
+- **Color**: Red (error)
+- **When**: Background API POST fails during asynchronous posting (after RX listening window completes)
+- **Notes**: This is the only API-related message now shown to users during normal ping operations. Success is silent.
+- **Source**: `content/wardrive.js:postApiInBackground()` error handler
 
 ##### — (em dash)
 - **Message**: `"—"` (em dash character)
 - **Color**: Slate (idle)
 - **When**: 
-  - Manual mode after API post completes
+  - Manual mode immediately after RX listening window completes (changed from "after API post completes")
   - After successful connection (shows "Connected" in connection bar)
   - Normal disconnect (shows "Disconnected" in connection bar)
   - Any time there is no active message to display
 - **Purpose**: Placeholder to indicate "no message" state
+- **Notes**: With the new ping/repeat listener flow, the em dash appears immediately after the 10-second RX window, not after API posting (which now runs in background)
 - **Source**: Multiple locations - `content/wardrive.js`
 
 #### 7. Auto Mode Messages
