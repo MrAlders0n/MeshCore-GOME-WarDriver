@@ -78,6 +78,7 @@ const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
+const MESHMAPPER_RX_LOG_API_URL = null;  // TODO: Set when API endpoint is ready
 
 // Static for now; will be made dynamic later.
 const WARDIVE_IATA_CODE = "YOW";
@@ -127,11 +128,29 @@ const logCount = $("logCount");
 const logLastTime = $("logLastTime");
 const logLastSnr = $("logLastSnr");
 
+// RX Log selectors
+const rxLogSummaryBar = $("rxLogSummaryBar");
+const rxLogBottomSheet = $("rxLogBottomSheet");
+const rxLogScrollContainer = $("rxLogScrollContainer");
+const rxLogCount = $("rxLogCount");
+const rxLogLastTime = $("rxLogLastTime");
+const rxLogLastRepeater = $("rxLogLastRepeater");
+const rxLogEntries = $("rxLogEntries");
+const rxLogExpandArrow = $("rxLogExpandArrow");
+
 // Session log state
 const sessionLogState = {
   entries: [],  // Array of parsed log entries
   isExpanded: false,
   autoScroll: true
+};
+
+// RX log state (passive observations)
+const rxLogState = {
+  entries: [],  // Array of parsed RX log entries
+  isExpanded: false,
+  autoScroll: true,
+  maxEntries: 100  // Limit to prevent memory issues
 };
 
 // ---- State ----
@@ -171,6 +190,11 @@ const state = {
     listenTimeout: null,          // Timeout handle for 7-second window
     rxLogHandler: null,           // Handler function for rx_log events
     currentLogEntry: null,        // Current log entry being updated (for incremental UI updates)
+  },
+  passiveRxTracking: {
+    isListening: false,           // Whether we're currently listening passively
+    rxLogHandler: null,           // Handler function for passive rx_log events
+    entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
   }
 };
 
@@ -1752,6 +1776,138 @@ function formatRepeaterTelemetry(repeaters) {
   return repeaters.map(r => `${r.repeaterId}(${r.snr})`).join(',');
 }
 
+// ---- Passive RX Log Listening ----
+
+/**
+ * Handle passive RX log event - monitors all incoming packets
+ * Extracts the LAST hop from the path (direct repeater) and records observation
+ * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ */
+async function handlePassiveRxLogEvent(data) {
+  try {
+    debugLog(`[PASSIVE RX] Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    
+    // Parse the packet from raw data
+    const packet = Packet.fromBytes(data.raw);
+    
+    // VALIDATION STEP 1: Header validation
+    // Expected header for channel GroupText packets: 0x15
+    const EXPECTED_HEADER = 0x15;
+    if (packet.header !== EXPECTED_HEADER) {
+      debugLog(`[PASSIVE RX] Ignoring: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')})`);
+      return;
+    }
+    
+    debugLog(`[PASSIVE RX] Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
+    
+    // VALIDATION STEP 2: Verify this message is for our wardriving channel
+    if (packet.payload.length < 3) {
+      debugLog(`[PASSIVE RX] Ignoring: payload too short`);
+      return;
+    }
+    
+    const packetChannelHash = packet.payload[0];
+    if (WARDRIVING_CHANNEL_HASH !== null && packetChannelHash !== WARDRIVING_CHANNEL_HASH) {
+      debugLog(`[PASSIVE RX] Ignoring: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')})`);
+      return;
+    }
+    
+    debugLog(`[PASSIVE RX] Channel hash match confirmed`);
+    
+    // VALIDATION STEP 3: Check path length (need at least one hop)
+    if (packet.path.length === 0) {
+      debugLog(`[PASSIVE RX] Ignoring: no path (direct transmission, not via repeater)`);
+      return;
+    }
+    
+    // Extract LAST hop from path (the repeater that directly delivered to us)
+    const lastHopId = packet.path[packet.path.length - 1];
+    const repeaterId = lastHopId.toString(16).padStart(2, '0');
+    
+    debugLog(`[PASSIVE RX] Packet heard via last hop: ${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
+    
+    // Get current GPS location
+    if (!state.lastFix) {
+      debugLog(`[PASSIVE RX] No GPS fix available, skipping entry`);
+      return;
+    }
+    
+    const lat = state.lastFix.lat;
+    const lon = state.lastFix.lon;
+    const timestamp = new Date().toISOString();
+    
+    // Add entry to RX log
+    addRxLogEntry(repeaterId, data.lastSnr, lat, lon, timestamp);
+    
+    debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
+    
+  } catch (error) {
+    debugError(`[PASSIVE RX] Error processing rx_log entry: ${error.message}`, error);
+  }
+}
+
+/**
+ * Start passive RX listening for background repeater observations
+ */
+function startPassiveRxListening() {
+  if (state.passiveRxTracking.isListening) {
+    debugLog(`[PASSIVE RX] Already listening, skipping start`);
+    return;
+  }
+  
+  if (!state.connection) {
+    debugWarn(`[PASSIVE RX] Cannot start listening: no connection`);
+    return;
+  }
+  
+  debugLog(`[PASSIVE RX] Starting passive RX listening`);
+  
+  const handler = (data) => handlePassiveRxLogEvent(data);
+  state.passiveRxTracking.rxLogHandler = handler;
+  state.connection.on(Constants.PushCodes.LogRxData, handler);
+  state.passiveRxTracking.isListening = true;
+  
+  debugLog(`[PASSIVE RX] ✅ Passive listening started successfully`);
+}
+
+/**
+ * Stop passive RX listening
+ */
+function stopPassiveRxListening() {
+  if (!state.passiveRxTracking.isListening) {
+    return;
+  }
+  
+  debugLog(`[PASSIVE RX] Stopping passive RX listening`);
+  
+  if (state.connection && state.passiveRxTracking.rxLogHandler) {
+    state.connection.off(Constants.PushCodes.LogRxData, state.passiveRxTracking.rxLogHandler);
+    debugLog(`[PASSIVE RX] Unregistered LogRxData event handler`);
+  }
+  
+  state.passiveRxTracking.isListening = false;
+  state.passiveRxTracking.rxLogHandler = null;
+  
+  debugLog(`[PASSIVE RX] ✅ Passive listening stopped`);
+}
+
+/**
+ * Future: Post RX log data to MeshMapper API
+ * @param {Array} entries - Array of RX log entries
+ */
+async function postRxLogToMeshMapperAPI(entries) {
+  if (!MESHMAPPER_RX_LOG_API_URL) {
+    debugLog('[PASSIVE RX] RX Log API posting not configured yet');
+    return;
+  }
+  
+  // Future implementation:
+  // - Batch post accumulated RX log entries
+  // - Include session_id from state.wardriveSessionId
+  // - Format: { observations: [{ repeaterId, snr, lat, lon, timestamp }] }
+  debugLog(`[PASSIVE RX] Would post ${entries.length} RX log entries to API (not implemented yet)`);
+}
+
 // ---- Mobile Session Log Bottom Sheet ----
 
 /**
@@ -1999,6 +2155,181 @@ function addLogEntry(timestamp, lat, lon, eventsStr) {
     renderLogEntries();
     updateLogSummary();
   }
+}
+
+// ---- RX Log UI Functions ----
+
+/**
+ * Parse RX log entry into structured data
+ * @param {Object} entry - RX log entry object
+ * @returns {Object} Parsed RX log entry with formatted data
+ */
+function parseRxLogEntry(entry) {
+  return {
+    repeaterId: entry.repeaterId,
+    snr: entry.snr,
+    lat: entry.lat.toFixed(5),
+    lon: entry.lon.toFixed(5),
+    timestamp: entry.timestamp
+  };
+}
+
+/**
+ * Create DOM element for RX log entry
+ * @param {Object} entry - RX log entry object
+ * @returns {HTMLElement} DOM element for the RX log entry
+ */
+function createRxLogEntryElement(entry) {
+  const parsed = parseRxLogEntry(entry);
+  
+  const logEntry = document.createElement('div');
+  logEntry.className = 'logEntry';
+  
+  // Top row: time + coords
+  const topRow = document.createElement('div');
+  topRow.className = 'logRowTop';
+  
+  const time = document.createElement('span');
+  time.className = 'logTime';
+  const date = new Date(parsed.timestamp);
+  time.textContent = date.toLocaleTimeString();
+  
+  const coords = document.createElement('span');
+  coords.className = 'logCoords';
+  coords.textContent = `${parsed.lat},${parsed.lon}`;
+  
+  topRow.appendChild(time);
+  topRow.appendChild(coords);
+  
+  // Chips row: repeater ID and SNR
+  const chipsRow = document.createElement('div');
+  chipsRow.className = 'heardChips';
+  
+  // Create chip for repeater with SNR
+  const chip = createChipElement(parsed.repeaterId, parsed.snr);
+  chipsRow.appendChild(chip);
+  
+  logEntry.appendChild(topRow);
+  logEntry.appendChild(chipsRow);
+  
+  return logEntry;
+}
+
+/**
+ * Update RX log summary bar with latest data
+ */
+function updateRxLogSummary() {
+  if (!rxLogCount || !rxLogLastTime || !rxLogLastRepeater) return;
+  
+  const count = rxLogState.entries.length;
+  rxLogCount.textContent = count === 1 ? '1 observation' : `${count} observations`;
+  
+  if (count === 0) {
+    rxLogLastTime.textContent = 'No data';
+    rxLogLastRepeater.textContent = '—';
+    debugLog('[PASSIVE RX UI] Summary updated: no entries');
+    return;
+  }
+  
+  const lastEntry = rxLogState.entries[count - 1];
+  const date = new Date(lastEntry.timestamp);
+  rxLogLastTime.textContent = date.toLocaleTimeString();
+  rxLogLastRepeater.textContent = lastEntry.repeaterId;
+  
+  debugLog(`[PASSIVE RX UI] Summary updated: ${count} observations, last repeater: ${lastEntry.repeaterId}`);
+}
+
+/**
+ * Render all RX log entries
+ */
+function renderRxLogEntries() {
+  if (!rxLogEntries) return;
+  
+  debugLog(`[PASSIVE RX UI] Rendering ${rxLogState.entries.length} RX log entries`);
+  rxLogEntries.innerHTML = '';
+  
+  if (rxLogState.entries.length === 0) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'text-xs text-slate-500 italic text-center py-4';
+    placeholder.textContent = 'No RX observations yet';
+    rxLogEntries.appendChild(placeholder);
+    debugLog(`[PASSIVE RX UI] Rendered placeholder (no entries)`);
+    return;
+  }
+  
+  // Render newest first
+  const entries = [...rxLogState.entries].reverse();
+  
+  entries.forEach((entry, index) => {
+    const element = createRxLogEntryElement(entry);
+    rxLogEntries.appendChild(element);
+    debugLog(`[PASSIVE RX UI] Appended entry ${index + 1}/${entries.length}`);
+  });
+  
+  // Auto-scroll to top (newest)
+  if (rxLogState.autoScroll && rxLogScrollContainer) {
+    rxLogScrollContainer.scrollTop = 0;
+    debugLog(`[PASSIVE RX UI] Auto-scrolled to top`);
+  }
+  
+  debugLog(`[PASSIVE RX UI] Finished rendering all entries`);
+}
+
+/**
+ * Toggle RX log expanded/collapsed
+ */
+function toggleRxLogBottomSheet() {
+  rxLogState.isExpanded = !rxLogState.isExpanded;
+  
+  if (rxLogBottomSheet) {
+    if (rxLogState.isExpanded) {
+      rxLogBottomSheet.classList.add('open');
+      rxLogBottomSheet.classList.remove('hidden');
+    } else {
+      rxLogBottomSheet.classList.remove('open');
+      rxLogBottomSheet.classList.add('hidden');
+    }
+  }
+  
+  // Toggle arrow rotation
+  if (rxLogExpandArrow) {
+    if (rxLogState.isExpanded) {
+      rxLogExpandArrow.classList.add('expanded');
+    } else {
+      rxLogExpandArrow.classList.remove('expanded');
+    }
+  }
+}
+
+/**
+ * Add entry to RX log
+ * @param {string} repeaterId - Repeater ID (hex)
+ * @param {number} snr - Signal-to-noise ratio
+ * @param {number} lat - Latitude
+ * @param {number} lon - Longitude
+ * @param {string} timestamp - ISO timestamp
+ */
+function addRxLogEntry(repeaterId, snr, lat, lon, timestamp) {
+  const entry = {
+    repeaterId,
+    snr,
+    lat,
+    lon,
+    timestamp
+  };
+  
+  rxLogState.entries.push(entry);
+  
+  // Apply max entries limit
+  if (rxLogState.entries.length > rxLogState.maxEntries) {
+    const removed = rxLogState.entries.shift();
+    debugLog(`[PASSIVE RX UI] Max entries limit reached, removed oldest entry (repeater=${removed.repeaterId})`);
+  }
+  
+  renderRxLogEntries();
+  updateRxLogSummary();
+  
+  debugLog(`[PASSIVE RX UI] Added entry: repeater=${repeaterId}, snr=${snr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
 }
 
 // ---- Ping ----
@@ -2576,6 +2907,9 @@ async function connect() {
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
         
+        // Start passive RX listening after channel setup
+        startPassiveRxListening();
+        
         // GPS initialization
         setDynamicStatus("Priming GPS", STATUS_COLORS.info);
         debugLog("Starting GPS initialization");
@@ -2658,6 +2992,7 @@ async function connect() {
       stopGpsAgeUpdater(); // Ensure age updater stops
       stopDistanceUpdater(); // Ensure distance updater stops
       stopRepeaterTracking(); // Stop repeater echo tracking
+      stopPassiveRxListening(); // Stop passive RX listening
       
       // Clean up all timers
       cleanupAllTimers();
@@ -2867,6 +3202,14 @@ export async function onLoad() {
     logSummaryBar.addEventListener("click", () => {
       debugLog("Log summary bar clicked - toggling session log");
       toggleBottomSheet();
+    });
+  }
+
+  // RX Log event listener
+  if (rxLogSummaryBar) {
+    rxLogSummaryBar.addEventListener("click", () => {
+      debugLog("[PASSIVE RX UI] RX log summary bar clicked - toggling RX log");
+      toggleRxLogBottomSheet();
     });
   }
 

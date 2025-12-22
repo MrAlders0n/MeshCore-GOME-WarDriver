@@ -225,6 +225,32 @@
           </div>
         </div>
       </section>
+
+      <!-- RX Log: Passive Observations -->
+      <section class="bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden" aria-labelledby="rxLogHeading">
+        <div id="rxLogSummaryBar" class="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-slate-800/60 transition-colors">
+          <div class="flex items-center gap-3 text-sm min-w-0 flex-1">
+            <h2 id="rxLogHeading" class="text-sm font-medium text-slate-300 uppercase tracking-wide">RX Log</h2>
+            <span class="text-slate-500">|</span>
+            <span id="rxLogCount" class="font-medium text-slate-300">0 observations</span>
+            <span id="rxLogLastTime" class="text-slate-400 text-xs truncate hidden sm:inline">No data</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span id="rxLogLastRepeater" class="text-xs font-mono text-slate-400">—</span>
+            <svg id="rxLogExpandArrow" class="w-4 h-4 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+            </svg>
+          </div>
+        </div>
+        
+        <div id="rxLogBottomSheet" class="border-t border-slate-700 hidden">
+          <div id="rxLogScrollContainer" class="overflow-y-auto px-4 py-2 max-h-64">
+            <div id="rxLogEntries" class="space-y-2">
+              <div class="text-xs text-slate-500 italic text-center py-4">No RX observations yet</div>
+            </div>
+          </div>
+        </div>
+      </section>
        
       <!-- Notes Section -->
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
