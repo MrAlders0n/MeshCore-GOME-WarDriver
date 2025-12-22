@@ -1293,7 +1293,7 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       WARDRIVE_TYPE: "TX"
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
