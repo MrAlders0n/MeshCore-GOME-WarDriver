@@ -73,6 +73,11 @@ const OTTAWA_GEOFENCE_RADIUS_M = 150000; // 150 km in meters
 // Distance-Based Ping Filtering
 const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
+// Passive RX Log Batch Configuration
+const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
+const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
+const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
+
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
@@ -194,7 +199,8 @@ const state = {
     isListening: false,           // Whether we're currently listening passively
     rxLogHandler: null,           // Handler function for passive rx_log events
     entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
-  }
+  },
+  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
 };
 
 // Status message management with minimum visibility duration
@@ -548,6 +554,17 @@ function cleanupAllTimers() {
   
   // Clear wardrive session ID
   state.wardriveSessionId = null;
+  
+  // Clear RX batch buffer and cancel any pending timeouts
+  if (state.rxBatchBuffer && state.rxBatchBuffer.size > 0) {
+    for (const [repeaterId, batch] of state.rxBatchBuffer.entries()) {
+      if (batch.timeoutId) {
+        clearTimeout(batch.timeoutId);
+      }
+    }
+    state.rxBatchBuffer.clear();
+    debugLog("RX batch buffer cleared");
+  }
 }
 
 function enableControls(connected) {
@@ -1861,6 +1878,9 @@ async function handlePassiveRxLogging(packet, data) {
     
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
+    // Handle batch tracking for API (parallel batch per repeater)
+    handlePassiveRxForAPI(repeaterId, data.lastSnr, { lat, lon });
+    
   } catch (error) {
     debugError(`[PASSIVE RX] Error processing passive RX: ${error.message}`, error);
   }
@@ -2021,6 +2041,196 @@ async function postRxLogToMeshMapperAPI(entries) {
   // - Include session_id from state.wardriveSessionId
   // - Format: { observations: [{ repeaterId, snr, lat, lon, timestamp }] }
   debugLog(`[PASSIVE RX] Would post ${entries.length} RX log entries to API (not implemented yet)`);
+}
+
+// ---- Passive RX Batch API Integration ----
+
+/**
+ * Handle passive RX event for API batching
+ * Each repeater is tracked independently with its own batch and timer
+ * @param {string} repeaterId - Repeater ID (hex string)
+ * @param {number} snr - Signal to noise ratio
+ * @param {Object} currentLocation - Current GPS location {lat, lon}
+ */
+function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
+  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}`);
+  
+  // Get or create batch for this repeater
+  let batch = state.rxBatchBuffer.get(repeaterId);
+  
+  if (!batch) {
+    // First RX from this repeater - create new batch
+    debugLog(`[RX BATCH] Creating new batch for repeater ${repeaterId}`);
+    batch = {
+      firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
+      firstTimestamp: Date.now(),
+      samples: [],
+      timeoutId: null
+    };
+    state.rxBatchBuffer.set(repeaterId, batch);
+    
+    // Set timeout for this repeater (independent timer)
+    batch.timeoutId = setTimeout(() => {
+      debugLog(`[RX BATCH] Timeout triggered for repeater ${repeaterId} after ${RX_BATCH_TIMEOUT_MS}ms`);
+      flushBatch(repeaterId, 'timeout');
+    }, RX_BATCH_TIMEOUT_MS);
+    
+    debugLog(`[RX BATCH] Timeout set for repeater ${repeaterId}: ${RX_BATCH_TIMEOUT_MS}ms`);
+  }
+  
+  // Add sample to batch
+  const sample = {
+    snr,
+    location: { lat: currentLocation.lat, lng: currentLocation.lon },
+    timestamp: Date.now()
+  };
+  batch.samples.push(sample);
+  
+  debugLog(`[RX BATCH] Sample added to batch for repeater ${repeaterId}: sample_count=${batch.samples.length}`);
+  
+  // Check distance trigger (has user moved >= RX_BATCH_DISTANCE_M from first location?)
+  const distance = calculateHaversineDistance(
+    currentLocation.lat,
+    currentLocation.lon,
+    batch.firstLocation.lat,
+    batch.firstLocation.lng
+  );
+  
+  debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first location (threshold=${RX_BATCH_DISTANCE_M}m)`);
+  
+  if (distance >= RX_BATCH_DISTANCE_M) {
+    debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing batch`);
+    flushBatch(repeaterId, 'distance');
+  }
+}
+
+/**
+ * Flush a single repeater's batch - aggregate and post to API
+ * @param {string} repeaterId - Repeater ID to flush
+ * @param {string} trigger - What caused the flush: 'distance' | 'timeout' | 'session_end'
+ */
+function flushBatch(repeaterId, trigger) {
+  debugLog(`[RX BATCH] Flushing batch for repeater ${repeaterId}, trigger=${trigger}`);
+  
+  const batch = state.rxBatchBuffer.get(repeaterId);
+  if (!batch || batch.samples.length === 0) {
+    debugLog(`[RX BATCH] No batch to flush for repeater ${repeaterId}`);
+    return;
+  }
+  
+  // Clear timeout if it exists
+  if (batch.timeoutId) {
+    clearTimeout(batch.timeoutId);
+    debugLog(`[RX BATCH] Cleared timeout for repeater ${repeaterId}`);
+  }
+  
+  // Calculate aggregations
+  const snrValues = batch.samples.map(s => s.snr);
+  const snrAvg = snrValues.reduce((sum, val) => sum + val, 0) / snrValues.length;
+  const snrMax = Math.max(...snrValues);
+  const snrMin = Math.min(...snrValues);
+  const sampleCount = batch.samples.length;
+  const timestampStart = batch.firstTimestamp;
+  const timestampEnd = batch.samples[batch.samples.length - 1].timestamp;
+  
+  // Build API entry
+  const entry = {
+    repeater_id: repeaterId,
+    location: batch.firstLocation,
+    snr_avg: parseFloat(snrAvg.toFixed(3)),
+    snr_max: parseFloat(snrMax.toFixed(3)),
+    snr_min: parseFloat(snrMin.toFixed(3)),
+    sample_count: sampleCount,
+    timestamp_start: timestampStart,
+    timestamp_end: timestampEnd,
+    trigger: trigger
+  };
+  
+  debugLog(`[RX BATCH] Aggregated entry for repeater ${repeaterId}:`, entry);
+  debugLog(`[RX BATCH]   snr_avg=${snrAvg.toFixed(3)}, snr_max=${snrMax.toFixed(3)}, snr_min=${snrMin.toFixed(3)}`);
+  debugLog(`[RX BATCH]   sample_count=${sampleCount}, duration=${((timestampEnd - timestampStart) / 1000).toFixed(1)}s`);
+  
+  // Queue for API posting
+  queueApiPost(entry);
+  
+  // Remove batch from buffer (cleanup)
+  state.rxBatchBuffer.delete(repeaterId);
+  debugLog(`[RX BATCH] Batch removed from buffer for repeater ${repeaterId}`);
+}
+
+/**
+ * Flush all active batches (called on session end, disconnect, etc.)
+ * @param {string} trigger - What caused the flush: 'session_end' | 'disconnect' | etc.
+ */
+function flushAllBatches(trigger = 'session_end') {
+  debugLog(`[RX BATCH] Flushing all batches, trigger=${trigger}, active_batches=${state.rxBatchBuffer.size}`);
+  
+  if (state.rxBatchBuffer.size === 0) {
+    debugLog(`[RX BATCH] No batches to flush`);
+    return;
+  }
+  
+  // Iterate all repeater batches and flush each one
+  const repeaterIds = Array.from(state.rxBatchBuffer.keys());
+  for (const repeaterId of repeaterIds) {
+    flushBatch(repeaterId, trigger);
+  }
+  
+  debugLog(`[RX BATCH] All batches flushed: ${repeaterIds.length} repeaters`);
+}
+
+/**
+ * Queue an entry for API posting
+ * For now: console.log in debug mode
+ * Future: Actual HTTP POST to MESHMAPPER_RX_LOG_API_URL
+ * @param {Object} entry - The aggregated entry to post
+ */
+function queueApiPost(entry) {
+  // Validate session_id exists
+  if (!state.wardriveSessionId) {
+    debugWarn(`[RX BATCH API] Cannot post: no session_id available`);
+    return;
+  }
+  
+  // Build API payload
+  const payload = {
+    session_id: state.wardriveSessionId,
+    entries: [entry]
+  };
+  
+  // DEBUG MODE: Console log the payload
+  debugLog(`[RX BATCH API] ===== API PAYLOAD (DEBUG MODE) =====`);
+  console.log('[RX BATCH API] Would POST to:', MESHMAPPER_RX_LOG_API_URL || '(URL not configured)');
+  console.log('[RX BATCH API] Payload:', JSON.stringify(payload, null, 2));
+  debugLog(`[RX BATCH API] =====================================`);
+  
+  // PRODUCTION CODE (commented out until ready)
+  /*
+  if (!MESHMAPPER_RX_LOG_API_URL) {
+    debugWarn('[RX BATCH API] API URL not configured, skipping POST');
+    return;
+  }
+  
+  // Post to API
+  fetch(MESHMAPPER_RX_LOG_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    return response.json();
+  })
+  .then(data => {
+    debugLog(`[RX BATCH API] ✅ Successfully posted entry for repeater ${entry.repeater_id}`);
+    debugLog(`[RX BATCH API] Response:`, data);
+  })
+  .catch(error => {
+    debugError(`[RX BATCH API] ❌ Failed to post entry for repeater ${entry.repeater_id}: ${error.message}`);
+  });
+  */
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -3125,6 +3335,9 @@ async function connect() {
       stopGpsAgeUpdater(); // Ensure age updater stops
       stopRepeaterTracking(); // Stop repeater echo tracking
       stopPassiveRxListening(); // Stop passive RX listening
+      
+      // Flush all pending RX batch data before cleanup
+      flushAllBatches('disconnect');
       
       // Clean up all timers
       cleanupAllTimers();
