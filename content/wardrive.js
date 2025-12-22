@@ -1289,10 +1289,11 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       ver: APP_VERSION,
       test: 0,
       iata: WARDIVE_IATA_CODE,
-      session_id: state.wardriveSessionId
+      session_id: state.wardriveSessionId,
+      WARDRIVE_TYPE: "TX"
     };
 
-    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}`);
+    debugLog(`Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -2192,27 +2193,34 @@ function queueApiPost(entry) {
     return;
   }
   
-  // Build API payload
+  // Build unified API payload (TX-style)
+  // Format heard_repeats as "repeater_id(snr_avg)" - e.g., "4e(12)"
+  const heardRepeats = `${entry.repeater_id}(${Math.round(entry.snr_avg)})`;
+  
   const payload = {
+    key: MESHMAPPER_API_KEY,
+    lat: entry.location.lat,
+    lon: entry.location.lng,
+    who: getDeviceIdentifier(),
+    power: getCurrentPowerSetting(),
+    heard_repeats: heardRepeats,
+    ver: APP_VERSION,
+    test: 0,
+    iata: WARDIVE_IATA_CODE,
     session_id: state.wardriveSessionId,
-    entries: [entry]
+    WARDRIVE_TYPE: "RX"
   };
   
   // DEBUG MODE: Console log the payload
   debugLog(`[RX BATCH API] ===== API PAYLOAD (DEBUG MODE) =====`);
-  console.log('[RX BATCH API] Would POST to:', MESHMAPPER_RX_LOG_API_URL || '(URL not configured)');
+  console.log('[RX BATCH API] Would POST to:', MESHMAPPER_API_URL);
   console.log('[RX BATCH API] Payload:', JSON.stringify(payload, null, 2));
   debugLog(`[RX BATCH API] =====================================`);
   
   // PRODUCTION CODE (commented out until ready)
   /*
-  if (!MESHMAPPER_RX_LOG_API_URL) {
-    debugWarn('[RX BATCH API] API URL not configured, skipping POST');
-    return;
-  }
-  
-  // Post to API
-  fetch(MESHMAPPER_RX_LOG_API_URL, {
+  // Post to unified API endpoint
+  fetch(MESHMAPPER_API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
