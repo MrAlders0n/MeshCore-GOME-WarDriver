@@ -1781,6 +1781,7 @@ function formatRepeaterTelemetry(repeaters) {
 /**
  * Handle passive RX log event - monitors all incoming packets
  * Extracts the LAST hop from the path (direct repeater) and records observation
+ * FILTERING: Excludes echoes of user's own pings on the wardriving channel
  * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
  */
 async function handlePassiveRxLogEvent(data) {
@@ -1806,17 +1807,48 @@ async function handlePassiveRxLogEvent(data) {
       return;
     }
     
-    // NOTE: Channel hash filter disabled to track ALL RX messages regardless of channel
-    // Uncomment to restore filtering to wardriving channel only
-    // const packetChannelHash = packet.payload[0];
-    // if (WARDRIVING_CHANNEL_HASH !== null && packetChannelHash !== WARDRIVING_CHANNEL_HASH) {
-    //   debugLog(`[PASSIVE RX] Ignoring: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')})`);
-    //   return;
-    // }
-    // 
-    // debugLog(`[PASSIVE RX] Channel hash match confirmed`);
+    // VALIDATION STEP 3: Echo filtering for wardriving channel
+    // Check if this packet is on the wardriving channel
+    const packetChannelHash = packet.payload[0];
+    const isWardrivingChannel = WARDRIVING_CHANNEL_HASH !== null && packetChannelHash === WARDRIVING_CHANNEL_HASH;
     
-    // VALIDATION STEP 3: Check path length (need at least one hop)
+    if (isWardrivingChannel) {
+      debugLog(`[PASSIVE RX] Packet is on wardriving channel (hash=0x${packetChannelHash.toString(16).padStart(2, '0')})`);
+      
+      // Check if we have a recently-sent payload to compare against
+      if (state.repeaterTracking.sentPayload && WARDRIVING_CHANNEL_KEY) {
+        debugLog(`[PASSIVE RX] Checking if this is an echo of our own ping...`);
+        
+        // Decrypt the message to compare with our sent payload
+        const decryptedMessage = await decryptGroupTextPayload(packet.payload, WARDRIVING_CHANNEL_KEY);
+        
+        if (decryptedMessage !== null) {
+          debugLog(`[PASSIVE RX] Decrypted message: "${decryptedMessage}"`);
+          debugLog(`[PASSIVE RX] Our sent payload: "${state.repeaterTracking.sentPayload}"`);
+          
+          // Check if this is an echo of our own ping
+          // The decrypted message may include sender prefix: "SenderName: Message"
+          // So check for both exact match and containment
+          const isOurEcho = decryptedMessage === state.repeaterTracking.sentPayload || 
+                           decryptedMessage.includes(state.repeaterTracking.sentPayload);
+          
+          if (isOurEcho) {
+            debugLog(`[PASSIVE RX] ⊘ SKIP: This is an echo of our own ping - already tracked in Session Log`);
+            return;
+          }
+          
+          debugLog(`[PASSIVE RX] This is NOT an echo (different message on same channel)`);
+        } else {
+          debugLog(`[PASSIVE RX] Failed to decrypt message, cannot verify if echo`);
+        }
+      } else {
+        debugLog(`[PASSIVE RX] No sent payload to compare (not currently tracking echoes)`);
+      }
+    } else {
+      debugLog(`[PASSIVE RX] Packet is on a different channel or channel hash unavailable - logging it`);
+    }
+    
+    // VALIDATION STEP 4: Check path length (need at least one hop)
     if (packet.path.length === 0) {
       debugLog(`[PASSIVE RX] Ignoring: no path (direct transmission, not via repeater)`);
       return;
@@ -2998,6 +3030,12 @@ async function connect() {
       
       // Clean up all timers
       cleanupAllTimers();
+      
+      // Clear RX log entries on disconnect
+      rxLogState.entries = [];
+      renderRxLogEntries();
+      updateRxLogSummary();
+      debugLog("RX log cleared on disconnect");
       
       state.lastFix = null;
       state.lastSuccessfulPingLocation = null;
