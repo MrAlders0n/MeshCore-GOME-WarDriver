@@ -2204,12 +2204,10 @@ function queueApiPost(entry) {
   
   // DEBUG MODE: Console log the payload
   debugLog(`[RX BATCH API] ===== API PAYLOAD (DEBUG MODE) =====`);
-  console.log('[RX BATCH API] Would POST to:', MESHMAPPER_API_URL);
   console.log('[RX BATCH API] Payload:', JSON.stringify(payload, null, 2));
   debugLog(`[RX BATCH API] =====================================`);
   
-  // PRODUCTION CODE (commented out until ready)
-  /*
+  // PRODUCTION CODE 
   // Post to unified API endpoint
   fetch(MESHMAPPER_API_URL, {
     method: 'POST',
@@ -2229,7 +2227,6 @@ function queueApiPost(entry) {
   .catch(error => {
     debugError(`[RX BATCH API] ❌ Failed to post entry for repeater ${entry.repeater_id}: ${error.message}`);
   });
-  */
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
