@@ -44,7 +44,7 @@ const STATUS_UPDATE_DELAY_MS = 100;            // Brief delay to ensure "Ping se
 const MAP_REFRESH_DELAY_MS = 1000;             // Delay after API post to ensure backend updated
 const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second) to pause
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
-const RX_LOG_LISTEN_WINDOW_MS = 7000;          // Listen window for repeater echoes (7 seconds)
+const RX_LOG_LISTEN_WINDOW_MS = 10000;          // Listen window for repeater echoes (7 seconds)
 
 // Pre-computed channel hash and key for the wardriving channel
 // These will be computed once at startup and used for message correlation and decryption
