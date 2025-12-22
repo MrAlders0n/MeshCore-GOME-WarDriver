@@ -52,6 +52,25 @@ When **modifying connect or disconnect logic**, you must:
   - Any new states, retries, timeouts, or error handling
   - Any UI impacts (buttons, indicators, status messages)
 
+### docs/PING_AUTO_PING_WORKFLOW.md Updates
+When **modifying ping or auto-ping logic**, you must: 
+- Read `docs/PING_AUTO_PING_WORKFLOW.md` before making the change (to understand current intended behavior).
+- Update `docs/PING_AUTO_PING_WORKFLOW.md` so it remains accurate after the change:
+  - Manual ping flow (`sendPing()` with `manual=true`)
+  - Auto ping flow (`startAutoPing()`, `stopAutoPing()`, `scheduleNextAutoPing()`)
+  - Ping validation logic (geofence, distance, cooldown checks)
+  - GPS coordinate acquisition for pings (`getGpsCoordinatesForPing()`)
+  - Payload construction (`buildPayload()`, power settings)
+  - Repeater tracking logic (`startRepeaterTracking()`, `stopRepeaterTracking()`, `handleRxLogEvent()`)
+  - MeshMapper API posting (`postToMeshMapperAPI()`)
+  - Control locking behavior (`state.pingInProgress`, `updateControlsForCooldown()`)
+  - Cooldown management (`startCooldown()`, `isInCooldown()`)
+  - Auto countdown timer logic (pause, resume, skip reasons)
+  - Ping interval configuration (15s/30s/60s)
+  - Wake lock management during auto mode
+  - Page visibility handling during auto mode
+  - Any UI impacts (buttons, status messages, countdown displays)
+
 ---
 ## Requested Change: Update App Connection Flow (Reorder Steps)
 
