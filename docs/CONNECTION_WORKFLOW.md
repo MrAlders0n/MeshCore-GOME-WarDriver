@@ -62,8 +62,9 @@
 6. **Time Sync** → Synchronizes device clock
 7. **Capacity Check** → Acquires API slot from MeshMapper
 8. **Channel Setup** → Creates/finds #wardriving channel
-9. **GPS Init** → Starts GPS tracking
-10. **Connected** → Enables all controls, ready for wardriving
+9. **Passive RX Listening** → Starts background packet monitoring
+10. **GPS Init** → Starts GPS tracking
+11. **Connected** → Enables all controls, ready for wardriving
 
 ### Detailed Connection Steps
 
@@ -173,22 +174,34 @@ connectBtn.addEventListener("click", async () => {
      - Stores channel object in `state.channel`
      - Updates UI: "#wardriving (CH:X)"
 
-9. **Initialize GPS**
+9. **Start Passive RX Listening**
    - **Connection Status**: `"Connecting"` (blue, maintained)
-   - **Dynamic Status**: `"Priming GPS"` (blue)
-   - Requests location permission
-   - Gets initial GPS position (30s timeout)
-   - Starts continuous GPS watch
-   - Starts GPS age updater (1s interval)
-   - Starts distance updater (3s interval)
-   - Updates UI with coordinates and accuracy
-   - Refreshes coverage map if accuracy < 100m
+   - **Dynamic Status**: No user-facing message (background operation)
+   - Registers event handler for `LogRxData` events
+   - Begins monitoring all incoming packets on wardriving channel
+   - Extracts last hop (direct repeater) from each packet
+   - Records observations: repeater ID, SNR, GPS location, timestamp
+   - Populates RX Log UI with real-time observations
+   - Operates independently of active ping operations
+   - **Debug Logging**: `[PASSIVE RX]` prefix for all debug messages
 
-10. **Connection Complete**
+10. **Initialize GPS**
+    - **Connection Status**: `"Connecting"` (blue, maintained)
+    - **Dynamic Status**: `"Priming GPS"` (blue)
+    - Requests location permission
+    - Gets initial GPS position (30s timeout)
+    - Starts continuous GPS watch
+    - Starts GPS age updater (1s interval)
+    - Starts distance updater (3s interval)
+    - Updates UI with coordinates and accuracy
+    - Refreshes coverage map if accuracy < 100m
+
+11. **Connection Complete**
     - **Connection Status**: `"Connected"` (green) - **NOW shown after GPS init**
     - **Dynamic Status**: `"—"` (em dash - cleared to show empty state)
     - Enables all UI controls
     - Ready for wardriving operations
+    - Passive RX listening running in background
 
 ## Disconnection Workflow
 
@@ -262,6 +275,7 @@ See `content/wardrive.js` lines 2119-2179 for the main `disconnect()` function.
      - Stops GPS age updater
      - Stops distance updater
      - Stops repeater tracking
+     - **Stops passive RX listening** (unregisters LogRxData handler)
      - Clears all timers (see `cleanupAllTimers()`)
      - Releases wake lock
      - Clears connection state
@@ -576,6 +590,99 @@ stateDiagram-v2
 - Error → Disconnected
 - Recovery always possible
 
+## Passive RX Log Listening
+
+### Overview
+
+The passive RX log listening feature monitors all incoming packets on the wardriving channel without adding any traffic to the mesh network. This provides visibility into which repeaters can be heard at the current GPS location.
+
+### Key Differences: Active Ping Tracking vs Passive RX Listening
+
+**Active Ping Tracking (Existing):**
+- Triggered when user sends a ping
+- Validates incoming packets are echoes of our specific ping message
+- Extracts **first hop** (first repeater in the path)
+- Tracks repeaters that first forwarded our message into the mesh
+- Runs for 7 seconds after each ping
+- Results shown in Session Log
+
+**Passive RX Listening (New):**
+- Runs continuously in background once connected
+- Monitors **all** packets on wardriving channel (not just our pings)
+- Extracts **last hop** (repeater that directly delivered packet to us)
+- Shows which repeaters we can actually hear from current location
+- No time limit - runs entire connection duration
+- Results shown in RX Log UI section
+
+### Path Interpretation
+
+For a packet with path: `77 → 92 → 0C`
+- **First hop (ping tracking)**: `77` - origin repeater that first flooded our message
+- **Last hop (passive RX)**: `0C` - repeater that directly delivered the packet to us
+
+The last hop is more relevant for coverage mapping because it represents the repeater we can actually receive signals from at our current GPS coordinates.
+
+### Implementation Details
+
+**Startup:**
+1. Connection established
+2. Channel setup completes
+3. `startPassiveRxListening()` called
+4. Registers handler for `Constants.PushCodes.LogRxData` events
+5. Handler: `handlePassiveRxLogEvent()`
+
+**Packet Processing:**
+1. Parse packet from raw bytes
+2. Validate header (0x15 - GroupText/Flood)
+3. Validate channel hash matches wardriving channel
+4. Check path length (skip if no repeaters)
+5. Extract last hop from path
+6. Get current GPS coordinates
+7. Record observation: `{repeaterId, snr, lat, lon, timestamp}`
+8. Update RX Log UI
+
+**Shutdown:**
+1. Disconnect initiated
+2. `stopPassiveRxListening()` called in disconnect cleanup
+3. Unregisters LogRxData event handler
+4. Clears state
+
+### UI Components
+
+**RX Log Section** (below Session Log):
+- Header bar showing observation count and last repeater
+- Expandable/collapsible panel
+- Scrollable list of observations (newest first)
+- Each entry shows: timestamp, GPS coords, repeater ID, SNR chip
+- Max 100 entries (oldest removed when limit reached)
+
+### Future API Integration
+
+Placeholder function `postRxLogToMeshMapperAPI()` ready for future implementation:
+- Batch post accumulated observations
+- Include session_id from capacity check
+- Format: `{observations: [{repeaterId, snr, lat, lon, timestamp}]}`
+- API endpoint: `MESHMAPPER_RX_LOG_API_URL` (currently null)
+
+### Debug Logging
+
+All passive RX operations use `[PASSIVE RX]` prefix:
+- `[PASSIVE RX] Starting passive RX listening`
+- `[PASSIVE RX] Received rx_log entry: SNR=X`
+- `[PASSIVE RX] Header validation passed`
+- `[PASSIVE RX] Observation logged: repeater=XX`
+- `[PASSIVE RX UI] Summary updated: N observations`
+
+Enable debug mode with URL parameter: `?debug=true`
+
+### Coexistence with Active Ping Tracking
+
+Both handlers listen to the same `LogRxData` event simultaneously:
+- **Active handler**: Validates message content matches our ping, extracts first hop
+- **Passive handler**: Processes all messages, extracts last hop
+- No conflicts - they serve different purposes and operate independently
+- Event system supports multiple handlers on the same event
+
 ## Summary
 
 MeshCore-GOME-WarDriver implements a robust Web Bluetooth wardriving application with clear connection/disconnection workflows:
@@ -586,11 +693,12 @@ MeshCore-GOME-WarDriver implements a robust Web Bluetooth wardriving application
 3. **Comprehensive Cleanup**: All resources explicitly released
 4. **Clear State Machine**: No ambiguous states
 5. **User Transparency**: Status messages at every step
+6. **Passive Background Monitoring**: Continuous RX logging without mesh traffic
 
-**Connection:** BLE → Device Info → Time Sync → Capacity Check → Channel Setup → GPS → Connected
+**Connection:** BLE → Device Info → Time Sync → Capacity Check → Channel Setup → Passive RX Start → GPS → Connected
 
-**Disconnection:** Capacity Release → Channel Delete → BLE Close → Full Cleanup → Disconnected
+**Disconnection:** Capacity Release → Channel Delete → BLE Close → Full Cleanup (including Passive RX Stop) → Disconnected
 
-**Debug Mode:** Add `?debug=true` to URL for detailed logging
+**Debug Mode:** Add `?debug=true` to URL for detailed logging (including `[PASSIVE RX]` messages)
 
-The workflow prioritizes reliability, clear error messages, and complete resource cleanup on every disconnect.
+The workflow prioritizes reliability, clear error messages, complete resource cleanup on every disconnect, and non-intrusive background observation of mesh network activity.
