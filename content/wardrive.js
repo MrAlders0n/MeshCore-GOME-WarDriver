@@ -1555,77 +1555,46 @@ function startRepeaterTracking(payload, channelIdx) {
   state.repeaterTracking.channelIdx = channelIdx;
   state.repeaterTracking.repeaters.clear();
   
-  // Create the rx_log handler
-  const rxLogHandler = (data) => {
-    handleRxLogEvent(data, payload, channelIdx, WARDRIVING_CHANNEL_HASH);
-  };
+  debugLog(`Session Log tracking activated - unified handler will delegate echoes to Session Log`);
   
-  // Store the handler so we can remove it later
-  state.repeaterTracking.rxLogHandler = rxLogHandler;
-  
-  // Listen for rx_log events
-  if (state.connection) {
-    state.connection.on(Constants.PushCodes.LogRxData, rxLogHandler);
-    debugLog(`Registered LogRxData event handler`);
-  }
-  
-  // Note: The 7-second timeout to stop listening is managed by the caller (sendPing function)
-  // This allows the caller to both stop tracking AND retrieve results at the same time
+  // Note: The unified RX handler (started at connect) will automatically delegate to
+  // handleSessionLogTracking() when isListening = true. No separate handler needed.
+  // The 7-second timeout to stop listening is managed by the caller (sendPing function)
 }
 
 /**
- * Handle an rx_log event and check if it's a repeater echo of our ping
+ * Handle Session Log tracking for repeater echoes
+ * Called by unified RX handler when tracking is active
+ * @param {Object} packet - Parsed packet from Packet.fromBytes
  * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
- * @param {string} originalPayload - The payload we sent
- * @param {number} channelIdx - The channel index where we sent the ping
- * @param {number} expectedChannelHash - The channel hash we expect (for message correlation)
+ * @returns {boolean} True if packet was an echo and tracked, false otherwise
  */
-async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChannelHash) {
+async function handleSessionLogTracking(packet, data) {
+  const originalPayload = state.repeaterTracking.sentPayload;
+  const channelIdx = state.repeaterTracking.channelIdx;
+  const expectedChannelHash = WARDRIVING_CHANNEL_HASH;
   try {
-    debugLog(`Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    debugLog(`[SESSION LOG] Processing rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
     
-    // Parse the packet from raw data
-    const packet = Packet.fromBytes(data.raw);
-    
-    // VALIDATION STEP 1: Header validation (MUST occur before all other checks)
-    // Expected header for channel GroupText packets: 0x15
-    // Binary: 00 0101 01
-    // - Bits 0-1: Route Type = 01 (Flood)
-    // - Bits 2-5: Payload Type = 0101 (GroupText = 5)
-    // - Bits 6-7: Protocol Version = 00
-    const EXPECTED_HEADER = 0x15;
-    if (packet.header !== EXPECTED_HEADER) {
-      debugLog(`Ignoring rx_log entry: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')}, expected=0x${EXPECTED_HEADER.toString(16).padStart(2, '0')})`);
-      return;
-    }
-    
-    debugLog(`Parsed packet: header=0x${packet.header.toString(16).padStart(2, '0')}, route_type=${packet.route_type_string}, payload_type=${packet.payload_type_string}, path_len=${packet.path.length}`);
-    debugLog(`Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
-    
-    // VALIDATION STEP 2: Verify payload type is GRP_TXT (redundant with header check but kept for clarity)
-    if (packet.payload_type !== Packet.PAYLOAD_TYPE_GRP_TXT) {
-      debugLog(`Ignoring rx_log entry: not a channel message (payload_type=${packet.payload_type})`);
-      return;
-    }
-    
-    // VALIDATION STEP 3: Validate this message is for our channel by comparing channel hash
+    // VALIDATION STEP 1: Payload type already validated by unified handler
+    // VALIDATION STEP 2: Validate this message is for our channel by comparing channel hash
     // Channel message payload structure: [1 byte channel_hash][2 bytes MAC][encrypted message]
     if (packet.payload.length < 3) {
-      debugLog(`Ignoring rx_log entry: payload too short to contain channel hash`);
-      return;
+      debugLog(`[SESSION LOG] Ignoring: payload too short to contain channel hash`);
+      return false;
     }
     
     const packetChannelHash = packet.payload[0];
-    debugLog(`Message correlation check: packet_channel_hash=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')}`);
+    debugLog(`[SESSION LOG] Message correlation check: packet_channel_hash=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')}`);
     
     if (packetChannelHash !== expectedChannelHash) {
-      debugLog(`Ignoring rx_log entry: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')})`);
-      return;
+      debugLog(`[SESSION LOG] Ignoring: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')})`);
+      return false;
     }
     
-    debugLog(`Channel hash match confirmed - this is a message on our channel`);
+    debugLog(`[SESSION LOG] Channel hash match confirmed - this is a message on our channel`);
     
-    // VALIDATION STEP 4: Decrypt and verify message content matches what we sent
+    // VALIDATION STEP 3: Decrypt and verify message content matches what we sent
     // This ensures we're tracking echoes of OUR specific ping, not other messages on the channel
     debugLog(`[MESSAGE_CORRELATION] Starting message content verification...`);
     
@@ -1635,7 +1604,7 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
       
       if (decryptedMessage === null) {
         debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Failed to decrypt message`);
-        return;
+        return false;
       }
       
       debugLog(`[MESSAGE_CORRELATION] Decryption successful, comparing content...`);
@@ -1650,7 +1619,7 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
       if (!messageMatches) {
         debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Message content mismatch (not an echo of our ping)`);
         debugLog(`[MESSAGE_CORRELATION] This is a different message on the same channel`);
-        return;
+        return false;
       }
       
       if (decryptedMessage === originalPayload) {
@@ -1663,12 +1632,12 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
       debugWarn(`[MESSAGE_CORRELATION] Proceeding without message content verification (less reliable)`);
     }
     
-    // VALIDATION STEP 5: Check path length (repeater echo vs direct transmission)
+    // VALIDATION STEP 4: Check path length (repeater echo vs direct transmission)
     // For channel messages, the path contains repeater hops
     // Each hop in the path is 1 byte (repeater ID)
     if (packet.path.length === 0) {
-      debugLog(`Ignoring rx_log entry: no path (direct transmission, not a repeater echo)`);
-      return;
+      debugLog(`[SESSION LOG] Ignoring: no path (direct transmission, not a repeater echo)`);
+      return false;
     }
     
     // Extract only the first hop (first repeater ID) from the path
@@ -1711,8 +1680,14 @@ async function handleRxLogEvent(data, originalPayload, channelIdx, expectedChann
       // Trigger incremental UI update for the new repeater
       updateCurrentLogEntryWithLiveRepeaters();
     }
+    
+    // Successfully tracked this echo
+    debugLog(`[SESSION LOG] ✅ Echo tracked successfully`);
+    return true;
+    
   } catch (error) {
-    debugError(`Error processing rx_log entry: ${error.message}`, error);
+    debugError(`[SESSION LOG] Error processing rx_log entry: ${error.message}`, error);
+    return false;
   }
 }
 
@@ -1727,17 +1702,8 @@ function stopRepeaterTracking() {
   
   debugLog(`Stopping repeater echo tracking`);
   
-  // Stop listening for rx_log events
-  if (state.connection && state.repeaterTracking.rxLogHandler) {
-    state.connection.off(Constants.PushCodes.LogRxData, state.repeaterTracking.rxLogHandler);
-    debugLog(`Unregistered LogRxData event handler`);
-  }
-  
-  // Clear timeout
-  if (state.repeaterTracking.listenTimeout) {
-    clearTimeout(state.repeaterTracking.listenTimeout);
-    state.repeaterTracking.listenTimeout = null;
-  }
+  // No need to unregister handler - unified handler continues running
+  // Just clear the tracking state
   
   // Get the results
   const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
@@ -1755,7 +1721,7 @@ function stopRepeaterTracking() {
   state.repeaterTracking.sentTimestamp = null;
   state.repeaterTracking.sentPayload = null;
   state.repeaterTracking.repeaters.clear();
-  state.repeaterTracking.rxLogHandler = null;
+  state.repeaterTracking.rxLogHandler = null; // Kept for compatibility
   state.repeaterTracking.currentLogEntry = null;
   
   return repeaters;
@@ -1779,10 +1745,114 @@ function formatRepeaterTelemetry(repeaters) {
 // ---- Passive RX Log Listening ----
 
 /**
+ * Unified RX log event handler - processes all incoming packets
+ * Delegates to Session Log tracking when active, otherwise handles passive RX logging
+ * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ */
+async function handleUnifiedRxLogEvent(data) {
+  try {
+    debugLog(`[UNIFIED RX] Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    
+    // Parse the packet from raw data (once for both handlers)
+    const packet = Packet.fromBytes(data.raw);
+    
+    // VALIDATION STEP 1: Header validation
+    // Expected header for channel GroupText packets: 0x15
+    const EXPECTED_HEADER = 0x15;
+    if (packet.header !== EXPECTED_HEADER) {
+      debugLog(`[UNIFIED RX] Ignoring: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')})`);
+      return;
+    }
+    
+    debugLog(`[UNIFIED RX] Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
+    
+    // VALIDATION STEP 2: Check payload length
+    if (packet.payload.length < 3) {
+      debugLog(`[UNIFIED RX] Ignoring: payload too short`);
+      return;
+    }
+    
+    // DELEGATION: If Session Log is actively tracking, delegate to it first
+    if (state.repeaterTracking.isListening) {
+      debugLog(`[UNIFIED RX] Session Log is tracking - delegating to Session Log handler`);
+      const wasTracked = await handleSessionLogTracking(packet, data);
+      
+      if (wasTracked) {
+        debugLog(`[UNIFIED RX] Packet was an echo and tracked by Session Log`);
+        return; // Echo handled, done
+      }
+      
+      debugLog(`[UNIFIED RX] Packet was not an echo, continuing to Passive RX processing`);
+    }
+    
+    // DELEGATION: Handle passive RX logging for all other cases
+    await handlePassiveRxLogging(packet, data);
+    
+  } catch (error) {
+    debugError(`[UNIFIED RX] Error processing rx_log entry: ${error.message}`, error);
+  }
+}
+
+/**
+ * Handle passive RX logging - monitors all incoming packets not handled by Session Log
+ * Extracts the LAST hop from the path (direct repeater) and records observation
+ * @param {Object} packet - Parsed packet from Packet.fromBytes
+ * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ */
+async function handlePassiveRxLogging(packet, data) {
+  try {
+    debugLog(`[PASSIVE RX] Processing packet for passive logging`);
+    
+    // Check if this packet is on the wardriving channel (informational only)
+    const packetChannelHash = packet.payload[0];
+    const isWardrivingChannel = WARDRIVING_CHANNEL_HASH !== null && packetChannelHash === WARDRIVING_CHANNEL_HASH;
+    
+    if (isWardrivingChannel) {
+      debugLog(`[PASSIVE RX] Packet is on wardriving channel (hash=0x${packetChannelHash.toString(16).padStart(2, '0')})`);
+      debugLog(`[PASSIVE RX] Not an echo - message is from another user or source`);
+    } else {
+      debugLog(`[PASSIVE RX] Packet is on a different channel or channel hash unavailable - logging it`);
+    }
+    
+    // VALIDATION: Check path length (need at least one hop)
+    if (packet.path.length === 0) {
+      debugLog(`[PASSIVE RX] Ignoring: no path (direct transmission, not via repeater)`);
+      return;
+    }
+    
+    // Extract LAST hop from path (the repeater that directly delivered to us)
+    const lastHopId = packet.path[packet.path.length - 1];
+    const repeaterId = lastHopId.toString(16).padStart(2, '0');
+    
+    debugLog(`[PASSIVE RX] Packet heard via last hop: ${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
+    
+    // Get current GPS location
+    if (!state.lastFix) {
+      debugLog(`[PASSIVE RX] No GPS fix available, skipping entry`);
+      return;
+    }
+    
+    const lat = state.lastFix.lat;
+    const lon = state.lastFix.lon;
+    const timestamp = new Date().toISOString();
+    
+    // Add entry to RX log
+    addRxLogEntry(repeaterId, data.lastSnr, lat, lon, timestamp);
+    
+    debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
+    
+  } catch (error) {
+    debugError(`[PASSIVE RX] Error processing passive RX: ${error.message}`, error);
+  }
+}
+
+// DEPRECATED: Old separate passive RX handler - keeping for reference during migration
+/**
  * Handle passive RX log event - monitors all incoming packets
  * Extracts the LAST hop from the path (direct repeater) and records observation
  * FILTERING: Excludes echoes of user's own pings on the wardriving channel
  * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
+ * @deprecated Use handleUnifiedRxLogEvent instead
  */
 async function handlePassiveRxLogEvent(data) {
   try {
@@ -1863,48 +1933,57 @@ async function handlePassiveRxLogEvent(data) {
 }
 
 /**
- * Start passive RX listening for background repeater observations
+ * Start unified RX listening - handles both Session Log tracking and passive RX logging
  */
-function startPassiveRxListening() {
+function startUnifiedRxListening() {
   if (state.passiveRxTracking.isListening) {
-    debugLog(`[PASSIVE RX] Already listening, skipping start`);
+    debugLog(`[UNIFIED RX] Already listening, skipping start`);
     return;
   }
   
   if (!state.connection) {
-    debugWarn(`[PASSIVE RX] Cannot start listening: no connection`);
+    debugWarn(`[UNIFIED RX] Cannot start listening: no connection`);
     return;
   }
   
-  debugLog(`[PASSIVE RX] Starting passive RX listening`);
+  debugLog(`[UNIFIED RX] Starting unified RX listening`);
   
-  const handler = (data) => handlePassiveRxLogEvent(data);
+  const handler = (data) => handleUnifiedRxLogEvent(data);
   state.passiveRxTracking.rxLogHandler = handler;
   state.connection.on(Constants.PushCodes.LogRxData, handler);
   state.passiveRxTracking.isListening = true;
   
-  debugLog(`[PASSIVE RX] ✅ Passive listening started successfully`);
+  debugLog(`[UNIFIED RX] ✅ Unified listening started successfully`);
 }
 
 /**
- * Stop passive RX listening
+ * Stop unified RX listening
  */
-function stopPassiveRxListening() {
+function stopUnifiedRxListening() {
   if (!state.passiveRxTracking.isListening) {
     return;
   }
   
-  debugLog(`[PASSIVE RX] Stopping passive RX listening`);
+  debugLog(`[UNIFIED RX] Stopping unified RX listening`);
   
   if (state.connection && state.passiveRxTracking.rxLogHandler) {
     state.connection.off(Constants.PushCodes.LogRxData, state.passiveRxTracking.rxLogHandler);
-    debugLog(`[PASSIVE RX] Unregistered LogRxData event handler`);
+    debugLog(`[UNIFIED RX] Unregistered LogRxData event handler`);
   }
   
   state.passiveRxTracking.isListening = false;
   state.passiveRxTracking.rxLogHandler = null;
   
-  debugLog(`[PASSIVE RX] ✅ Passive listening stopped`);
+  debugLog(`[UNIFIED RX] ✅ Unified listening stopped`);
+}
+
+// DEPRECATED: Keeping aliases for backward compatibility during migration
+function startPassiveRxListening() {
+  startUnifiedRxListening();
+}
+
+function stopPassiveRxListening() {
+  stopUnifiedRxListening();
 }
 
 /**
