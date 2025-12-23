@@ -16,6 +16,48 @@ This document defines the coding standards and requirements for all changes to t
 - Debug logging is controlled by the `DEBUG_ENABLED` flag (URL parameter `? debug=true`)
 - Log at key points: function entry, API calls, state changes, errors, and decision branches
 
+#### Debug Log Tagging Convention
+
+All debug log messages **MUST** include a descriptive tag in square brackets immediately after `[DEBUG]` that identifies the subsystem or feature area. This enables easier filtering and understanding of debug output. 
+
+**Format:** `[DEBUG] [TAG] Message here`
+
+**Required Tags:**
+
+| Tag | Description |
+|-----|-------------|
+| `[BLE]` | Bluetooth connection and device communication |
+| `[GPS]` | GPS/geolocation operations |
+| `[PING]` | Ping sending and validation |
+| `[API QUEUE]` | API batch queue operations |
+| `[RX BATCH]` | RX batch buffer operations |
+| `[PASSIVE RX]` | Passive RX logging logic |
+| `[PASSIVE RX UI]` | Passive RX UI rendering |
+| `[SESSION LOG]` | Session log tracking |
+| `[UNIFIED RX]` | Unified RX handler |
+| `[DECRYPT]` | Message decryption |
+| `[UI]` | General UI updates (status bar, buttons, etc.) |
+| `[CHANNEL]` | Channel setup and management |
+| `[TIMER]` | Timer and countdown operations |
+| `[WAKE LOCK]` | Wake lock acquisition/release |
+| `[GEOFENCE]` | Geofence and distance validation |
+| `[CAPACITY]` | Capacity check API calls |
+| `[AUTO]` | Auto ping mode operations |
+| `[INIT]` | Initialization and setup |
+| `[ERROR LOG]` | Error log UI operations |
+
+**Examples:**
+```javascript
+// ✅ Correct - includes tag
+debugLog("[BLE] Connection established");
+debugLog("[GPS] Fresh position acquired: lat=45.12345, lon=-75.12345");
+debugLog("[PING] Sending ping to channel 2");
+
+// ❌ Incorrect - missing tag
+debugLog("Connection established");
+debugLog("Fresh position acquired");
+```
+
 ### Status Messages
 - **ALWAYS** update `STATUS_MESSAGES.md` when adding or modifying user-facing status messages
 - Use the `setStatus(message, color)` function for all UI status updates
