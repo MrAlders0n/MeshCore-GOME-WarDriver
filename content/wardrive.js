@@ -1171,6 +1171,7 @@ async function checkCapacity(reason) {
       key: MESHMAPPER_API_KEY,
       public_key: state.devicePublicKey,
       who: getDeviceIdentifier(),
+      ver: APP_VERSION,
       reason: reason
     };
 
