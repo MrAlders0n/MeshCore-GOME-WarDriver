@@ -2730,6 +2730,30 @@ function toggleBottomSheet() {
       logExpandArrow.classList.remove('expanded');
     }
   }
+  
+  // Toggle copy button and status visibility
+  if (sessionLogState.isExpanded) {
+    // Hide status elements, show copy button
+    if (logLastSnr) logLastSnr.classList.add('hidden');
+    if (logLastSnrChip) logLastSnrChip.classList.add('hidden');
+    if (sessionLogCopyBtn) sessionLogCopyBtn.classList.remove('hidden');
+    debugLog('[SESSION LOG] Expanded - showing copy button, hiding status');
+  } else {
+    // Show status elements, hide copy button
+    if (logLastSnr) logLastSnr.classList.remove('hidden');
+    if (logLastSnrChip) {
+      // Only show SNR chip if there are repeats (it manages its own visibility)
+      const count = sessionLogState.entries.length;
+      if (count > 0) {
+        const lastEntry = sessionLogState.entries[count - 1];
+        if (lastEntry.events.length > 0) {
+          logLastSnrChip.classList.remove('hidden');
+        }
+      }
+    }
+    if (sessionLogCopyBtn) sessionLogCopyBtn.classList.add('hidden');
+    debugLog('[SESSION LOG] Collapsed - hiding copy button, showing status');
+  }
 }
 
 /**
@@ -2918,6 +2942,19 @@ function toggleRxLogBottomSheet() {
     } else {
       rxLogExpandArrow.classList.remove('expanded');
     }
+  }
+  
+  // Toggle copy button and status visibility
+  if (rxLogState.isExpanded) {
+    // Hide status, show copy button
+    if (rxLogLastRepeater) rxLogLastRepeater.classList.add('hidden');
+    if (rxLogCopyBtn) rxLogCopyBtn.classList.remove('hidden');
+    debugLog('[PASSIVE RX UI] Expanded - showing copy button, hiding status');
+  } else {
+    // Show status, hide copy button
+    if (rxLogLastRepeater) rxLogLastRepeater.classList.remove('hidden');
+    if (rxLogCopyBtn) rxLogCopyBtn.classList.add('hidden');
+    debugLog('[PASSIVE RX UI] Collapsed - hiding copy button, showing status');
   }
 }
 
@@ -3117,6 +3154,19 @@ function toggleErrorLogBottomSheet() {
     } else {
       errorLogExpandArrow.classList.remove('expanded');
     }
+  }
+  
+  // Toggle copy button and status visibility
+  if (errorLogState.isExpanded) {
+    // Hide status, show copy button
+    if (errorLogLastError) errorLogLastError.classList.add('hidden');
+    if (errorLogCopyBtn) errorLogCopyBtn.classList.remove('hidden');
+    debugLog('[ERROR LOG] Expanded - showing copy button, hiding status');
+  } else {
+    // Show status, hide copy button
+    if (errorLogLastError) errorLogLastError.classList.remove('hidden');
+    if (errorLogCopyBtn) errorLogCopyBtn.classList.add('hidden');
+    debugLog('[ERROR LOG] Collapsed - hiding copy button, showing status');
   }
 }
 
