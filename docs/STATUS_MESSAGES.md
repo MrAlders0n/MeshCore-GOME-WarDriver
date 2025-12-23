@@ -161,6 +161,22 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **Notes**: Implements fail-closed policy - connection/posting denied if session_id is missing. Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "Session ID error; try reconnecting" (terminal)
 - **Source**: `content/wardrive.js:checkCapacity()`, `content/wardrive.js:postToMeshMapperAPI()`
 
+##### App out of date, please update
+- **Message**: `"App out of date, please update"`
+- **Color**: Red (error)
+- **When**: Capacity check API denies slot on connect with reason code "outofdate" (returns allowed=false, reason="outofdate")
+- **Terminal State**: Yes (persists until user takes action)
+- **Notes**: Indicates the app version is outdated and needs to be updated. Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "App out of date, please update" (terminal). This is part of the extensible reason code system - future reason codes can be added to REASON_MESSAGES mapping.
+- **Source**: `content/wardrive.js:checkCapacity()`, `content/wardrive.js` disconnected event handler
+
+##### Connection not allowed: [reason]
+- **Message**: `"Connection not allowed: [reason]"` (where [reason] is the API-provided reason code)
+- **Color**: Red (error)
+- **When**: Capacity check API denies slot on connect with an unknown reason code not defined in REASON_MESSAGES mapping (returns allowed=false, reason="unknown_code")
+- **Terminal State**: Yes (persists until user takes action)
+- **Notes**: Fallback message for future/unknown reason codes. Shows the raw reason code to help with debugging. Complete flow: Connection bar shows "Connecting" → "Disconnecting" → "Disconnected". Dynamic bar shows "Acquiring wardriving slot" → "Connection not allowed: [reason]" (terminal)
+- **Source**: `content/wardrive.js` disconnected event handler
+
 ##### Error: No session ID for API post
 - **Message**: `"Error: No session ID for API post"`
 - **Color**: Red (error)

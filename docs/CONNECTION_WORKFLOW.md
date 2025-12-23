@@ -142,11 +142,20 @@ connectBtn.addEventListener("click", async () => {
        "reason": "connect"
      }
      ```
-   - If `allowed: false`:
-     - Sets `state.disconnectReason = "capacity_full"`
-     - Triggers disconnect sequence after 1.5s delay
-     - **Connection Status**: `"Connecting"` → `"Disconnecting"` → `"Disconnected"` (red)
-     - **Dynamic Status**: `"Acquiring wardriving slot"` → `"WarDriving app has reached capacity"` (red, terminal)
+   - If `allowed: false` with reason code:
+     - API response may include `reason` field: `{"allowed": false, "reason": "outofdate"}`
+     - If reason code exists in `REASON_MESSAGES` mapping:
+       - Sets `state.disconnectReason = data.reason` (e.g., "outofdate")
+       - Triggers disconnect sequence after 1.5s delay
+       - **Connection Status**: `"Connecting"` → `"Disconnecting"` → `"Disconnected"` (red)
+       - **Dynamic Status**: `"Acquiring wardriving slot"` → `"[mapped message]"` (red, terminal)
+       - Example: "App out of date, please update" for reason="outofdate"
+     - If reason code not in mapping:
+       - Sets `state.disconnectReason = data.reason`
+       - Shows fallback message: "Connection not allowed: [reason]"
+     - If no reason code provided (backward compatibility):
+       - Sets `state.disconnectReason = "capacity_full"`
+       - **Dynamic Status**: `"WarDriving app has reached capacity"` (red, terminal)
    - If API error:
      - Sets `state.disconnectReason = "app_down"`
      - Triggers disconnect sequence after 1.5s delay (fail-closed)
@@ -237,10 +246,11 @@ See `content/wardrive.js` for the main `disconnect()` function.
 
 2. **Set Disconnect Reason**
    - "normal" - user-initiated
-   - "capacity_full" - MeshMapper full
+   - "capacity_full" - MeshMapper full (no reason code)
    - "app_down" - API unavailable
    - "error" - validation/setup failure
    - "slot_revoked" - slot revoked during active session
+   - API reason codes (e.g., "outofdate") - specific denial reasons from capacity check API
 
 3. **Update Status**
    - **Connection Status**: `"Disconnecting"` (blue) - remains until cleanup completes
@@ -277,6 +287,7 @@ See `content/wardrive.js` for the main `disconnect()` function.
    - Fires on BLE disconnect
    - **Connection Status**: `"Disconnected"` (red) - ALWAYS set regardless of reason
    - **Dynamic Status**: Set based on `state.disconnectReason` (WITHOUT "Disconnected:" prefix):
+     - API reason codes in `REASON_MESSAGES` (e.g., `outofdate` → `"App out of date, please update"`) (red)
      - `capacity_full` → `"WarDriving app has reached capacity"` (red)
      - `app_down` → `"WarDriving app is down"` (red)
      - `slot_revoked` → `"WarDriving slot has been revoked"` (red)
@@ -284,6 +295,7 @@ See `content/wardrive.js` for the main `disconnect()` function.
      - `channel_setup_error` → Error message (red)
      - `ble_disconnect_error` → Error message (red)
      - `normal` / `null` / `undefined` → `"—"` (em dash)
+     - Unknown reason codes → `"Connection not allowed: [reason]"` (red)
    - Runs comprehensive cleanup:
      - Stops auto-ping mode
      - Clears auto-ping timer

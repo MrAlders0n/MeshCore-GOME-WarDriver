@@ -118,6 +118,13 @@ const WARDIVE_IATA_CODE = "YOW";
 // For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
 const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
+// ---- Capacity Check Reason Messages ----
+// Maps API reason codes to user-facing error messages
+const REASON_MESSAGES = {
+  outofdate: "App out of date, please update",
+  // Future reasons can be added here
+};
+
 // ---- UI helpers ----
 // Status colors for different states
 const STATUS_COLORS = {
@@ -228,7 +235,7 @@ const state = {
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
   wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
-  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal")
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
   repeaterTracking: {
@@ -1272,11 +1279,17 @@ async function checkCapacity(reason) {
     }
 
     const data = await response.json();
-    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}`);
+    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, reason=${data.reason || 'none'}`);
 
     // Handle capacity full vs. allowed cases separately
     if (data.allowed === false && reason === "connect") {
-      state.disconnectReason = "capacity_full"; // Track disconnect reason
+      // Check if a reason code is provided
+      if (data.reason) {
+        debugLog(`[CAPACITY] API returned reason code: ${data.reason}`);
+        state.disconnectReason = data.reason; // Store the reason code directly
+      } else {
+        state.disconnectReason = "capacity_full"; // Default to capacity_full
+      }
       return false;
     }
     
@@ -3961,7 +3974,13 @@ async function connect() {
       setConnStatus("Disconnected", STATUS_COLORS.error);
       
       // Set dynamic status based on disconnect reason (WITHOUT "Disconnected:" prefix)
-      if (state.disconnectReason === "capacity_full") {
+      // First check if reason has a mapped message in REASON_MESSAGES (for API reason codes)
+      if (state.disconnectReason && REASON_MESSAGES[state.disconnectReason]) {
+        debugLog(`[BLE] Branch: known reason code (${state.disconnectReason})`);
+        const errorMsg = REASON_MESSAGES[state.disconnectReason];
+        setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
+        debugLog(`[BLE] Setting terminal status for reason: ${state.disconnectReason}`);
+      } else if (state.disconnectReason === "capacity_full") {
         debugLog("[BLE] Branch: capacity_full");
         setDynamicStatus("WarDriving app has reached capacity", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for capacity full");
@@ -3998,9 +4017,9 @@ async function connect() {
         setDynamicStatus("Idle"); // Show em dash for normal disconnect
       } else {
         debugLog(`[BLE] Branch: else (unknown reason: ${state.disconnectReason})`);
-        // For unknown disconnect reasons, show em dash
-        debugLog(`[BLE] Showing em dash for unknown reason: ${state.disconnectReason}`);
-        setDynamicStatus("Idle");
+        // For unknown disconnect reasons from API, show a generic message
+        debugLog(`[BLE] Showing generic error for unknown reason: ${state.disconnectReason}`);
+        setDynamicStatus(`Connection not allowed: ${state.disconnectReason}`, STATUS_COLORS.error, true);
       }
       
       setConnectButton(false);
