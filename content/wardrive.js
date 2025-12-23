@@ -2930,6 +2930,9 @@ function toggleRxLogBottomSheet() {
  * Add entry to RX log
  * @param {string} repeaterId - Repeater ID (hex)
  * @param {number} snr - Signal-to-noise ratio
+ * @param {number} rssi - Received Signal Strength Indicator
+ * @param {number} pathLength - Number of hops in packet path
+ * @param {number} header - Packet header byte
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {string} timestamp - ISO timestamp
@@ -3214,8 +3217,8 @@ function rxLogToCSV() {
   const header = 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
   
   const rows = rxLogState.entries.map(entry => {
-    const headerHex = '0x' + entry.header.toString(16).padStart(2, '0');
-    return `${entry.timestamp},${entry.snr.toFixed(2)},${entry.rssi},${entry.repeaterId},${entry.pathLength},${headerHex}`;
+    const formattedHeader = '0x' + entry.header.toString(16).padStart(2, '0');
+    return `${entry.timestamp},${entry.snr.toFixed(2)},${entry.rssi},${entry.repeaterId},${entry.pathLength},${formattedHeader}`;
   });
   
   const csv = header + rows.join('\n');
