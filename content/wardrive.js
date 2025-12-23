@@ -79,6 +79,11 @@ const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (s
 const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
 const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 
+// API Batch Queue Configuration
+const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
+const API_BATCH_FLUSH_INTERVAL_MS = 30000;  // Flush every 30 seconds
+const API_TX_FLUSH_DELAY_MS = 3000;         // Flush 3 seconds after TX ping
+
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
@@ -202,6 +207,14 @@ const state = {
     entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
   },
   rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
+};
+
+// API Batch Queue State
+const apiQueue = {
+  messages: [],           // Array of pending payloads
+  flushTimerId: null,     // Timer ID for periodic flush (30s)
+  txFlushTimerId: null,   // Timer ID for TX-triggered flush (3s)
+  isProcessing: false     // Lock to prevent concurrent flush operations
 };
 
 // Status message management with minimum visibility duration
@@ -535,6 +548,9 @@ function cleanupAllTimers() {
     statusMessageState.pendingTimer = null;
     statusMessageState.pendingMessage = null;
   }
+  
+  // Clean up API queue timers
+  stopFlushTimers();
   
   // Clean up state timer references
   state.autoCountdownTimer = null;
@@ -1384,7 +1400,7 @@ async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
 
 /**
  * Post to MeshMapper API and refresh coverage map after heard repeats are finalized
- * This executes immediately (no delay) because it's called after the RX listening window
+ * This function now queues TX messages instead of posting immediately
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {number} accuracy - GPS accuracy in meters
@@ -1393,18 +1409,25 @@ async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
 async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
   debugLog(`postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
   
-  setDynamicStatus("Posting to API", STATUS_COLORS.info);
+  // Build payload
+  const payload = {
+    key: MESHMAPPER_API_KEY,
+    lat,
+    lon,
+    who: getDeviceIdentifier(),
+    power: getCurrentPowerSetting(),
+    heard_repeats: heardRepeats,
+    ver: APP_VERSION,
+    test: 0,
+    iata: WARDIVE_IATA_CODE,
+    session_id: state.wardriveSessionId
+  };
   
-  // Hidden 3-second delay before API POST (user sees "Posting to API" status during this time)
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // Queue message instead of posting immediately
+  queueApiMessage(payload, "TX");
+  debugLog(`TX message queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
   
-  try {
-    await postToMeshMapperAPI(lat, lon, heardRepeats);
-  } catch (error) {
-    debugError("MeshMapper API post failed:", error);
-  }
-  
-  // Update map after API post
+  // Update map after queueing
   setTimeout(() => {
     const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
     
@@ -1415,8 +1438,8 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
       debugLog(`Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
-    // Unlock ping controls now that API post is complete
-    unlockPingControls("after API post completion");
+    // Unlock ping controls now that message is queued
+    unlockPingControls("after TX message queued");
     
     // Update status based on current mode
     if (state.connection) {
@@ -1431,11 +1454,225 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
           debugLog("Resumed auto countdown after manual ping");
         }
       } else {
-        debugLog("Setting dynamic status to em dash");
-        setDynamicStatus("Idle");
+        debugLog("Setting dynamic status to show queue size");
+        // Status already set by queueApiMessage()
       }
     }
   }, MAP_REFRESH_DELAY_MS);
+}
+
+// ---- API Batch Queue System ----
+
+/**
+ * Queue an API message for batch posting
+ * @param {Object} payload - The API payload object
+ * @param {string} wardriveType - "TX" or "RX" wardrive type
+ */
+function queueApiMessage(payload, wardriveType) {
+  debugLog(`[API QUEUE] Queueing ${wardriveType} message`);
+  
+  // Add WARDRIVE_TYPE to payload
+  const messagePayload = {
+    ...payload,
+    WARDRIVE_TYPE: wardriveType
+  };
+  
+  apiQueue.messages.push(messagePayload);
+  debugLog(`[API QUEUE] Queue size: ${apiQueue.messages.length}/${API_BATCH_MAX_SIZE}`);
+  
+  // Start periodic flush timer if this is the first message
+  if (apiQueue.messages.length === 1 && !apiQueue.flushTimerId) {
+    startFlushTimer();
+  }
+  
+  // If TX type: start/reset 3-second flush timer
+  if (wardriveType === "TX") {
+    scheduleTxFlush();
+  }
+  
+  // If queue reaches max size: flush immediately
+  if (apiQueue.messages.length >= API_BATCH_MAX_SIZE) {
+    debugLog(`[API QUEUE] Queue reached max size (${API_BATCH_MAX_SIZE}), flushing immediately`);
+    flushApiQueue();
+  }
+  
+  // Update status to show queue depth
+  setDynamicStatus(`Queued (${apiQueue.messages.length}/50)`, STATUS_COLORS.info);
+}
+
+/**
+ * Schedule flush 3 seconds after TX ping
+ * Resets timer if called again (coalesces rapid TX pings)
+ */
+function scheduleTxFlush() {
+  debugLog(`[API QUEUE] Scheduling TX flush in ${API_TX_FLUSH_DELAY_MS}ms`);
+  
+  // Clear existing TX flush timer if present
+  if (apiQueue.txFlushTimerId) {
+    clearTimeout(apiQueue.txFlushTimerId);
+    debugLog(`[API QUEUE] Cleared previous TX flush timer`);
+  }
+  
+  // Schedule new TX flush
+  apiQueue.txFlushTimerId = setTimeout(() => {
+    debugLog(`[API QUEUE] TX flush timer fired`);
+    flushApiQueue();
+  }, API_TX_FLUSH_DELAY_MS);
+}
+
+/**
+ * Start the 30-second periodic flush timer
+ */
+function startFlushTimer() {
+  debugLog(`[API QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
+  
+  // Clear existing timer if present
+  if (apiQueue.flushTimerId) {
+    clearInterval(apiQueue.flushTimerId);
+  }
+  
+  // Start periodic flush timer
+  apiQueue.flushTimerId = setInterval(() => {
+    if (apiQueue.messages.length > 0) {
+      debugLog(`[API QUEUE] Periodic flush timer fired, flushing ${apiQueue.messages.length} messages`);
+      flushApiQueue();
+    }
+  }, API_BATCH_FLUSH_INTERVAL_MS);
+}
+
+/**
+ * Stop all flush timers (periodic and TX)
+ */
+function stopFlushTimers() {
+  debugLog(`[API QUEUE] Stopping all flush timers`);
+  
+  if (apiQueue.flushTimerId) {
+    clearInterval(apiQueue.flushTimerId);
+    apiQueue.flushTimerId = null;
+    debugLog(`[API QUEUE] Periodic flush timer stopped`);
+  }
+  
+  if (apiQueue.txFlushTimerId) {
+    clearTimeout(apiQueue.txFlushTimerId);
+    apiQueue.txFlushTimerId = null;
+    debugLog(`[API QUEUE] TX flush timer stopped`);
+  }
+}
+
+/**
+ * Flush all queued messages to the API
+ * Prevents concurrent flushes with isProcessing flag
+ * @returns {Promise<void>}
+ */
+async function flushApiQueue() {
+  // Prevent concurrent flushes
+  if (apiQueue.isProcessing) {
+    debugWarn(`[API QUEUE] Flush already in progress, skipping`);
+    return;
+  }
+  
+  // Nothing to flush
+  if (apiQueue.messages.length === 0) {
+    debugLog(`[API QUEUE] Queue is empty, nothing to flush`);
+    return;
+  }
+  
+  // Lock processing
+  apiQueue.isProcessing = true;
+  debugLog(`[API QUEUE] Starting flush of ${apiQueue.messages.length} messages`);
+  
+  // Clear TX flush timer when flushing
+  if (apiQueue.txFlushTimerId) {
+    clearTimeout(apiQueue.txFlushTimerId);
+    apiQueue.txFlushTimerId = null;
+  }
+  
+  // Take all messages from queue
+  const batch = [...apiQueue.messages];
+  apiQueue.messages = [];
+  
+  // Count TX and RX messages for logging
+  const txCount = batch.filter(m => m.WARDRIVE_TYPE === "TX").length;
+  const rxCount = batch.filter(m => m.WARDRIVE_TYPE === "RX").length;
+  debugLog(`[API QUEUE] Batch composition: ${txCount} TX, ${rxCount} RX`);
+  
+  // Update status
+  setDynamicStatus(`Posting ${batch.length} to API`, STATUS_COLORS.info);
+  
+  try {
+    // Validate session_id exists
+    if (!state.wardriveSessionId) {
+      debugError("[API QUEUE] Cannot flush: no session_id available");
+      setDynamicStatus("Error: No session ID for API post", STATUS_COLORS.error);
+      state.disconnectReason = "session_id_error";
+      setTimeout(() => {
+        disconnect().catch(err => debugError(`Disconnect after missing session_id failed: ${err.message}`));
+      }, 1500);
+      return;
+    }
+    
+    debugLog(`[API QUEUE] POST to ${MESHMAPPER_API_URL} with ${batch.length} messages`);
+    
+    const response = await fetch(MESHMAPPER_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(batch)
+    });
+    
+    debugLog(`[API QUEUE] Response status: ${response.status}`);
+    
+    // Parse response to check for slot revocation
+    try {
+      const data = await response.json();
+      debugLog(`[API QUEUE] Response data: ${JSON.stringify(data)}`);
+      
+      // Check if slot has been revoked
+      if (data.allowed === false) {
+        debugWarn("[API QUEUE] Slot has been revoked by API");
+        setDynamicStatus("Error: Posting to API (Revoked)", STATUS_COLORS.error);
+        state.disconnectReason = "slot_revoked";
+        setTimeout(() => {
+          disconnect().catch(err => debugError(`Disconnect after slot revocation failed: ${err.message}`));
+        }, 1500);
+        return;
+      } else if (data.allowed === true) {
+        debugLog("[API QUEUE] Slot check passed");
+      }
+    } catch (parseError) {
+      debugWarn(`[API QUEUE] Failed to parse response: ${parseError.message}`);
+    }
+    
+    if (!response.ok) {
+      debugWarn(`[API QUEUE] API returned error status ${response.status}`);
+      setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
+    } else {
+      debugLog(`[API QUEUE] Batch post successful: ${txCount} TX, ${rxCount} RX`);
+      // Clear status after successful post
+      if (state.connection && !state.running) {
+        setDynamicStatus("Idle");
+      }
+    }
+  } catch (error) {
+    debugError(`[API QUEUE] Batch post failed: ${error.message}`);
+    setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
+  } finally {
+    // Unlock processing
+    apiQueue.isProcessing = false;
+    debugLog(`[API QUEUE] Flush complete`);
+  }
+}
+
+/**
+ * Get queue status for debugging
+ * @returns {Object} Queue status object
+ */
+function getQueueStatus() {
+  return {
+    queueSize: apiQueue.messages.length,
+    isProcessing: apiQueue.isProcessing,
+    hasPeriodicTimer: apiQueue.flushTimerId !== null,
+    hasTxTimer: apiQueue.txFlushTimerId !== null
+  };
 }
 
 // ---- Repeater Echo Tracking ----
@@ -2172,18 +2409,17 @@ function flushAllBatches(trigger = 'session_end') {
 
 /**
  * Queue an entry for API posting
- * For now: console.log in debug mode
- * Future: Actual HTTP POST to MESHMAPPER_RX_LOG_API_URL
+ * Uses the batch queue system to aggregate RX messages
  * @param {Object} entry - The aggregated entry to post
  */
 function queueApiPost(entry) {
   // Validate session_id exists
   if (!state.wardriveSessionId) {
-    debugWarn(`[RX BATCH API] Cannot post: no session_id available`);
+    debugWarn(`[RX BATCH API] Cannot queue: no session_id available`);
     return;
   }
   
-  // Build unified API payload (TX-style)
+  // Build unified API payload (without WARDRIVE_TYPE yet)
   // Format heard_repeats as "repeater_id(snr_avg)" - e.g., "4e(12.0)"
   // Use absolute value and format with one decimal place
   const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr_avg).toFixed(1)})`;
@@ -2198,35 +2434,12 @@ function queueApiPost(entry) {
     ver: APP_VERSION,
     test: 0,
     iata: WARDIVE_IATA_CODE,
-    session_id: state.wardriveSessionId,
-    WARDRIVE_TYPE: "RX"
+    session_id: state.wardriveSessionId
   };
   
-  // DEBUG MODE: Console log the payload
-  debugLog(`[RX BATCH API] ===== API PAYLOAD (DEBUG MODE) =====`);
-  console.log('[RX BATCH API] Payload:', JSON.stringify(payload, null, 2));
-  debugLog(`[RX BATCH API] =====================================`);
-  
-  // PRODUCTION CODE 
-  // Post to unified API endpoint
-  fetch(MESHMAPPER_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  })
-  .then(response => {
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    return response.json();
-  })
-  .then(data => {
-    debugLog(`[RX BATCH API] ✅ Successfully posted entry for repeater ${entry.repeater_id}`);
-    debugLog(`[RX BATCH API] Response:`, data);
-  })
-  .catch(error => {
-    debugError(`[RX BATCH API] ❌ Failed to post entry for repeater ${entry.repeater_id}: ${error.message}`);
-  });
+  // Queue message instead of posting immediately
+  queueApiMessage(payload, "RX");
+  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr_avg.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -3335,6 +3548,10 @@ async function connect() {
       // Flush all pending RX batch data before cleanup
       flushAllBatches('disconnect');
       
+      // Clear API queue messages (timers already stopped in cleanupAllTimers)
+      apiQueue.messages = [];
+      debugLog(`[API QUEUE] Queue cleared on disconnect`);
+      
       // Clean up all timers
       cleanupAllTimers();
       
@@ -3377,7 +3594,14 @@ async function disconnect() {
   setConnStatus("Disconnecting", STATUS_COLORS.info);
   setDynamicStatus("Idle"); // Clear dynamic status
 
-  // Release capacity slot if we have a public key
+  // 1. CRITICAL: Flush API queue FIRST (session_id still valid)
+  if (apiQueue.messages.length > 0) {
+    debugLog(`Flushing ${apiQueue.messages.length} queued messages before disconnect`);
+    await flushApiQueue();
+  }
+  stopFlushTimers();
+
+  // 2. THEN release capacity slot if we have a public key
   if (state.devicePublicKey) {
     try {
       debugLog("Releasing capacity slot");
@@ -3388,7 +3612,7 @@ async function disconnect() {
     }
   }
 
-  // Delete the wardriving channel before disconnecting
+  // 3. Delete the wardriving channel before disconnecting
   try {
     if (state.channel && typeof state.connection.deleteChannel === "function") {
       debugLog(`Deleting channel ${CHANNEL_NAME} at index ${state.channel.channelIdx}`);
@@ -3400,6 +3624,7 @@ async function disconnect() {
     // Don't fail disconnect if channel deletion fails
   }
 
+  // 4. Close BLE connection
   try {
     // WebBleConnection typically exposes one of these.
     if (typeof state.connection.close === "function") {
