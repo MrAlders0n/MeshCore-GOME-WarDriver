@@ -156,6 +156,8 @@ const logScrollContainer = $("logScrollContainer");
 const logCount = $("logCount");
 const logLastTime = $("logLastTime");
 const logLastSnr = $("logLastSnr");
+const logLastSnrChip = $("logLastSnrChip");
+const sessionLogCopyBtn = $("sessionLogCopyBtn");
 
 // RX Log selectors
 const rxLogSummaryBar = $("rxLogSummaryBar");
@@ -166,6 +168,7 @@ const rxLogLastTime = $("rxLogLastTime");
 const rxLogLastRepeater = $("rxLogLastRepeater");
 const rxLogEntries = $("rxLogEntries");
 const rxLogExpandArrow = $("rxLogExpandArrow");
+const rxLogCopyBtn = $("rxLogCopyBtn");
 
 // Error Log selectors
 const errorLogSummaryBar = $("errorLogSummaryBar");
@@ -176,6 +179,7 @@ const errorLogLastTime = $("errorLogLastTime");
 const errorLogLastError = $("errorLogLastError");
 const errorLogEntries = $("errorLogEntries");
 const errorLogExpandArrow = $("errorLogExpandArrow");
+const errorLogCopyBtn = $("errorLogCopyBtn");
 
 // Session log state
 const sessionLogState = {
@@ -2136,8 +2140,8 @@ async function handlePassiveRxLogging(packet, data) {
     const lon = state.lastFix.lon;
     const timestamp = new Date().toISOString();
     
-    // Add entry to RX log
-    addRxLogEntry(repeaterId, data.lastSnr, lat, lon, timestamp);
+    // Add entry to RX log (including RSSI, path length, and header for CSV export)
+    addRxLogEntry(repeaterId, data.lastSnr, data.lastRssi, packet.path.length, packet.header, lat, lon, timestamp);
     
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
@@ -2225,8 +2229,8 @@ async function handlePassiveRxLogEvent(data) {
     const lon = state.lastFix.lon;
     const timestamp = new Date().toISOString();
     
-    // Add entry to RX log
-    addRxLogEntry(repeaterId, data.lastSnr, lat, lon, timestamp);
+    // Add entry to RX log (including RSSI, path length, and header for CSV export)
+    addRxLogEntry(repeaterId, data.lastSnr, data.lastRssi, packet.path.length, packet.header, lat, lon, timestamp);
     
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
@@ -2623,7 +2627,11 @@ function updateLogSummary() {
   if (count === 0) {
     logLastTime.textContent = 'No data';
     logLastSnr.textContent = '—';
-    debugLog('[UI] Session log summary updated: no entries');
+    // Hide SNR chip when no entries
+    if (logLastSnrChip) {
+      logLastSnrChip.classList.add('hidden');
+    }
+    debugLog('[SESSION LOG] Session log summary updated: no entries');
     return;
   }
   
@@ -2633,14 +2641,35 @@ function updateLogSummary() {
   
   // Count total heard repeats in the latest ping
   const heardCount = lastEntry.events.length;
-  debugLog(`[UI] Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
+  debugLog(`[SESSION LOG] Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
   
   if (heardCount > 0) {
     logLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
     logLastSnr.className = 'text-xs font-mono text-slate-300';
+    
+    // Find best (highest) SNR from events
+    let bestSnr = -Infinity;
+    lastEntry.events.forEach(event => {
+      if (event.value > bestSnr) {
+        bestSnr = event.value;
+      }
+    });
+    
+    // Update SNR chip
+    if (logLastSnrChip && bestSnr !== -Infinity) {
+      const snrClass = getSnrSeverityClass(bestSnr);
+      logLastSnrChip.className = `chip-mini ${snrClass}`;
+      logLastSnrChip.textContent = `${bestSnr.toFixed(2)} dB`;
+      logLastSnrChip.classList.remove('hidden');
+      debugLog(`[SESSION LOG] Best SNR chip updated: ${bestSnr.toFixed(2)} dB (${snrClass})`);
+    }
   } else {
     logLastSnr.textContent = '0 Repeats';
     logLastSnr.className = 'text-xs font-mono text-slate-500';
+    // Hide SNR chip when no repeats
+    if (logLastSnrChip) {
+      logLastSnrChip.classList.add('hidden');
+    }
   }
 }
 
@@ -2737,6 +2766,9 @@ function parseRxLogEntry(entry) {
   return {
     repeaterId: entry.repeaterId,
     snr: entry.snr,
+    rssi: entry.rssi,
+    pathLength: entry.pathLength,
+    header: entry.header,
     lat: entry.lat.toFixed(5),
     lon: entry.lon.toFixed(5),
     timestamp: entry.timestamp
@@ -2902,10 +2934,13 @@ function toggleRxLogBottomSheet() {
  * @param {number} lon - Longitude
  * @param {string} timestamp - ISO timestamp
  */
-function addRxLogEntry(repeaterId, snr, lat, lon, timestamp) {
+function addRxLogEntry(repeaterId, snr, rssi, pathLength, header, lat, lon, timestamp) {
   const entry = {
     repeaterId,
     snr,
+    rssi,
+    pathLength,
+    header,
     lat,
     lon,
     timestamp
@@ -3115,6 +3150,161 @@ function addErrorLogEntry(message, source = null) {
   updateErrorLogSummary();
   
   debugLog(`[ERROR LOG] Added entry: ${message.substring(0, 50)}${message.length > 50 ? '...' : ''}`);
+}
+
+// ---- CSV Export Functions ----
+
+/**
+ * Convert Session Log to CSV format
+ * Columns: Timestamp,Latitude,Longitude,Repeater1_ID,Repeater1_SNR,Repeater2_ID,Repeater2_SNR,...
+ * @returns {string} CSV formatted string
+ */
+function sessionLogToCSV() {
+  debugLog('[SESSION LOG] Converting session log to CSV format');
+  
+  if (sessionLogState.entries.length === 0) {
+    debugWarn('[SESSION LOG] No session log entries to export');
+    return 'Timestamp,Latitude,Longitude\n';
+  }
+  
+  // Build CSV header - dynamic based on max number of repeaters
+  let maxRepeaters = 0;
+  sessionLogState.entries.forEach(entry => {
+    if (entry.events.length > maxRepeaters) {
+      maxRepeaters = entry.events.length;
+    }
+  });
+  
+  let header = 'Timestamp,Latitude,Longitude';
+  for (let i = 1; i <= maxRepeaters; i++) {
+    header += `,Repeater${i}_ID,Repeater${i}_SNR`;
+  }
+  header += '\n';
+  
+  // Build CSV rows
+  const rows = sessionLogState.entries.map(entry => {
+    let row = `${entry.timestamp},${entry.lat},${entry.lon}`;
+    
+    // Add repeater data
+    entry.events.forEach(event => {
+      row += `,${event.type},${event.value.toFixed(2)}`;
+    });
+    
+    return row;
+  });
+  
+  const csv = header + rows.join('\n');
+  debugLog(`[SESSION LOG] CSV export complete: ${sessionLogState.entries.length} entries`);
+  return csv;
+}
+
+/**
+ * Convert RX Log to CSV format
+ * Columns: Timestamp,SNR,RSSI,RepeaterID,PathLength,Header
+ * @returns {string} CSV formatted string
+ */
+function rxLogToCSV() {
+  debugLog('[PASSIVE RX UI] Converting RX log to CSV format');
+  
+  if (rxLogState.entries.length === 0) {
+    debugWarn('[PASSIVE RX UI] No RX log entries to export');
+    return 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
+  }
+  
+  const header = 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
+  
+  const rows = rxLogState.entries.map(entry => {
+    const headerHex = '0x' + entry.header.toString(16).padStart(2, '0');
+    return `${entry.timestamp},${entry.snr.toFixed(2)},${entry.rssi},${entry.repeaterId},${entry.pathLength},${headerHex}`;
+  });
+  
+  const csv = header + rows.join('\n');
+  debugLog(`[PASSIVE RX UI] CSV export complete: ${rxLogState.entries.length} entries`);
+  return csv;
+}
+
+/**
+ * Convert Error Log to CSV format
+ * Columns: Timestamp,ErrorType,Message
+ * @returns {string} CSV formatted string
+ */
+function errorLogToCSV() {
+  debugLog('[ERROR LOG] Converting error log to CSV format');
+  
+  if (errorLogState.entries.length === 0) {
+    debugWarn('[ERROR LOG] No error log entries to export');
+    return 'Timestamp,ErrorType,Message\n';
+  }
+  
+  const header = 'Timestamp,ErrorType,Message\n';
+  
+  const rows = errorLogState.entries.map(entry => {
+    const source = entry.source || 'ERROR';
+    // Escape quotes in message
+    const message = entry.message.replace(/"/g, '""');
+    return `${entry.timestamp},${source},"${message}"`;
+  });
+  
+  const csv = header + rows.join('\n');
+  debugLog(`[ERROR LOG] CSV export complete: ${errorLogState.entries.length} entries`);
+  return csv;
+}
+
+/**
+ * Copy log data to clipboard as CSV
+ * @param {string} logType - Type of log: 'session', 'rx', or 'error'
+ * @param {HTMLButtonElement} button - The button element that triggered the copy
+ */
+async function copyLogToCSV(logType, button) {
+  try {
+    debugLog(`[UI] Copy to CSV requested for ${logType} log`);
+    
+    let csv;
+    let logTag;
+    
+    switch (logType) {
+      case 'session':
+        csv = sessionLogToCSV();
+        logTag = '[SESSION LOG]';
+        break;
+      case 'rx':
+        csv = rxLogToCSV();
+        logTag = '[PASSIVE RX UI]';
+        break;
+      case 'error':
+        csv = errorLogToCSV();
+        logTag = '[ERROR LOG]';
+        break;
+      default:
+        debugError('[UI] Unknown log type for CSV export:', logType);
+        return;
+    }
+    
+    // Copy to clipboard
+    await navigator.clipboard.writeText(csv);
+    debugLog(`${logTag} CSV data copied to clipboard`);
+    
+    // Show feedback
+    const originalText = button.textContent;
+    button.textContent = 'Copied!';
+    button.classList.add('copied');
+    
+    // Reset after 1.5 seconds
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.classList.remove('copied');
+      debugLog(`${logTag} Copy button feedback reset`);
+    }, 1500);
+    
+  } catch (error) {
+    debugError(`[UI] Failed to copy ${logType} log to clipboard:`, error.message);
+    // Show error feedback
+    const originalText = button.textContent;
+    button.textContent = 'Failed';
+    setTimeout(() => {
+      button.textContent = originalText;
+    }, 1500);
+  }
 }
 
 // ---- Ping ----
@@ -4041,6 +4231,31 @@ export async function onLoad() {
     errorLogSummaryBar.addEventListener("click", () => {
       debugLog("[ERROR LOG] Error log summary bar clicked - toggling Error log");
       toggleErrorLogBottomSheet();
+    });
+  }
+
+  // Copy button event listeners
+  if (sessionLogCopyBtn) {
+    sessionLogCopyBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // Prevent triggering the summary bar toggle
+      debugLog("[SESSION LOG] Copy button clicked");
+      copyLogToCSV('session', sessionLogCopyBtn);
+    });
+  }
+
+  if (rxLogCopyBtn) {
+    rxLogCopyBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // Prevent triggering the summary bar toggle
+      debugLog("[PASSIVE RX UI] Copy button clicked");
+      copyLogToCSV('rx', rxLogCopyBtn);
+    });
+  }
+
+  if (errorLogCopyBtn) {
+    errorLogCopyBtn.addEventListener("click", (e) => {
+      e.stopPropagation(); // Prevent triggering the summary bar toggle
+      debugLog("[ERROR LOG] Copy button clicked");
+      copyLogToCSV('error', errorLogCopyBtn);
     });
   }
 
