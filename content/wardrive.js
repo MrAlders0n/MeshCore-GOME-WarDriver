@@ -329,7 +329,7 @@ function applyStatusImmediately(text, color) {
   statusMessageState.lastSetTime = Date.now();
   statusMessageState.currentText = text;
   statusMessageState.currentColor = color;
-  // Debug log removed - status updates are already logged earlier in the flow
+  debugLog(`Status applied: "${text}"`);
 }
 
 /**
@@ -1532,8 +1532,7 @@ function queueApiMessage(payload, wardriveType) {
     flushApiQueue();
   }
   
-  // Update status to show queue depth
-  setDynamicStatus(`Queued (${apiQueue.messages.length}/50)`, STATUS_COLORS.info);
+  // Queue depth is logged above for debugging - no need to show in dynamic status bar
 }
 
 /**
