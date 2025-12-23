@@ -2647,13 +2647,8 @@ function updateLogSummary() {
     logLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
     logLastSnr.className = 'text-xs font-mono text-slate-300';
     
-    // Find best (highest) SNR from events
-    let bestSnr = -Infinity;
-    lastEntry.events.forEach(event => {
-      if (event.value > bestSnr) {
-        bestSnr = event.value;
-      }
-    });
+    // Find best (highest) SNR from events using Math.max
+    const bestSnr = Math.max(...lastEntry.events.map(event => event.value));
     
     // Update SNR chip
     if (logLastSnrChip && bestSnr !== -Infinity) {
@@ -3193,6 +3188,12 @@ function sessionLogToCSV() {
       row += `,${event.type},${event.value.toFixed(2)}`;
     });
     
+    // Pad with empty cells if this entry has fewer repeaters than max
+    const missingColumns = (maxRepeaters - entry.events.length) * 2; // 2 columns per repeater (ID, SNR)
+    for (let i = 0; i < missingColumns; i++) {
+      row += ',';
+    }
+    
     return row;
   });
   
@@ -3217,8 +3218,12 @@ function rxLogToCSV() {
   const header = 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
   
   const rows = rxLogState.entries.map(entry => {
-    const formattedHeader = '0x' + entry.header.toString(16).padStart(2, '0');
-    return `${entry.timestamp},${entry.snr.toFixed(2)},${entry.rssi},${entry.repeaterId},${entry.pathLength},${formattedHeader}`;
+    // Handle potentially missing fields from old entries
+    const snr = entry.snr !== undefined ? entry.snr.toFixed(2) : '';
+    const rssi = entry.rssi !== undefined ? entry.rssi : '';
+    const pathLength = entry.pathLength !== undefined ? entry.pathLength : '';
+    const formattedHeader = entry.header !== undefined ? '0x' + entry.header.toString(16).padStart(2, '0') : '';
+    return `${entry.timestamp},${snr},${rssi},${entry.repeaterId},${pathLength},${formattedHeader}`;
   });
   
   const csv = header + rows.join('\n');
@@ -3242,10 +3247,10 @@ function errorLogToCSV() {
   const header = 'Timestamp,ErrorType,Message\n';
   
   const rows = errorLogState.entries.map(entry => {
-    const source = entry.source || 'ERROR';
-    // Escape quotes in message
+    // Escape quotes in both source and message fields
+    const source = (entry.source || 'ERROR').replace(/"/g, '""');
     const message = entry.message.replace(/"/g, '""');
-    return `${entry.timestamp},${source},"${message}"`;
+    return `${entry.timestamp},"${source}","${message}"`;
   });
   
   const csv = header + rows.join('\n');
