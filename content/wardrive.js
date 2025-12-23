@@ -208,7 +208,8 @@ const errorLogState = {
   entries: [],  // Array of error log entries
   isExpanded: false,
   autoScroll: true,
-  maxEntries: 50  // Limit to prevent memory issues
+  maxEntries: 50,  // Limit to prevent memory issues
+  previewLength: 20  // Character length for error message preview in summary
 };
 
 // ---- State ----
@@ -2974,9 +2975,9 @@ function updateErrorLogSummary() {
   errorLogLastTime.classList.remove('hidden');
   
   if (errorLogLastError) {
-    // Show first 20 chars of error message
-    const preview = lastEntry.message.length > 20 
-      ? lastEntry.message.substring(0, 20) + '...' 
+    // Show preview of error message
+    const preview = lastEntry.message.length > errorLogState.previewLength 
+      ? lastEntry.message.substring(0, errorLogState.previewLength) + '...' 
       : lastEntry.message;
     errorLogLastError.textContent = preview;
   }
@@ -4110,7 +4111,7 @@ export async function onLoad() {
         await connect();
       }
     } catch (e) {
-      debugError("[UI] Connection button error:" `${e.message}`, e);
+      debugError("[UI] Connection button error:", `${e.message}`, e);
       setDynamicStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
