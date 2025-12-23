@@ -107,7 +107,7 @@ const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
-const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";  // TODO: Set when API endpoint is ready
+const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 
 // Static for now; will be made dynamic later.
 const WARDIVE_IATA_CODE = "YOW";
@@ -208,7 +208,8 @@ const errorLogState = {
   entries: [],  // Array of error log entries
   isExpanded: false,
   autoScroll: true,
-  maxEntries: 50  // Limit to prevent memory issues
+  maxEntries: 50,  // Limit to prevent memory issues
+  previewLength: 20  // Character length for error message preview in summary
 };
 
 // ---- State ----
@@ -2166,91 +2167,7 @@ async function handlePassiveRxLogging(packet, data) {
   }
 }
 
-// DEPRECATED: Old separate passive RX handler - keeping for reference during migration
-/**
- * Handle passive RX log event - monitors all incoming packets
- * Extracts the LAST hop from the path (direct repeater) and records observation
- * FILTERING: Excludes echoes of user's own pings on the wardriving channel
- * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
- * @deprecated Use handleUnifiedRxLogEvent instead
- */
-async function handlePassiveRxLogEvent(data) {
-  try {
-    debugLog(`[PASSIVE RX] Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
-    
-    // Parse the packet from raw data
-    const packet = Packet.fromBytes(data.raw);
-    
-    // VALIDATION STEP 1: Header validation
-    // Expected header for channel GroupText packets: 0x15
-    const EXPECTED_HEADER = 0x15;
-    if (packet.header !== EXPECTED_HEADER) {
-      debugLog(`[PASSIVE RX] Ignoring: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')})`);
-      return;
-    }
-    
-    debugLog(`[PASSIVE RX] Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
-    
-    // VALIDATION STEP 2: Check payload length
-    if (packet.payload.length < 3) {
-      debugLog(`[PASSIVE RX] Ignoring: payload too short`);
-      return;
-    }
-    
-    // VALIDATION STEP 3: Echo filtering for wardriving channel
-    // OPTIMIZATION: Skip processing if Session Log handler is actively tracking
-    // This avoids double-decryption during the 7-second echo window
-    if (state.repeaterTracking.isListening) {
-      debugLog(`[PASSIVE RX] ⊘ SKIP: Session Log is actively tracking echoes (7-second window) - avoiding double processing`);
-      return;
-    }
-    
-    // Check if this packet is on the wardriving channel
-    const packetChannelHash = packet.payload[0];
-    const isWardrivingChannel = WARDRIVING_CHANNEL_HASH !== null && packetChannelHash === WARDRIVING_CHANNEL_HASH;
-    
-    if (isWardrivingChannel) {
-      debugLog(`[PASSIVE RX] Packet is on wardriving channel (hash=0x${packetChannelHash.toString(16).padStart(2, '0')})`);
-      
-      // Note: We don't need to check sentPayload here anymore since we skip entirely
-      // during active tracking window. Any messages on wardriving channel after the
-      // tracking window ends are from other users and should be logged.
-      debugLog(`[PASSIVE RX] Not in tracking window - message is from another user or source`);
-    } else {
-      debugLog(`[PASSIVE RX] Packet is on a different channel or channel hash unavailable - logging it`);
-    }
-    
-    // VALIDATION STEP 4: Check path length (need at least one hop)
-    if (packet.path.length === 0) {
-      debugLog(`[PASSIVE RX] Ignoring: no path (direct transmission, not via repeater)`);
-      return;
-    }
-    
-    // Extract LAST hop from path (the repeater that directly delivered to us)
-    const lastHopId = packet.path[packet.path.length - 1];
-    const repeaterId = lastHopId.toString(16).padStart(2, '0');
-    
-    debugLog(`[PASSIVE RX] Packet heard via last hop: ${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
-    
-    // Get current GPS location
-    if (!state.lastFix) {
-      debugLog(`[PASSIVE RX] No GPS fix available, skipping entry`);
-      return;
-    }
-    
-    const lat = state.lastFix.lat;
-    const lon = state.lastFix.lon;
-    const timestamp = new Date().toISOString();
-    
-    // Add entry to RX log (including RSSI, path length, and header for CSV export)
-    addRxLogEntry(repeaterId, data.lastSnr, data.lastRssi, packet.path.length, packet.header, lat, lon, timestamp);
-    
-    debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
-    
-  } catch (error) {
-    debugError(`[PASSIVE RX] Error processing rx_log entry: ${error.message}`, error);
-  }
-}
+
 
 /**
  * Start unified RX listening - handles both Session Log tracking and passive RX logging
@@ -2297,14 +2214,7 @@ function stopUnifiedRxListening() {
   debugLog(`[UNIFIED RX] ✅ Unified listening stopped`);
 }
 
-// DEPRECATED: Keeping aliases for backward compatibility during migration
-function startPassiveRxListening() {
-  startUnifiedRxListening();
-}
 
-function stopPassiveRxListening() {
-  stopUnifiedRxListening();
-}
 
 /**
  * Future: Post RX log data to MeshMapper API
@@ -3065,9 +2975,9 @@ function updateErrorLogSummary() {
   errorLogLastTime.classList.remove('hidden');
   
   if (errorLogLastError) {
-    // Show first 20 chars of error message
-    const preview = lastEntry.message.length > 20 
-      ? lastEntry.message.substring(0, 20) + '...' 
+    // Show preview of error message
+    const preview = lastEntry.message.length > errorLogState.previewLength 
+      ? lastEntry.message.substring(0, errorLogState.previewLength) + '...' 
       : lastEntry.message;
     errorLogLastError.textContent = preview;
   }
@@ -3947,8 +3857,8 @@ async function connect() {
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
         
-        // Start passive RX listening after channel setup
-        startPassiveRxListening();
+        // Start unified RX listening after channel setup
+        startUnifiedRxListening();
         
         // GPS initialization
         setDynamicStatus("Priming GPS", STATUS_COLORS.info);
@@ -4037,7 +3947,7 @@ async function connect() {
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
       stopRepeaterTracking(); // Stop repeater echo tracking
-      stopPassiveRxListening(); // Stop passive RX listening
+      stopUnifiedRxListening(); // Stop unified RX listening
       
       // Flush all pending RX batch data before cleanup
       flushAllBatches('disconnect');
@@ -4201,7 +4111,7 @@ export async function onLoad() {
         await connect();
       }
     } catch (e) {
-      debugError("[UI] Connection button error:" `${e.message}`, e);
+      debugError("[UI] Connection button error:", `${e.message}`, e);
       setDynamicStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
