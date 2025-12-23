@@ -156,7 +156,6 @@ const logScrollContainer = $("logScrollContainer");
 const logCount = $("logCount");
 const logLastTime = $("logLastTime");
 const logLastSnr = $("logLastSnr");
-const logLastSnrChip = $("logLastSnrChip");
 const sessionLogCopyBtn = $("sessionLogCopyBtn");
 
 // RX Log selectors
@@ -166,6 +165,7 @@ const rxLogScrollContainer = $("rxLogScrollContainer");
 const rxLogCount = $("rxLogCount");
 const rxLogLastTime = $("rxLogLastTime");
 const rxLogLastRepeater = $("rxLogLastRepeater");
+const rxLogSnrChip = $("rxLogSnrChip");
 const rxLogEntries = $("rxLogEntries");
 const rxLogExpandArrow = $("rxLogExpandArrow");
 const rxLogCopyBtn = $("rxLogCopyBtn");
@@ -2627,10 +2627,6 @@ function updateLogSummary() {
   if (count === 0) {
     logLastTime.textContent = 'No data';
     logLastSnr.textContent = '—';
-    // Hide SNR chip when no entries
-    if (logLastSnrChip) {
-      logLastSnrChip.classList.add('hidden');
-    }
     debugLog('[SESSION LOG] Session log summary updated: no entries');
     return;
   }
@@ -2646,25 +2642,9 @@ function updateLogSummary() {
   if (heardCount > 0) {
     logLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
     logLastSnr.className = 'text-xs font-mono text-slate-300';
-    
-    // Find best (highest) SNR from events using Math.max
-    const bestSnr = Math.max(...lastEntry.events.map(event => event.value));
-    
-    // Update SNR chip
-    if (logLastSnrChip && bestSnr !== -Infinity) {
-      const snrClass = getSnrSeverityClass(bestSnr);
-      logLastSnrChip.className = `chip-mini ${snrClass}`;
-      logLastSnrChip.textContent = `${bestSnr.toFixed(2)} dB`;
-      logLastSnrChip.classList.remove('hidden');
-      debugLog(`[SESSION LOG] Best SNR chip updated: ${bestSnr.toFixed(2)} dB (${snrClass})`);
-    }
   } else {
     logLastSnr.textContent = '0 Repeats';
     logLastSnr.className = 'text-xs font-mono text-slate-500';
-    // Hide SNR chip when no repeats
-    if (logLastSnrChip) {
-      logLastSnrChip.classList.add('hidden');
-    }
   }
 }
 
@@ -2735,22 +2715,11 @@ function toggleBottomSheet() {
   if (sessionLogState.isExpanded) {
     // Hide status elements, show copy button
     if (logLastSnr) logLastSnr.classList.add('hidden');
-    if (logLastSnrChip) logLastSnrChip.classList.add('hidden');
     if (sessionLogCopyBtn) sessionLogCopyBtn.classList.remove('hidden');
     debugLog('[SESSION LOG] Expanded - showing copy button, hiding status');
   } else {
     // Show status elements, hide copy button
     if (logLastSnr) logLastSnr.classList.remove('hidden');
-    if (logLastSnrChip) {
-      // Only show SNR chip if there are repeats (it manages its own visibility)
-      const count = sessionLogState.entries.length;
-      if (count > 0) {
-        const lastEntry = sessionLogState.entries[count - 1];
-        if (lastEntry.events.length > 0) {
-          logLastSnrChip.classList.remove('hidden');
-        }
-      }
-    }
     if (sessionLogCopyBtn) sessionLogCopyBtn.classList.add('hidden');
     debugLog('[SESSION LOG] Collapsed - hiding copy button, showing status');
   }
@@ -2847,6 +2816,10 @@ function updateRxLogSummary() {
   if (count === 0) {
     rxLogLastTime.textContent = 'No data';
     rxLogLastRepeater.textContent = '—';
+    // Hide SNR chip when no entries
+    if (rxLogSnrChip) {
+      rxLogSnrChip.classList.add('hidden');
+    }
     debugLog('[PASSIVE RX UI] Summary updated: no entries');
     return;
   }
@@ -2855,6 +2828,17 @@ function updateRxLogSummary() {
   const date = new Date(lastEntry.timestamp);
   rxLogLastTime.textContent = date.toLocaleTimeString();
   rxLogLastRepeater.textContent = lastEntry.repeaterId;
+  
+  // Update SNR chip
+  if (rxLogSnrChip && rxLogState.entries.length > 0) {
+    const snrClass = getSnrSeverityClass(lastEntry.snr);
+    rxLogSnrChip.className = `chip-mini ${snrClass}`;
+    rxLogSnrChip.textContent = `${lastEntry.snr.toFixed(2)} dB`;
+    rxLogSnrChip.classList.remove('hidden');
+    debugLog(`[PASSIVE RX UI] SNR chip updated: ${lastEntry.snr.toFixed(2)} dB (${snrClass})`);
+  } else if (rxLogSnrChip) {
+    rxLogSnrChip.classList.add('hidden');
+  }
   
   debugLog(`[PASSIVE RX UI] Summary updated: ${count} observations, last repeater: ${lastEntry.repeaterId}`);
 }
@@ -2948,11 +2932,15 @@ function toggleRxLogBottomSheet() {
   if (rxLogState.isExpanded) {
     // Hide status, show copy button
     if (rxLogLastRepeater) rxLogLastRepeater.classList.add('hidden');
+    if (rxLogSnrChip) rxLogSnrChip.classList.add('hidden');
     if (rxLogCopyBtn) rxLogCopyBtn.classList.remove('hidden');
     debugLog('[PASSIVE RX UI] Expanded - showing copy button, hiding status');
   } else {
     // Show status, hide copy button
     if (rxLogLastRepeater) rxLogLastRepeater.classList.remove('hidden');
+    if (rxLogSnrChip && rxLogState.entries.length > 0) {
+      rxLogSnrChip.classList.remove('hidden');
+    }
     if (rxLogCopyBtn) rxLogCopyBtn.classList.add('hidden');
     debugLog('[PASSIVE RX UI] Collapsed - hiding copy button, showing status');
   }
@@ -3212,35 +3200,24 @@ function sessionLogToCSV() {
   
   if (sessionLogState.entries.length === 0) {
     debugWarn('[SESSION LOG] No session log entries to export');
-    return 'Timestamp,Latitude,Longitude\n';
+    return 'Timestamp,Latitude,Longitude,Repeats\n';
   }
   
-  // Build CSV header - dynamic based on max number of repeaters
-  let maxRepeaters = 0;
-  sessionLogState.entries.forEach(entry => {
-    if (entry.events.length > maxRepeaters) {
-      maxRepeaters = entry.events.length;
-    }
-  });
-  
-  let header = 'Timestamp,Latitude,Longitude';
-  for (let i = 1; i <= maxRepeaters; i++) {
-    header += `,Repeater${i}_ID,Repeater${i}_SNR`;
-  }
-  header += '\n';
+  // Fixed 4-column header
+  const header = 'Timestamp,Latitude,Longitude,Repeats\n';
   
   // Build CSV rows
   const rows = sessionLogState.entries.map(entry => {
     let row = `${entry.timestamp},${entry.lat},${entry.lon}`;
     
-    // Add repeater data
-    entry.events.forEach(event => {
-      row += `,${event.type},${event.value.toFixed(2)}`;
-    });
-    
-    // Pad with empty cells if this entry has fewer repeaters than max
-    const missingColumns = (maxRepeaters - entry.events.length) * 2; // 2 columns per repeater (ID, SNR)
-    for (let i = 0; i < missingColumns; i++) {
+    // Combine all repeater data into single Repeats column
+    // Format: repeaterID(snr)|repeaterID(snr)|...
+    if (entry.events.length > 0) {
+      const repeats = entry.events.map(event => {
+        return `${event.type}(${event.value.toFixed(2)})`;
+      }).join('|');
+      row += `,${repeats}`;
+    } else {
       row += ',';
     }
     
@@ -3254,7 +3231,7 @@ function sessionLogToCSV() {
 
 /**
  * Convert RX Log to CSV format
- * Columns: Timestamp,SNR,RSSI,RepeaterID,PathLength,Header
+ * Columns: Timestamp,RepeaterID,SNR,RSSI,PathLength
  * @returns {string} CSV formatted string
  */
 function rxLogToCSV() {
@@ -3262,18 +3239,17 @@ function rxLogToCSV() {
   
   if (rxLogState.entries.length === 0) {
     debugWarn('[PASSIVE RX UI] No RX log entries to export');
-    return 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
+    return 'Timestamp,RepeaterID,SNR,RSSI,PathLength\n';
   }
   
-  const header = 'Timestamp,SNR,RSSI,RepeaterID,PathLength,Header\n';
+  const header = 'Timestamp,RepeaterID,SNR,RSSI,PathLength\n';
   
   const rows = rxLogState.entries.map(entry => {
     // Handle potentially missing fields from old entries
     const snr = entry.snr !== undefined ? entry.snr.toFixed(2) : '';
     const rssi = entry.rssi !== undefined ? entry.rssi : '';
     const pathLength = entry.pathLength !== undefined ? entry.pathLength : '';
-    const formattedHeader = entry.header !== undefined ? '0x' + entry.header.toString(16).padStart(2, '0') : '';
-    return `${entry.timestamp},${snr},${rssi},${entry.repeaterId},${pathLength},${formattedHeader}`;
+    return `${entry.timestamp},${entry.repeaterId},${snr},${rssi},${pathLength}`;
   });
   
   const csv = header + rows.join('\n');
