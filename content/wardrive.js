@@ -1243,6 +1243,7 @@ async function checkCapacity(reason) {
     const payload = {
       key: MESHMAPPER_API_KEY,
       public_key: state.devicePublicKey,
+      ver: APP_VERSION,
       who: getDeviceIdentifier(),
       reason: reason
     };
