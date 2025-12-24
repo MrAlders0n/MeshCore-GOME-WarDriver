@@ -418,7 +418,62 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Notes**: Displayed in Dynamic Status Bar as a warning message to guide user that Connect button is disabled. Once radio power is selected, status changes to "Idle" (em dash) and Connect button becomes enabled.
 - **Source**: `content/wardrive.js:updateConnectButtonState()`
 
+#### 9. Preflight Zone Status Messages
+
+##### Checking location...
+- **Message**: `"Checking location..."`
+- **Color**: Sky blue (info)
+- **When**: During preflight zone status check, while acquiring GPS and calling zones/status API
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### Location error: gps_stale
+- **Message**: `"Location error: gps_stale"`
+- **Color**: Red (error)
+- **When**: GPS fix is too old (> 60 seconds) during preflight zone status check
+- **Terminal State**: Yes (persists until new zone status check succeeds)
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### Location error: gps_inaccurate
+- **Message**: `"Location error: gps_inaccurate"`
+- **Color**: Red (error)
+- **When**: GPS accuracy is too low (> 100m) during preflight zone status check
+- **Terminal State**: Yes (persists until new zone status check succeeds)
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### Outside coverage area
+- **Message**: `"Outside coverage area"`
+- **Color**: Red (error)
+- **When**: Preflight zone status check shows device is outside all zones
+- **Terminal State**: Yes (persists until zone status check shows in zone)
+- **Notes**: Connection Status shows "Unavailable", Location Info shows nearest zone with distance
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### [Zone Name] ([CODE]) — temporarily unavailable
+- **Message**: `"[Zone Name] ([CODE]) — temporarily unavailable"` (e.g., "Ottawa (YOW) — temporarily unavailable")
+- **Color**: Amber (warning)
+- **When**: Preflight zone status check shows device is in zone, but zone is disabled
+- **Terminal State**: Yes (persists until zone is enabled)
+- **Notes**: Connection Status shows "Unavailable", Location Info shows zone name and code
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### [Zone Name] ([CODE]) — at capacity
+- **Message**: `"[Zone Name] ([CODE]) — at capacity"` (e.g., "Ottawa (YOW) — at capacity")
+- **Color**: Amber (warning)
+- **When**: Preflight zone status check shows device is in zone, but zone is at capacity
+- **Terminal State**: Yes (persists until slots become available)
+- **Notes**: Connection Status shows "Unavailable", Location Info shows zone name and code, Slots shows "0 / X"
+- **Source**: `content/wardrive.js:updateConnectButtonState()`
+
+##### Zone check failed: [error message]
+- **Message**: `"Zone check failed: [error message]"` (e.g., "Zone check failed: API returned status 404")
+- **Color**: Red (error)
+- **When**: Preflight zone status check encounters an error (network, API, etc.)
+- **Terminal State**: Yes (persists until successful zone status check or page reload)
+- **Notes**: This is an error state - user may need to reload page or check network connection
+- **Source**: `content/wardrive.js:checkZoneStatus()`
+
 ##### Connection failed
+
 - **Message**: `"Connection failed"` or specific error message
 - **Color**: Red (error)
 - **When**: BLE connection fails or connection button error
@@ -522,7 +577,7 @@ Status messages follow these consistent conventions:
 
 **Connection Status Bar**: 4 fixed messages (Connected, Connecting, Disconnected, Disconnecting)
 
-**Dynamic App Status Bar**: ~30+ unique message patterns covering:
+**Dynamic App Status Bar**: ~38+ unique message patterns covering:
 - Capacity check: 9 messages (including session_id error messages)
 - Channel setup: 4 messages
 - GPS initialization: 3 messages
@@ -530,6 +585,7 @@ Status messages follow these consistent conventions:
 - Countdown timers: 6 message patterns
 - API/Map: 2 messages (including em dash placeholder)
 - Auto mode: 3 messages
+- Preflight zone status: 7 messages (NEW)
 - Errors: Various context-specific messages
 
 **Key Behaviors**:
@@ -538,3 +594,5 @@ Status messages follow these consistent conventions:
 - Em dash (`—`) placeholder for empty dynamic status
 - Connection words blocked from dynamic bar
 - All error reasons appear WITHOUT "Disconnected:" prefix
+- **NEW**: Preflight zone status check runs on page load
+- **NEW**: Connect button conditional enable based on zone status
