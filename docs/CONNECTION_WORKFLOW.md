@@ -4,6 +4,8 @@
 - [Overview](#overview)
   - [Connection Overview](#connection-overview)
   - [Disconnection Overview](#disconnection-overview)
+  - [Preflight Zone Status Overview](#preflight-zone-status-overview)
+- [Preflight Zone Status Workflow](#preflight-zone-status-workflow)
 - [Connection Workflow](#connection-workflow)
 - [Disconnection Workflow](#disconnection-workflow)
 - [Workflow Diagrams](#workflow-diagrams)
@@ -11,6 +13,31 @@
 - [Edge Cases and Gotchas](#edge-cases-and-gotchas)
 
 ## Overview
+
+### Preflight Zone Status Overview (NEW - Phase 1 Geo-Fenced Auth)
+
+**What "Preflight Check" Means:**
+- Runs on page load before Connect button is enabled
+- Acquires GPS fix and checks zone status with placeholder API
+- Validates GPS quality (accuracy ≤ 100m, freshness ≤ 60s)
+- Calls `{{API_URL}}/zones/status` to determine zone membership
+- Displays zone name, code, and slot availability in connection status bar
+- Conditionally enables/disables Connect button based on zone status
+
+**Preflight States:**
+- **Checking**: Acquiring GPS and calling zones/status API
+- **GPS Error**: GPS too old, inaccurate, or unavailable
+- **In Zone (Available)**: Inside zone, enabled, slots available → Connect enabled
+- **In Zone (Disabled)**: Inside zone, but zone temporarily unavailable → Connect disabled
+- **In Zone (At Capacity)**: Inside zone, but all slots full → Connect disabled
+- **Outside Coverage**: Outside all zones, shows nearest zone → Connect disabled
+- **API Error**: Zone status API failed → Connect disabled
+
+**UI Elements (Connection Status Bar):**
+- **Connection Status**: Disconnected / Unavailable / Ready / Connecting / Connected / Disconnecting
+- **Location Info**: Zone name (CODE) or "Outside coverage area — Nearest: X (Y) Zkm"
+- **Slots Info**: `X / Y` (available / max) or `-` when not applicable
+- **Device Info**: Device name (shown after BLE connection)
 
 ### Connection Overview
 
@@ -50,9 +77,183 @@
 - Connection state reset
 - Ready to initiate a new connection
 
+## Preflight Zone Status Workflow
+
+### Preflight Steps (High-Level)
+
+**Trigger**: Page load (automatic on app initialization)
+
+1. **Page Load** → App initializes
+2. **GPS Acquisition** → Requests current GPS position
+3. **GPS Validation** → Checks accuracy (≤ 100m) and freshness (≤ 60s)
+4. **API Call** → POSTs to `{{API_URL}}/zones/status` with GPS coordinates
+5. **Response Parsing** → Determines zone membership and slot availability
+6. **UI Update** → Updates connection status bar with zone and slots info
+7. **Button State** → Enables/disables Connect button based on zone status
+
+### Detailed Preflight Steps
+
+See `content/wardrive.js` function `checkZoneStatus()` and `updateConnectButtonState()`.
+
+**Preflight Sequence:**
+
+1. **Page Load Initialization**
+   - **Connection Status**: `"Disconnected"` (red)
+   - **Dynamic Status**: `"—"` (em dash)
+   - **Location Info**: `"-"` (placeholder)
+   - **Slots Info**: `"-"` (placeholder)
+   - Calls `checkZoneStatus()` asynchronously
+   - Does not block page load
+
+2. **Start Zone Status Check**
+   - **Connection Status**: `"Disconnected"` (maintained)
+   - **Dynamic Status**: `"Checking location..."` (blue)
+   - **Location Info**: `"Checking..."` (blue)
+   - **Slots Info**: `"-"` (placeholder)
+   - Sets `state.zoneStatus.isChecking = true`
+   - Connect button disabled
+
+3. **Acquire GPS Fix**
+   - Calls `getCurrentPosition()` with high accuracy
+   - Timeout: 30 seconds
+   - Extracts lat, lon, accuracy, timestamp
+   - Debug: `[GPS] GPS fix acquired: lat=X, lon=Y, accuracy=Zm, age=Wms`
+
+4. **Validate GPS Quality (Fail Closed)**
+   - **GPS Age Check**: If age > 60s:
+     - **Connection Status**: `"Unavailable"` (red)
+     - **Dynamic Status**: `"Location error: gps_stale"` (red, terminal)
+     - **Location Info**: `"GPS too old"` (amber)
+     - Connect button disabled
+     - Debug: `[GEOFENCE] GPS fix too old: Xms (max 60s)`
+     - STOP (do not proceed to API call)
+   
+   - **GPS Accuracy Check**: If accuracy > 100m:
+     - **Connection Status**: `"Unavailable"` (red)
+     - **Dynamic Status**: `"Location error: gps_inaccurate"` (red, terminal)
+     - **Location Info**: `"GPS inaccurate"` (amber)
+     - Connect button disabled
+     - Debug: `[GEOFENCE] GPS accuracy too low: Xm (max 100m)`
+     - STOP (do not proceed to API call)
+
+5. **Call Zones/Status API**
+   - **Connection Status**: `"Disconnected"` (maintained)
+   - **Dynamic Status**: `"Checking location..."` (maintained)
+   - POSTs to `{{API_URL}}/zones/status`:
+     ```json
+     {
+       "lat": 45.4215,
+       "lng": -75.6972,
+       "accuracy_m": 15.3,
+       "timestamp": 1703980800
+     }
+     ```
+   - Debug: `[GEOFENCE] Zones/status request payload: {...}`
+   - **Note**: Placeholder URL will fail - for demo/testing use mock data
+
+6. **Parse API Response - Case A: In Zone, Enabled, Slots Available**
+   - API returns:
+     ```json
+     {
+       "in_zone": true,
+       "zone": {
+         "name": "Ottawa",
+         "code": "YOW",
+         "enabled": true,
+         "at_capacity": false,
+         "slots_available": 5,
+         "slots_max": 10
+       }
+     }
+     ```
+   - **Connection Status**: `"Ready"` (green)
+   - **Dynamic Status**: `"Idle"` (em dash)
+   - **Location Info**: `"Ottawa (YOW)"` (green)
+   - **Slots Info**: `"5 / 10"` (green)
+   - Connect button **ENABLED**
+   - Debug: `[GEOFENCE] In zone: Ottawa (YOW), enabled=true, at_capacity=false`
+
+7. **Parse API Response - Case B: In Zone, But Disabled**
+   - API returns:
+     ```json
+     {
+       "in_zone": true,
+       "zone": {
+         "name": "Ottawa",
+         "code": "YOW",
+         "enabled": false,
+         ...
+       }
+     }
+     ```
+   - **Connection Status**: `"Unavailable"` (red)
+   - **Dynamic Status**: `"Ottawa (YOW) — temporarily unavailable"` (amber, terminal)
+   - **Location Info**: `"Ottawa (YOW)"` (green)
+   - **Slots Info**: `"-"` (slate)
+   - Connect button disabled
+   - Debug: `[GEOFENCE] Zone disabled - Connect disabled`
+
+8. **Parse API Response - Case C: In Zone, At Capacity**
+   - API returns:
+     ```json
+     {
+       "in_zone": true,
+       "zone": {
+         "name": "Ottawa",
+         "code": "YOW",
+         "enabled": true,
+         "at_capacity": true,
+         "slots_available": 0,
+         "slots_max": 10
+       }
+     }
+     ```
+   - **Connection Status**: `"Unavailable"` (red)
+   - **Dynamic Status**: `"Ottawa (YOW) — at capacity"` (amber, terminal)
+   - **Location Info**: `"Ottawa (YOW)"` (green)
+   - **Slots Info**: `"0 / 10"` (red)
+   - Connect button disabled
+   - Debug: `[GEOFENCE] Zone at capacity - Connect disabled`
+
+9. **Parse API Response - Case D: Outside All Zones**
+   - API returns:
+     ```json
+     {
+       "in_zone": false,
+       "nearest_zone": {
+         "name": "Ottawa",
+         "code": "YOW",
+         "distance_km": 12.5
+       }
+     }
+     ```
+   - **Connection Status**: `"Unavailable"` (red)
+   - **Dynamic Status**: `"Outside coverage area"` (red, terminal)
+   - **Location Info**: `"Outside coverage — Nearest: Ottawa (YOW) 12.5km"` (slate)
+   - **Slots Info**: `"-"` (slate)
+   - Connect button disabled
+   - Debug: `[GEOFENCE] Outside all zones - Connect disabled`
+
+10. **Error Handling**
+    - If API call fails (network, 404, 500, etc.):
+      - **Connection Status**: `"Disconnected"` (red)
+      - **Dynamic Status**: `"Zone check failed: [error message]"` (red, terminal)
+      - **Location Info**: `"-"` (slate)
+      - **Slots Info**: `"-"` (slate)
+      - Connect button disabled
+      - Debug: `[GEOFENCE] Zone status check failed: [error]`
+
+11. **Radio Power Requirement**
+    - If no radio power selected (even with valid zone status):
+      - **Dynamic Status**: `"Select radio power to connect"` (amber)
+      - Connect button disabled
+      - Debug: `[GEOFENCE] Radio power not selected - Connect disabled`
+
 ## Connection Workflow
 
 ### Connection Steps (High-Level)
+
+**Prerequisites**: Preflight zone status check passed (Connect button enabled)
 
 1. **User Initiates** → User clicks "Connect" button
 2. **Device Selection** → Browser shows BLE device picker

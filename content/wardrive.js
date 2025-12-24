@@ -109,6 +109,10 @@ const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 
+// Geo-Fenced Auth API Configuration (Placeholder URLs)
+const GEO_AUTH_ZONES_STATUS_URL = "{{API_URL}}/zones/status";  // Preflight: Check zone status before connect
+
+
 // Static for now; will be made dynamic later.
 const WARDIVE_IATA_CODE = "YOW";
 
@@ -139,6 +143,8 @@ const STATUS_COLORS = {
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
 const deviceInfoEl   = $("deviceInfo");
+const locationInfoEl = $("locationInfo"); // NEW: Zone location display
+const slotsInfoEl    = $("slotsInfo");    // NEW: Slots available display
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const sendPingBtn    = $("sendPingBtn");
@@ -254,7 +260,17 @@ const state = {
     rxLogHandler: null,           // Handler function for passive rx_log events
     entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
   },
-  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
+  rxBatchBuffer: new Map(),        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
+  // Preflight zone status state
+  zoneStatus: {
+    isChecking: false,            // Whether we're currently checking zone status
+    lastCheck: null,              // Timestamp of last zone status check
+    inZone: false,                // Whether we're in a valid zone
+    zoneData: null,               // Zone data from API (name, code, enabled, at_capacity, slots_available, slots_max)
+    nearestZone: null,            // Nearest zone data if outside all zones (name, code, distance_km)
+    gpsError: null,               // GPS error message if any (e.g., "gps_stale", "gps_inaccurate")
+    preflightGps: null            // GPS fix for preflight check { lat, lon, accuracy, timestamp }
+  }
 };
 
 // API Batch Queue State
@@ -717,7 +733,7 @@ function setConnStatus(text, color) {
   
   // Update status indicator dot color to match
   if (statusIndicatorEl) {
-    statusIndicatorEl.className = `text-lg ${color}`;
+    statusIndicatorEl.className = `text-base ${color}`;
   }
 }
 
@@ -1061,6 +1077,260 @@ async function primeGpsOnce() {
   }
 }
 
+
+// ---- Preflight Zone Status Check ----
+
+// GPS error text and color mappings
+const GPS_ERROR_DISPLAY = {
+  gps_stale: { text: "GPS too old", color: "text-amber-300" },
+  gps_inaccurate: { text: "GPS inaccurate", color: "text-amber-300" }
+};
+
+/**
+ * Update location and slots UI display based on current zone status
+ */
+function updateZoneStatusUI() {
+  debugLog("[GEOFENCE] Updating zone status UI");
+  
+  const zs = state.zoneStatus;
+  
+  // Update location display
+  if (locationInfoEl) {
+    const errorDisplay = GPS_ERROR_DISPLAY[zs.gpsError];
+    if (errorDisplay) {
+      locationInfoEl.textContent = errorDisplay.text;
+      locationInfoEl.className = errorDisplay.color;
+    } else if (zs.gpsError) {
+      locationInfoEl.textContent = "GPS error";
+      locationInfoEl.className = "text-red-300";
+    } else if (zs.isChecking) {
+      locationInfoEl.textContent = "Checking...";
+      locationInfoEl.className = "text-sky-300";
+    } else if (zs.inZone && zs.zoneData) {
+      locationInfoEl.textContent = `${zs.zoneData.name} (${zs.zoneData.code})`;
+      locationInfoEl.className = "text-emerald-300";
+    } else if (zs.nearestZone) {
+      locationInfoEl.textContent = `Outside coverage — Nearest: ${zs.nearestZone.name} (${zs.nearestZone.code}) ${zs.nearestZone.distance_km}km`;
+      locationInfoEl.className = "text-slate-300";
+    } else {
+      locationInfoEl.textContent = "-";
+      locationInfoEl.className = "text-slate-300";
+    }
+  }
+  
+  // Update slots display
+  if (slotsInfoEl) {
+    if (zs.gpsError || zs.isChecking || !zs.inZone || !zs.zoneData) {
+      slotsInfoEl.textContent = "-";
+      slotsInfoEl.className = "text-slate-300";
+    } else {
+      const available = zs.zoneData.slots_available || 0;
+      const max = zs.zoneData.slots_max || 0;
+      slotsInfoEl.textContent = `${available} / ${max}`;
+      slotsInfoEl.className = !zs.zoneData.enabled ? "text-amber-300" : 
+                              zs.zoneData.at_capacity ? "text-red-300" : "text-emerald-300";
+    }
+  }
+  
+  updateConnectButtonState();
+}
+
+/**
+ * Update Connect button state based on zone status
+ * Enable only if: in zone, enabled, and slots available
+ */
+function updateConnectButtonState() {
+  debugLog("[GEOFENCE] Updating Connect button state");
+  
+  const zs = state.zoneStatus;
+  const isConnected = state.connection !== null;
+  
+  if (isConnected) {
+    debugLog("[GEOFENCE] Connected - Connect button enabled");
+    return;
+  }
+  
+  const radioPowerSelected = document.querySelector('input[name="power"]:checked') !== null;
+  if (!radioPowerSelected) {
+    connectBtn.disabled = true;
+    setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
+    debugLog("[GEOFENCE] Radio power not selected - Connect disabled");
+    return;
+  }
+  
+  // Check zone status conditions
+  if (zs.gpsError) {
+    connectBtn.disabled = true;
+    setDynamicStatus(`Location error: ${zs.gpsError}`, STATUS_COLORS.error);
+    debugLog(`[GEOFENCE] GPS error: ${zs.gpsError} - Connect disabled`);
+    return;
+  }
+  
+  if (zs.isChecking) {
+    connectBtn.disabled = true;
+    setDynamicStatus("Checking location...", STATUS_COLORS.info);
+    debugLog("[GEOFENCE] Checking zone status - Connect disabled");
+    return;
+  }
+  
+  if (!zs.inZone) {
+    connectBtn.disabled = true;
+    setConnStatus("Unavailable", STATUS_COLORS.error);
+    setDynamicStatus("Outside coverage area", STATUS_COLORS.error);
+    debugLog("[GEOFENCE] Outside all zones - Connect disabled");
+    return;
+  }
+  
+  if (zs.zoneData) {
+    if (!zs.zoneData.enabled) {
+      connectBtn.disabled = true;
+      setConnStatus("Unavailable", STATUS_COLORS.error);
+      setDynamicStatus(`${zs.zoneData.name} (${zs.zoneData.code}) — temporarily unavailable`, STATUS_COLORS.warning);
+      debugLog("[GEOFENCE] Zone disabled - Connect disabled");
+      return;
+    }
+    
+    if (zs.zoneData.at_capacity) {
+      connectBtn.disabled = true;
+      setConnStatus("Unavailable", STATUS_COLORS.error);
+      setDynamicStatus(`${zs.zoneData.name} (${zs.zoneData.code}) — at capacity`, STATUS_COLORS.warning);
+      debugLog("[GEOFENCE] Zone at capacity - Connect disabled");
+      return;
+    }
+    
+    // Zone is available
+    connectBtn.disabled = false;
+    setConnStatus("Ready", STATUS_COLORS.success);
+    setDynamicStatus("Idle");
+    debugLog("[GEOFENCE] Zone available - Connect enabled");
+    return;
+  }
+  
+  // Default: disable button
+  connectBtn.disabled = true;
+  setDynamicStatus("Idle");
+  debugLog("[GEOFENCE] Default state - Connect disabled");
+}
+
+/**
+ * Validate GPS quality (accuracy and freshness)
+ * @returns {string|null} Error code if invalid, null if valid
+ */
+function validateGpsQuality(pos) {
+  const ageMs = Date.now() - pos.timestamp;
+  
+  if (ageMs > 60000) {
+    debugWarn(`[GEOFENCE] GPS fix too old: ${ageMs}ms (max 60s)`);
+    return "gps_stale";
+  }
+  
+  if (pos.coords.accuracy > 100) {
+    debugWarn(`[GEOFENCE] GPS accuracy too low: ${pos.coords.accuracy}m (max 100m)`);
+    return "gps_inaccurate";
+  }
+  
+  return null;
+}
+
+/**
+ * Parse zone status API response and update state
+ */
+function parseZoneStatusResponse(data) {
+  if (data.in_zone) {
+    state.zoneStatus.inZone = true;
+    state.zoneStatus.zoneData = {
+      name: data.zone.name,
+      code: data.zone.code,
+      enabled: data.zone.enabled,
+      at_capacity: data.zone.at_capacity,
+      slots_available: data.zone.slots_available,
+      slots_max: data.zone.slots_max
+    };
+    state.zoneStatus.nearestZone = null;
+    debugLog(`[GEOFENCE] In zone: ${data.zone.name} (${data.zone.code}), enabled=${data.zone.enabled}, at_capacity=${data.zone.at_capacity}`);
+  } else {
+    state.zoneStatus.inZone = false;
+    state.zoneStatus.zoneData = null;
+    state.zoneStatus.nearestZone = data.nearest_zone ? {
+      name: data.nearest_zone.name,
+      code: data.nearest_zone.code,
+      distance_km: data.nearest_zone.distance_km.toFixed(1)
+    } : null;
+    debugLog(state.zoneStatus.nearestZone 
+      ? `[GEOFENCE] Outside all zones - Nearest: ${state.zoneStatus.nearestZone.name} (${state.zoneStatus.nearestZone.code}) ${state.zoneStatus.nearestZone.distance_km}km`
+      : "[GEOFENCE] Outside all zones - No nearest zone data");
+  }
+}
+
+/**
+ * Check zone status with current GPS location
+ * Implements preflight validation before allowing BLE connect
+ */
+async function checkZoneStatus() {
+  debugLog("[GEOFENCE] Starting zone status check");
+  
+  state.zoneStatus.isChecking = true;
+  state.zoneStatus.gpsError = null;
+  updateZoneStatusUI();
+  
+  try {
+    debugLog("[GPS] Acquiring GPS fix for zone status check");
+    const pos = await getCurrentPosition();
+    
+    const { latitude: lat, longitude: lon, accuracy } = pos.coords;
+    debugLog(`[GPS] GPS fix acquired: lat=${lat.toFixed(6)}, lon=${lon.toFixed(6)}, accuracy=${accuracy.toFixed(1)}m, age=${Date.now() - pos.timestamp}ms`);
+    
+    // Validate GPS quality
+    const gpsError = validateGpsQuality(pos);
+    if (gpsError) {
+      state.zoneStatus.gpsError = gpsError;
+      state.zoneStatus.isChecking = false;
+      state.zoneStatus.inZone = false;
+      updateZoneStatusUI();
+      return;
+    }
+    
+    // Store GPS fix and call zones/status API
+    state.zoneStatus.preflightGps = { lat, lon, accuracy, timestamp: pos.timestamp };
+    
+    debugLog("[GEOFENCE] Calling zones/status API");
+    const payload = {
+      lat,
+      lng: lon,
+      accuracy_m: accuracy,
+      timestamp: Math.floor(pos.timestamp / 1000)
+    };
+    
+    debugLog(`[GEOFENCE] Zones/status request payload:`, payload);
+    
+    const response = await fetch(GEO_AUTH_ZONES_STATUS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API returned status ${response.status}`);
+    }
+    
+    const data = await response.json();
+    debugLog("[GEOFENCE] Zones/status response:", data);
+    
+    parseZoneStatusResponse(data);
+    state.zoneStatus.lastCheck = Date.now();
+    
+  } catch (error) {
+    debugError(`[GEOFENCE] Zone status check failed: ${error.message}`);
+    state.zoneStatus.gpsError = null;
+    state.zoneStatus.inZone = false;
+    state.zoneStatus.zoneData = null;
+    state.zoneStatus.nearestZone = null;
+    setDynamicStatus(`Zone check failed: ${error.message}`, STATUS_COLORS.error);
+  } finally {
+    state.zoneStatus.isChecking = false;
+    updateZoneStatusUI();
+  }
+}
 
 // ---- Key Derivation ----
 /**
@@ -4074,25 +4344,6 @@ document.addEventListener("visibilitychange", async () => {
 /**
  * Update Connect button state based on radio power selection
  */
-function updateConnectButtonState() {
-  const radioPowerSelected = getCurrentPowerSetting() !== "";
-  const isConnected = !!state.connection;
-  
-  if (!isConnected) {
-    // Only enable Connect if radio power is selected
-    connectBtn.disabled = !radioPowerSelected;
-    
-    // Update dynamic status based on power selection
-    if (!radioPowerSelected) {
-      debugLog("[UI] Radio power not selected - showing message in status bar");
-      setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
-    } else {
-      debugLog("[UI] Radio power selected - clearing message from status bar");
-      setDynamicStatus("Idle");
-    }
-  }
-}
-
 // ---- Bind UI & init ----
 export async function onLoad() {
   debugLog("[INIT] wardrive.js onLoad() called - initializing");
@@ -4102,6 +4353,12 @@ export async function onLoad() {
   
   // Initialize Connect button state based on radio power
   updateConnectButtonState();
+  
+  // Start preflight zone status check on page load
+  debugLog("[INIT] Starting preflight zone status check");
+  checkZoneStatus().catch(err => {
+    debugError(`[INIT] Preflight zone status check failed: ${err.message}`);
+  });
 
   connectBtn.addEventListener("click", async () => {
     try {
