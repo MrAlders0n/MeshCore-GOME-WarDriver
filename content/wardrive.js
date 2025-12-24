@@ -723,12 +723,18 @@ function setConnectButton(connected) {
  */
 function setConnStatus(text, color) {
   const connectionStatusEl = document.getElementById("connectionStatus");
+  const statusIndicatorEl = document.getElementById("statusIndicator");
   
   if (!connectionStatusEl) return;
   
   debugLog(`[UI] Connection status: "${text}"`);
   connectionStatusEl.textContent = text;
   connectionStatusEl.className = `font-medium ${color}`;
+  
+  // Update status indicator dot color to match
+  if (statusIndicatorEl) {
+    statusIndicatorEl.className = `text-base ${color}`;
+  }
 }
 
 /**
