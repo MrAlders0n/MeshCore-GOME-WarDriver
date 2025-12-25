@@ -269,7 +269,8 @@ const state = {
     zoneData: null,               // Zone data from API (name, code, enabled, at_capacity, slots_available, slots_max)
     nearestZone: null,            // Nearest zone data if outside all zones (name, code, distance_km)
     gpsError: null,               // GPS error message if any (e.g., "gps_stale", "gps_inaccurate")
-    preflightGps: null            // GPS fix for preflight check { lat, lon, accuracy, timestamp }
+    preflightGps: null,           // GPS fix for preflight check { lat, lon, accuracy, timestamp }
+    apiError: null                // API error message if API call fails
   }
 };
 
@@ -1158,6 +1159,15 @@ function updateConnectButtonState() {
     return;
   }
   
+  // Check API error BEFORE checking zone status
+  if (zs.apiError) {
+    connectBtn.disabled = true;
+    setConnStatus("Unavailable", STATUS_COLORS.error);
+    setDynamicStatus(`Zone check failed: ${zs.apiError}`, STATUS_COLORS.error);
+    debugLog(`[GEOFENCE] API error: ${zs.apiError} - Connect disabled`);
+    return;
+  }
+  
   // Check zone status conditions
   if (zs.gpsError) {
     connectBtn.disabled = true;
@@ -1271,6 +1281,7 @@ async function checkZoneStatus() {
   
   state.zoneStatus.isChecking = true;
   state.zoneStatus.gpsError = null;
+  state.zoneStatus.apiError = null;
   updateZoneStatusUI();
   
   try {
@@ -1321,7 +1332,7 @@ async function checkZoneStatus() {
     
   } catch (error) {
     debugError(`[GEOFENCE] Zone status check failed: ${error.message}`);
-    state.zoneStatus.gpsError = null;
+    state.zoneStatus.apiError = error.message;
     state.zoneStatus.inZone = false;
     state.zoneStatus.zoneData = null;
     state.zoneStatus.nearestZone = null;
