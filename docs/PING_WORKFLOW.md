@@ -160,45 +160,61 @@ sendPingBtn.addEventListener("click", () => {
    - Stores coordinates in `state.capturedPingCoords`
    - Used for API post after 7-second delay
 
-10. **Send to Mesh Network**
+10. **Enable Temporary RX Listening (Manual Pings Only)**
+    - **New in PR #157**: Manual TX pings now temporarily enable unified RX listening
+    - Only if Auto mode is NOT running (`!state.running && !state.rxAutoRunning`)
+    - Ensures repeater echoes can be heard even when not in Auto mode
+    - Temporary RX listening will be stopped after the listening window completes
+    - Calls `startUnifiedRxListening()` if needed
+
+11. **Send to Mesh Network**
     - Calls `connection.sendChannelTextMessage(ch, payload)`
     - Fires the GroupText packet to the channel
     - **Dynamic Status**: `"Ping sent"` (green)
 
-11. **Start Repeater Tracking**
+12. **Start Repeater Tracking**
     - Calls `startRepeaterTracking(payload, channelIdx)`
-    - Registers `LogRxData` event handler for rx_log entries
     - Initializes `state.repeaterTracking` with sent payload and timestamp
-    - **Dynamic Status**: `"Listening (Xs)"` (blue) - countdown display
+    - Listening window delegates to unified RX handler
 
-12. **7-Second Listening Window**
-    - `RX_LOG_LISTEN_WINDOW_MS = 7000`
-    - Listens for repeater echoes via rx_log events
-    - Each echo validated:  header check, channel hash check, payload match
+13. **Start RX Listening Countdown**
+    - Calls `startRxListeningCountdown(RX_LOG_LISTEN_WINDOW_MS)`
+    - `RX_LOG_LISTEN_WINDOW_MS = 6000` (6 seconds)
+    - **Dynamic Status**: `"Listening for heard repeats (Xs)"` (blue) - countdown display
+    - User sees countdown: 6s → 5s → 4s → 3s → 2s → 1s → "Finalizing heard repeats"
+
+14. **6-Second Listening Window**
+    - Listens for repeater echoes via unified RX handler
+    - Each echo validated: header check, channel hash check, payload match
     - Deduplicates by path, keeps highest SNR value
-    - Updates session log with live repeater data
+    - Updates session log with live repeater data incrementally
 
-13. **Finalize Repeaters**
-    - Calls `stopRepeaterTracking()` after 7s
+15. **Stop Temporary RX Listening (Manual Pings Only)**
+    - **New in PR #157**: If temporary RX listening was enabled, stop it now
+    - Calls `stopUnifiedRxListening()` after listening window completes
+    - Only affects manual pings when Auto mode is not running
+
+16. **Finalize Repeaters**
+    - Calls `stopRepeaterTracking()` after 6s
     - Returns array of `{ repeaterId, snr }` objects
-    - Formats as:  `"4e(11. 5),77(9.75)"` or `"None"`
+    - Formats as: `"4e(11.5),77(9.75)"` or `"None"`
 
-14. **Post to MeshMapper API**
+17. **Post to MeshMapper API**
     - Calls `postToMeshMapperAPI(lat, lon, heardRepeats)`
     - **Dynamic Status**: `"Posting to API"` (blue)
     - Payload includes: lat, lon, who, power, heard_repeats, ver, iata, session_id
     - Validates `allowed` field in response
-    - If `allowed:  false`: triggers slot revocation disconnect
+    - If `allowed: false`: triggers slot revocation disconnect
 
-15. **Refresh Coverage Map**
+18. **Refresh Coverage Map**
     - Calls `refreshCoverageMap()` after 1-second delay
     - Only if GPS accuracy < 100m
 
-16. **Update State**
+19. **Update State**
     - Stores `{ lat, lon }` in `state.lastSuccessfulPingLocation`
     - Starts cooldown period (`startCooldown()`)
 
-17. **Unlock Ping Controls**
+20. **Unlock Ping Controls**
     - Calls `unlockPingControls()`
     - Sets `state.pingInProgress = false`
     - Updates button disabled states

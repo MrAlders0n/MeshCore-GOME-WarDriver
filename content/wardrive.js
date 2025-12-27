@@ -597,16 +597,28 @@ function unlockPingControls(reason) {
 function disableIntervalAndPowerControls() {
   debugLog("[UI] Disabling interval and power selection controls (Auto mode active)");
   
-  // Disable all interval radio buttons
+  // Disable all interval radio buttons and style their labels
   const intervalRadios = document.querySelectorAll('input[name="interval"]');
   intervalRadios.forEach(radio => {
     radio.disabled = true;
+    // Add disabled styling to parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '0.4';
+      label.style.cursor = 'not-allowed';
+    }
   });
   
-  // Disable all power radio buttons
+  // Disable all power radio buttons and style their labels
   const powerRadios = document.querySelectorAll('input[name="power"]');
   powerRadios.forEach(radio => {
     radio.disabled = true;
+    // Add disabled styling to parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '0.4';
+      label.style.cursor = 'not-allowed';
+    }
   });
   
   debugLog("[UI] Interval and power controls disabled");
@@ -619,16 +631,28 @@ function disableIntervalAndPowerControls() {
 function enableIntervalAndPowerControls() {
   debugLog("[UI] Enabling interval and power selection controls (Auto mode stopped)");
   
-  // Enable all interval radio buttons
+  // Enable all interval radio buttons and restore label styling
   const intervalRadios = document.querySelectorAll('input[name="interval"]');
   intervalRadios.forEach(radio => {
     radio.disabled = false;
+    // Remove disabled styling from parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '';
+      label.style.cursor = 'pointer';
+    }
   });
   
-  // Enable all power radio buttons
+  // Enable all power radio buttons and restore label styling
   const powerRadios = document.querySelectorAll('input[name="power"]');
   powerRadios.forEach(radio => {
     radio.disabled = false;
+    // Remove disabled styling from parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '';
+      label.style.cursor = 'pointer';
+    }
   });
   
   debugLog("[UI] Interval and power controls enabled");
