@@ -4,8 +4,10 @@
 - [Overview](#overview)
   - [Ping Overview](#ping-overview)
   - [Auto Ping Overview](#auto-ping-overview)
+  - [RX Auto Mode Overview](#rx-auto-mode-overview)
 - [Manual Ping Workflow](#manual-ping-workflow)
 - [Auto Ping Workflow](#auto-ping-workflow)
+- [RX Auto Mode Workflow](#rx-auto-mode-workflow)
 - [Ping Lifecycle](#ping-lifecycle)
 - [Workflow Diagrams](#workflow-diagrams)
 - [Code References](#code-references)
@@ -32,18 +34,41 @@
 
 ### Auto Ping Overview
 
-**What "Auto Ping" Does:**
+**What "TX/RX Auto" Does:**
 - Automatically sends pings at configurable intervals (15s/30s/60s)
+- Enables passive RX listening for all mesh traffic (wardriving)
 - Acquires a wake lock to keep the screen awake
 - Displays countdown timer between pings
 - Skips pings that fail validation (GPS, geofence, distance) without stopping
 - Pauses countdown when manual ping is triggered during auto mode
+- Causes mesh load (transmits)
 
-**Auto Ping State:**
-- `state.running`: Boolean indicating if auto mode is active
+**TX/RX Auto State:**
+- `state.running`: Boolean indicating if TX/RX Auto mode is active
 - `state.autoTimerId`: Timer ID for next scheduled ping
 - `state.nextAutoPingTime`: Timestamp when next auto ping will fire
 - `state.skipReason`: Reason if last ping was skipped (for countdown display)
+
+### RX Auto Mode Overview
+
+**What "RX Auto" Does:**
+- Enables passive RX listening for all mesh traffic (wardriving)
+- NO transmission - zero mesh impact
+- Acquires a wake lock to keep the screen awake
+- Logs all received mesh packets to RX Log
+- No cooldown restrictions (does not transmit)
+- Batches and posts RX observations to MeshMapper API
+
+**RX Auto State:**
+- `state.rxAutoRunning`: Boolean indicating if RX Auto mode is active
+- `state.passiveRxTracking.isListening`: Boolean indicating if unified RX listening is active
+
+**Mutual Exclusivity:**
+- TX/RX Auto and RX Auto modes are mutually exclusive
+- Only one can run at a time
+- User must stop one mode before starting the other
+- TX/RX Auto button is disabled when RX Auto is running
+- RX Auto button is disabled when TX/RX Auto is running
 
 ## Manual Ping Workflow
 
@@ -311,6 +336,76 @@ When user sends a manual ping while auto mode is running:
    - If manual ping succeeds: `scheduleNextAutoPing()` (fresh interval)
    - If manual ping blocked: `resumeAutoCountdown()` (resume from paused time)
 
+## RX Auto Mode Workflow
+
+### RX Auto Mode Overview
+
+RX Auto mode provides passive-only wardriving without transmitting on the mesh network. It listens for all mesh traffic and logs received packets to the RX Log, which are then batched and posted to MeshMapper API for coverage mapping.
+
+### RX Auto Start Sequence
+
+1. **User Initiates** → User clicks "RX Auto" button
+2. **Connection Check** → Verify BLE connection is active
+3. **Unified RX Listening** → Start `startUnifiedRxListening()`
+4. **State Update** → Set `state.rxAutoRunning = true`
+5. **Button Update** → Change button to "Stop RX" (amber)
+6. **Mutual Exclusivity** → Disable TX/RX Auto button
+7. **Wake Lock** → Acquire wake lock to keep screen awake
+8. **Status Message** → Show "RX Auto mode started" (green)
+
+### RX Auto Stop Sequence
+
+1. **User Initiates** → User clicks "Stop RX" button
+2. **Unified RX Listening** → Stop `stopUnifiedRxListening()`
+3. **State Update** → Set `state.rxAutoRunning = false`
+4. **Button Update** → Change button to "RX Auto" (indigo)
+5. **Mutual Exclusivity** → Re-enable TX/RX Auto button
+6. **Wake Lock** → Release wake lock
+7. **Status Message** → Show "RX Auto mode stopped" (slate)
+
+### RX Auto Behavior
+
+**No Cooldown Restrictions:**
+- RX Auto mode does not transmit, so it is not affected by TX cooldowns
+- Can be started/stopped immediately without waiting
+
+**No GPS Requirements:**
+- RX Auto mode does not require GPS lock to start
+- GPS data is used when available for RX log entries
+
+**Automatic Stop on Disconnect:**
+- RX Auto mode automatically stops when BLE disconnects
+- `stopRxAuto()` is called in the disconnect handler
+
+**RX Log Persistence:**
+- RX log data is NOT cleared on disconnect (user may want to review)
+- RX log is cleared on connect (starting a new session)
+
+### RX Auto Functions
+
+**Key Functions:**
+- `startRxAuto()` - Start RX Auto mode (lines ~3807-3823 in wardrive.js)
+- `stopRxAuto()` - Stop RX Auto mode (lines ~3807-3823 in wardrive.js)
+- `startUnifiedRxListening()` - Start passive RX listening (lines ~2176-2195 in wardrive.js)
+- `stopUnifiedRxListening()` - Stop passive RX listening (lines ~2200-2216 in wardrive.js)
+
+**State Variables:**
+- `state.rxAutoRunning` - Boolean indicating if RX Auto mode is active
+- `state.passiveRxTracking.isListening` - Boolean indicating if unified RX listening is active
+
+### RX Auto vs TX/RX Auto
+
+| Feature | RX Auto | TX/RX Auto |
+|---------|---------|------------|
+| Transmits | No | Yes (automatic pings) |
+| RX Listening | Yes | Yes |
+| Mesh Load | None | High (periodic TX) |
+| Cooldown | None | 7 seconds |
+| GPS Required | No | Yes |
+| Wake Lock | Yes | Yes |
+| Button Color | Indigo → Amber | Indigo → Amber |
+| Mutual Exclusivity | Cannot run with TX/RX Auto | Cannot run with RX Auto |
+
 ## Ping Lifecycle
 
 ### Control Locking
@@ -486,15 +581,23 @@ flowchart TD
 ## Code References
 
 ### Ping Entry Points
-- **Main function**: `wardrive.js:sendPing()` (lines 2211-2407)
-- **Manual button listener**: `wardrive.js` line 2808
-- **Auto button listener**: `wardrive.js` line 2812
+- **Main function**: `wardrive.js:sendPing()` (lines ~3400-3707)
+- **TX Ping button listener**: `wardrive.js` (txPingBtn click handler)
+- **TX/RX Auto button listener**: `wardrive.js` (txRxAutoBtn click handler)
+- **RX Auto button listener**: `wardrive.js` (rxAutoBtn click handler)
 
-### Auto Ping Functions
-- **Start function**: `wardrive.js:startAutoPing()` (lines 2462-2501)
-- **Stop function**: `wardrive.js:stopAutoPing()` (lines 2408-2436)
-- **Schedule next**: `wardrive.js:scheduleNextAutoPing()` (lines 2438-2459)
-- **Button update**: `wardrive.js:updateAutoButton()` (lines 539-549)
+### TX/RX Auto Ping Functions
+- **Start function**: `wardrive.js:startAutoPing()` (lines ~3764-3805)
+- **Stop function**: `wardrive.js:stopAutoPing()` (lines ~3710-3740)
+- **Schedule next**: `wardrive.js:scheduleNextAutoPing()` (lines ~3741-3762)
+- **Button update**: `wardrive.js:updateAutoButton()` (lines ~653-676)
+
+### RX Auto Mode Functions
+- **Start function**: `wardrive.js:startRxAuto()` (lines ~3828-3846)
+- **Stop function**: `wardrive.js:stopRxAuto()` (lines ~3807-3826)
+- **Start unified RX**: `wardrive.js:startUnifiedRxListening()` (lines ~2176-2195)
+- **Stop unified RX**: `wardrive.js:stopUnifiedRxListening()` (lines ~2200-2216)
+- **Handle RX events**: `wardrive.js:handleUnifiedRxLogEvent()` (lines ~2055-2174)
 
 ### Validation Functions
 - **GPS acquisition**: `wardrive.js:getGpsCoordinatesForPing()` (lines 2036-2123)
@@ -570,12 +673,41 @@ flowchart TD
 - GPS watch continues during auto mode, provides fresh data
 
 ### Page Visibility
-- When page becomes hidden during auto mode: 
-  - Auto mode stops immediately
+- When page becomes hidden during TX/RX Auto mode: 
+  - TX/RX Auto mode stops immediately
   - GPS watch stops
   - Wake lock released
-  - **Dynamic Status**: `"Lost focus, auto mode stopped"` (yellow)
-- User must manually restart auto mode when returning
+  - **Dynamic Status**: `"Lost focus, TX/RX Auto mode stopped"` (amber/warning)
+- When page becomes hidden during RX Auto mode:
+  - RX Auto mode stops immediately
+  - Wake lock released
+  - **Dynamic Status**: `"Lost focus, RX Auto mode stopped"` (amber/warning)
+- User must manually restart auto modes when returning
+
+### RX Auto Mode Mutual Exclusivity
+- **TX/RX Auto** and **RX Auto** modes are mutually exclusive
+- Only one can run at a time
+- TX/RX Auto button disabled when RX Auto running
+- RX Auto button disabled when TX/RX Auto running
+- User must stop one mode before starting the other
+- No cooldown when stopping RX Auto (does not transmit)
+
+### RX Listening Behavior Changes
+- **Old Behavior**: RX listening started automatically on BLE connect
+- **New Behavior**: RX listening ONLY starts when:
+  - User clicks "TX/RX Auto" button, OR
+  - User clicks "RX Auto" button
+- RX listening stops when:
+  - User clicks "Stop TX/RX" or "Stop RX", OR
+  - Browser tab becomes hidden (auto modes stop), OR
+  - User disconnects BLE
+- RX log cleared on connect (new session), NOT on disconnect (user may want to review)
+
+### Button Updates
+- **TX Ping** (formerly "Send Ping"): Single manual transmission
+- **TX/RX Auto** (formerly "Start Auto Ping"): Auto TX + RX listening, toggles to "Stop TX/RX"
+- **RX Auto** (new): RX-only listening, toggles to "Stop RX"
+- All buttons in 3x1 grid layout
 
 ### Repeater Tracking Edge Cases
 - **No repeaters heard**: `heard_repeats = "None"` in API post
@@ -597,23 +729,27 @@ flowchart TD
 
 ## Summary
 
-MeshCore-GOME-WarDriver implements a comprehensive ping system with both manual and automatic modes: 
+MeshCore-GOME-WarDriver implements a comprehensive ping and wardriving system with manual TX, automatic TX/RX, and passive RX-only modes: 
 
 **Key Design Principles:**
 1. **Validation First**:  Geofence and distance checks before any mesh operations
 2. **Control Locking**:  Buttons locked for entire ping lifecycle
 3. **Fail-Open on API**:  Ping considered sent even if API fails
-4. **Graceful Skipping**: Auto mode skips failed pings without stopping
+4. **Graceful Skipping**: TX/RX Auto mode skips failed pings without stopping
 5. **User Transparency**: Status messages at every step
+6. **Mutual Exclusivity**: TX/RX Auto and RX Auto modes cannot run simultaneously
 
-**Manual Ping:** Cooldown Check → GPS → Validations → Lock → Mesh Send → 7s Listen → API Post → Unlock
+**Manual TX Ping:** Cooldown Check → GPS → Validations → Lock → Mesh Send → 7s Listen → API Post → Unlock
 
-**Auto Ping:** Start → GPS Watch → Initial Ping → Schedule Next → Countdown → Repeat
+**TX/RX Auto:** Start → GPS Watch → RX Listening → Initial Ping → Schedule Next → Countdown → Repeat
+
+**RX Auto:** Start → RX Listening → No TX → Batch RX Observations → API Post
 
 **Interactions:**
-- Manual during auto: pause countdown → execute → resume/reschedule
-- Page hidden:  stop auto, release wake lock
+- Manual during TX/RX Auto: pause countdown → execute → resume/reschedule
+- Page hidden:  stop TX/RX Auto, release wake lock
 - Slot revoked: disconnect sequence
+- RX log persists across disconnect (cleared only on connect)
 
 **Debug Mode:** Add `? debug=true` to URL for detailed logging
 

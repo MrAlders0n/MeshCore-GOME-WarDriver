@@ -179,13 +179,17 @@
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
         <!-- Ping controls (always visible, disabled when not connected) -->
         <div id="pingControls" class="w-full flex gap-2">
-          <button id="sendPingBtn"
+          <button id="txPingBtn"
             class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
-            Send Ping
+            TX Ping
           </button>
-          <button id="autoToggleBtn"
+          <button id="txRxAutoBtn"
             class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
-            Start Auto Ping
+            TX/RX Auto
+          </button>
+          <button id="rxAutoBtn"
+            class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
+            RX Auto
           </button>
         </div>
 

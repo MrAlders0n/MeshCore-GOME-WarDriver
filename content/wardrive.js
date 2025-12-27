@@ -141,8 +141,9 @@ const statusEl       = $("status");
 const deviceInfoEl   = $("deviceInfo");
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
-const sendPingBtn    = $("sendPingBtn");
-const autoToggleBtn  = $("autoToggleBtn");
+const txPingBtn      = $("txPingBtn");
+const txRxAutoBtn    = $("txRxAutoBtn");
+const rxAutoBtn      = $("rxAutoBtn");
 const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
@@ -218,6 +219,7 @@ const state = {
   channel: null,
   autoTimerId: null,
   running: false,
+  rxAutoRunning: false, // Track RX Auto mode state
   wakeLock: null,
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
@@ -562,8 +564,15 @@ function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
   debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
-  sendPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
-  autoToggleBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  
+  // TX Ping button - disabled when not connected, in cooldown, or ping in progress
+  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  
+  // TX/RX Auto button - disabled when not connected, in cooldown, ping in progress, or RX Auto is running
+  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
+  
+  // RX Auto button - disabled when not connected or TX/RX Auto is running (no cooldown restriction for RX-only mode)
+  rxAutoBtn.disabled = !connected || state.running;
 }
 
 /**
@@ -642,14 +651,26 @@ function enableControls(connected) {
   // No need to show/hide the controls anymore
 }
 function updateAutoButton() {
+  // Update TX/RX Auto button
   if (state.running) {
-    autoToggleBtn.textContent = "Stop Auto Ping";
-    autoToggleBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
-    autoToggleBtn.classList.add("bg-amber-600","hover:bg-amber-500");
+    txRxAutoBtn.textContent = "Stop TX/RX";
+    txRxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
+    txRxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
   } else {
-    autoToggleBtn.textContent = "Start Auto Ping";
-    autoToggleBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
-    autoToggleBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+    txRxAutoBtn.textContent = "TX/RX Auto";
+    txRxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
+    txRxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+  }
+  
+  // Update RX Auto button
+  if (state.rxAutoRunning) {
+    rxAutoBtn.textContent = "Stop RX";
+    rxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
+    rxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
+  } else {
+    rxAutoBtn.textContent = "RX Auto";
+    rxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
+    rxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
   }
 }
 function buildCoverageEmbedUrl(lat, lon) {
@@ -3712,8 +3733,12 @@ function stopAutoPing(stopGps = false) {
     stopGeoWatch();
   }
   
+  // Stop unified RX listening when TX/RX Auto mode stops
+  stopUnifiedRxListening();
+  
   state.running = false;
   updateAutoButton();
+  updateControlsForCooldown(); // Re-enable RX Auto button
   releaseWakeLock();
   debugLog("[AUTO] Auto ping stopped");
 }
@@ -3771,8 +3796,12 @@ function startAutoPing() {
   debugLog("[AUTO] Starting GPS watch for auto mode");
   startGeoWatch();
   
+  // Start unified RX listening for TX/RX Auto mode
+  startUnifiedRxListening();
+  
   state.running = true;
   updateAutoButton();
+  updateControlsForCooldown(); // Disable RX Auto button
 
   // Acquire wake lock for auto mode
   debugLog("[AUTO] Acquiring wake lock for auto mode");
@@ -3781,6 +3810,48 @@ function startAutoPing() {
   // Send first ping immediately
   debugLog("[AUTO] Sending initial auto ping");
   sendPing(false).catch(console.error);
+}
+
+// ---- RX Auto mode ----
+function stopRxAuto() {
+  debugLog(`[RX AUTO] stopRxAuto called`);
+  
+  if (!state.rxAutoRunning) {
+    debugLog("[RX AUTO] RX Auto mode not running, nothing to stop");
+    return;
+  }
+  
+  // Stop unified RX listening
+  stopUnifiedRxListening();
+  
+  state.rxAutoRunning = false;
+  updateAutoButton();
+  updateControlsForCooldown(); // Re-enable TX/RX Auto button
+  releaseWakeLock();
+  debugLog("[RX AUTO] RX Auto mode stopped");
+}
+
+function startRxAuto() {
+  debugLog("[RX AUTO] startRxAuto called");
+  if (!state.connection) {
+    debugError("[RX AUTO] Cannot start RX Auto - not connected");
+    alert("Connect to a MeshCore device first.");
+    return;
+  }
+  
+  // Start unified RX listening
+  startUnifiedRxListening();
+  
+  state.rxAutoRunning = true;
+  updateAutoButton();
+  updateControlsForCooldown(); // Disable TX/RX Auto button
+  
+  // Acquire wake lock for RX Auto mode
+  debugLog("[RX AUTO] Acquiring wake lock for RX Auto mode");
+  acquireWakeLock().catch(console.error);
+  
+  setDynamicStatus("RX Auto mode started", STATUS_COLORS.success);
+  debugLog("[RX AUTO] RX Auto mode started");
 }
 
 // ---- BLE connect / disconnect ----
@@ -3858,8 +3929,11 @@ async function connect() {
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
         
-        // Start unified RX listening after channel setup
-        startUnifiedRxListening();
+        // Clear RX log entries on connect (starting a new session)
+        rxLogState.entries = [];
+        renderRxLogEntries(true); // Full render to show placeholder
+        updateRxLogSummary();
+        debugLog("[BLE] RX log cleared on connect");
         
         // GPS initialization
         setDynamicStatus("Priming GPS", STATUS_COLORS.info);
@@ -3943,6 +4017,7 @@ async function connect() {
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
       stopAutoPing(true); // Ignore cooldown check on disconnect
+      stopRxAuto(); // Stop RX Auto mode on disconnect
       enableControls(false);
       updateAutoButton();
       stopGeoWatch();
@@ -3960,11 +4035,7 @@ async function connect() {
       // Clean up all timers
       cleanupAllTimers();
       
-      // Clear RX log entries on disconnect
-      rxLogState.entries = [];
-      renderRxLogEntries(true); // Full render to show placeholder
-      updateRxLogSummary();
-      debugLog("[BLE] RX log cleared on disconnect");
+      // DO NOT clear RX log on disconnect - user may want to review data after disconnecting
       
       state.lastFix = null;
       state.lastSuccessfulPingLocation = null;
@@ -4059,16 +4130,20 @@ document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
     debugLog("[UI] Page visibility changed to hidden");
     if (state.running) {
-      debugLog("[UI] Stopping auto ping due to page hidden");
+      debugLog("[UI] Stopping TX/RX Auto mode due to page hidden");
       stopAutoPing(true); // Ignore cooldown check when page is hidden
-      setDynamicStatus("Lost focus, auto mode stopped", STATUS_COLORS.warning);
+      setDynamicStatus("Lost focus, TX/RX Auto mode stopped", STATUS_COLORS.warning);
+    } else if (state.rxAutoRunning) {
+      debugLog("[UI] Stopping RX Auto mode due to page hidden");
+      stopRxAuto();
+      setDynamicStatus("Lost focus, RX Auto mode stopped", STATUS_COLORS.warning);
     } else {
       debugLog("[UI] Releasing wake lock due to page hidden");
       releaseWakeLock();
     }
   } else {
     debugLog("[UI] Page visibility changed to visible");
-    // On visible again, user can manually re-start Auto.
+    // On visible again, user can manually re-start auto modes.
   }
 });
 
@@ -4116,17 +4191,26 @@ export async function onLoad() {
       setDynamicStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
-  sendPingBtn.addEventListener("click", () => {
+  txPingBtn.addEventListener("click", () => {
     debugLog("[UI] Manual ping button clicked");
     sendPing(true).catch(console.error);
   });
-  autoToggleBtn.addEventListener("click", () => {
-    debugLog("[UI] Auto toggle button clicked");
+  txRxAutoBtn.addEventListener("click", () => {
+    debugLog("[UI] TX/RX Auto toggle button clicked");
     if (state.running) {
       stopAutoPing();
-      setDynamicStatus("Auto mode stopped", STATUS_COLORS.idle);
+      setDynamicStatus("TX/RX Auto mode stopped", STATUS_COLORS.idle);
     } else {
       startAutoPing();
+    }
+  });
+  rxAutoBtn.addEventListener("click", () => {
+    debugLog("[UI] RX Auto toggle button clicked");
+    if (state.rxAutoRunning) {
+      stopRxAuto();
+      setDynamicStatus("RX Auto mode stopped", STATUS_COLORS.idle);
+    } else {
+      startRxAuto();
     }
   });
 
