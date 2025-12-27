@@ -130,8 +130,10 @@
 ║   │    firstLocation: {lat, lng}          │   │                               ║
 ║   │    firstTimestamp: now                │   │                               ║
 ║   │    samples: []                        │   │                               ║
-║   │    timeoutId: 30s timer               │   │                               ║
+║   │    timeoutId: dynamic timer           │   │                               ║
 ║   │  }                                    │   │                               ║
+║   │  Timeout = warDriveInterval - 5000ms  │   │                               ║
+║   │  (15s → 10s, 30s → 25s, 60s → 55s)   │   │                               ║
 ║   └───────────────────┬───────────────────┘   │                               ║
 ║                       │                       │                               ║
 ║                       └─────────────┬─────────┘                               ║
@@ -153,7 +155,7 @@
 ║                 ┌────────────────────┐        │                               ║
 ║                 │ Continue collecting│        │                               ║
 ║                 │ Wait for more RX   │        │                               ║
-║                 │ or timeout (30s)   │        │                               ║
+║                 │ or dynamic timeout │        │                               ║
 ║                 └────────────────────┘        │                               ║
 ║                                               │                               ║
 ╚═══════════════════════════════════════════════╪═══════════════════════════════╝
@@ -163,7 +165,8 @@
              ▼                                  ▼                              ▼
     ╔══════════════════╗           ╔══════════════════╗           ╔════════════════╗
     ║  TRIGGER:        ║           ║  TRIGGER:        ║           ║  TRIGGER:      ║
-    ║  DISTANCE (25m)  ║           ║  TIMEOUT (30s)   ║           ║  DISCONNECT    ║
+    ║  DISTANCE (25m)  ║           ║  DYNAMIC TIMEOUT ║           ║  DISCONNECT    ║
+    ║                  ║           ║  (interval - 5s) ║           ║                ║
     ╚════════╤═════════╝           ╚════════╤═════════╝           ╚════════╤═══════╝
              │                              │                              │
              └──────────────────────────────┼──────────────────────────────┘

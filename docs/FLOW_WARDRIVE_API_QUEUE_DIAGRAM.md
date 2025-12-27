@@ -232,17 +232,44 @@ RX Auto Mode adds periodic map updates:
 - Ensures map updates immediately after posting new coverage data
 - No TX transmissions (RX-only passive listening)
 
+**CRITICAL TIMING SEQUENCE (PR #157):**
+RX Batch flush → API Queue flush → Map Refresh
+
+RX Batch buffer timeout is dynamically calculated to ensure RX messages
+are moved to the API queue BEFORE the war-drive interval timer flushes:
+- 15s interval → RX Batch timeout = 10s (15s - 5s)
+- 30s interval → RX Batch timeout = 25s (30s - 5s)
+- 60s interval → RX Batch timeout = 55s (60s - 5s)
+
+Minimum RX Batch timeout: 2s (to collect burst RX events)
+
 Example: RX Auto with 15s interval
 ──────────────────────────────────
-  0s         15s        30s        45s
-  │           │          │          │
-  RX──────────┼──────────┼──────────┼
-  │  RX   RX  │  RX   RX │  RX      │
-  │           ▼          ▼          ▼
-  │      FLUSH+MAP   FLUSH+MAP  FLUSH+MAP
-  │      (instant    (instant   (instant
-  │       update)     update)    update)
-  └───────────────────────────────────────
+  0s    5s    10s        15s       30s
+  │     │      │          │         │
+  RX────┼──────┼──────────┼─────────┼
+  │ RX  │  RX  │          │  RX  RX │
+  │     │      ▼          ▼         ▼
+  │     │  RX Batch   API Flush  RX Batch
+  │     │   flush →    + Map     flush →
+  │     │  to queue    Refresh    API Flush
+  │     │                          + Map
+  └──────────────────────────────────────
   
-  User sees map refresh every 15s with latest RX data
+  RX Batch flushes at 10s (before API flush at 15s)
+  This ensures map shows newly heard RX messages
+
+Example: RX Auto with 30s interval
+──────────────────────────────────
+  0s   10s   20s   25s        30s
+  │     │     │     │          │
+  RX────┼─────┼─────┼──────────┼
+  │ RX  │ RX  │ RX  │          │
+  │     │     │     ▼          ▼
+  │     │     │  RX Batch   API Flush
+  │     │     │   flush →    + Map
+  │     │     │  to queue    Refresh
+  └──────────────────────────────────
+  
+  RX Batch flushes at 25s (before API flush at 30s)
   ```

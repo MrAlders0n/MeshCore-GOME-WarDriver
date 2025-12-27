@@ -94,8 +94,8 @@ const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // Passive RX Log Batch Configuration
 const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
-const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
 const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
+const RX_BATCH_TIMEOUT_OFFSET_MS = 5000; // RX Batch timeout occurs this many ms BEFORE war-drive interval (to ensure RX Batch flushes before API queue)
 
 // API Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
@@ -588,6 +588,74 @@ function unlockPingControls(reason) {
   state.pingInProgress = false;
   updateControlsForCooldown();
   debugLog(`[UI] Ping controls unlocked (pingInProgress=false) ${reason}`);
+}
+
+/**
+ * Disable interval and power selection controls
+ * Called when Auto mode starts to prevent changing settings mid-operation
+ */
+function disableIntervalAndPowerControls() {
+  debugLog("[UI] Disabling interval and power selection controls (Auto mode active)");
+  
+  // Disable all interval radio buttons and style their labels
+  const intervalRadios = document.querySelectorAll('input[name="interval"]');
+  intervalRadios.forEach(radio => {
+    radio.disabled = true;
+    // Add disabled styling to parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '0.4';
+      label.style.cursor = 'not-allowed';
+    }
+  });
+  
+  // Disable all power radio buttons and style their labels
+  const powerRadios = document.querySelectorAll('input[name="power"]');
+  powerRadios.forEach(radio => {
+    radio.disabled = true;
+    // Add disabled styling to parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '0.4';
+      label.style.cursor = 'not-allowed';
+    }
+  });
+  
+  debugLog("[UI] Interval and power controls disabled");
+}
+
+/**
+ * Enable interval and power selection controls
+ * Called when Auto mode stops to allow changing settings again
+ */
+function enableIntervalAndPowerControls() {
+  debugLog("[UI] Enabling interval and power selection controls (Auto mode stopped)");
+  
+  // Enable all interval radio buttons and restore label styling
+  const intervalRadios = document.querySelectorAll('input[name="interval"]');
+  intervalRadios.forEach(radio => {
+    radio.disabled = false;
+    // Remove disabled styling from parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '';
+      label.style.cursor = 'pointer';
+    }
+  });
+  
+  // Enable all power radio buttons and restore label styling
+  const powerRadios = document.querySelectorAll('input[name="power"]');
+  powerRadios.forEach(radio => {
+    radio.disabled = false;
+    // Remove disabled styling from parent label
+    const label = radio.closest('label');
+    if (label) {
+      label.style.opacity = '';
+      label.style.cursor = 'pointer';
+    }
+  });
+  
+  debugLog("[UI] Interval and power controls enabled");
 }
 
 // Timer cleanup
@@ -1236,6 +1304,29 @@ function getSelectedIntervalMs() {
 function getGpsMaximumAge(minAge = 1000) {
   const intervalMs = getSelectedIntervalMs();
   return Math.max(minAge, intervalMs - GPS_FRESHNESS_BUFFER_MS);
+}
+
+/**
+ * Calculate dynamic RX Batch timeout based on war-drive interval
+ * RX Batch timeout must occur BEFORE API flush to ensure proper sequencing:
+ * RX Batch flush → API Queue flush → Map Refresh
+ * 
+ * Formula: warDriveInterval - RX_BATCH_TIMEOUT_OFFSET_MS
+ * Floor: RX_BATCH_MIN_WAIT_MS (minimum to collect burst RX events)
+ * 
+ * Examples:
+ * - 15s interval → 10s RX timeout (15s - 5s = 10s)
+ * - 30s interval → 25s RX timeout (30s - 5s = 25s)
+ * - 60s interval → 55s RX timeout (60s - 5s = 55s)
+ * 
+ * @returns {number} RX Batch timeout in milliseconds
+ */
+function getRxBatchTimeoutMs() {
+  const intervalMs = getSelectedIntervalMs();
+  const calculatedTimeout = intervalMs - RX_BATCH_TIMEOUT_OFFSET_MS;
+  const timeout = Math.max(RX_BATCH_MIN_WAIT_MS, calculatedTimeout);
+  debugLog(`[RX BATCH] Dynamic timeout calculated: ${timeout}ms (interval=${intervalMs}ms, offset=${RX_BATCH_TIMEOUT_OFFSET_MS}ms, floor=${RX_BATCH_MIN_WAIT_MS}ms)`);
+  return timeout;
 }
 
 function getCurrentPowerSetting() {
@@ -2397,6 +2488,10 @@ function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
   if (!batch) {
     // First RX from this repeater - create new batch
     debugLog(`[RX BATCH] Creating new batch for repeater ${repeaterId}`);
+    
+    // Calculate dynamic timeout based on current war-drive interval
+    const rxBatchTimeoutMs = getRxBatchTimeoutMs();
+    
     batch = {
       firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
       firstTimestamp: Date.now(),
@@ -2405,13 +2500,13 @@ function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
     };
     state.rxBatchBuffer.set(repeaterId, batch);
     
-    // Set timeout for this repeater (independent timer)
+    // Set timeout for this repeater (independent timer with dynamic timeout)
     batch.timeoutId = setTimeout(() => {
-      debugLog(`[RX BATCH] Timeout triggered for repeater ${repeaterId} after ${RX_BATCH_TIMEOUT_MS}ms`);
+      debugLog(`[RX BATCH] Timeout triggered for repeater ${repeaterId} after ${rxBatchTimeoutMs}ms`);
       flushBatch(repeaterId, 'timeout');
-    }, RX_BATCH_TIMEOUT_MS);
+    }, rxBatchTimeoutMs);
     
-    debugLog(`[RX BATCH] Timeout set for repeater ${repeaterId}: ${RX_BATCH_TIMEOUT_MS}ms`);
+    debugLog(`[RX BATCH] Timeout set for repeater ${repeaterId}: ${rxBatchTimeoutMs}ms (dynamic based on war-drive interval)`);
   }
   
   // Add sample to batch
@@ -3724,6 +3819,14 @@ async function sendPing(manual = false) {
     debugLog(`[PING] Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
     startRepeaterTracking(payload, ch.channelIdx);
     
+    // For manual TX pings when auto mode is not running, temporarily enable unified RX listening
+    // This ensures we can hear repeater echoes after the ping is sent
+    const needsTemporaryRxListening = manual && !state.running && !state.rxAutoRunning;
+    if (needsTemporaryRxListening) {
+      debugLog(`[PING] Manual TX ping - temporarily enabling unified RX listening for heard messages`);
+      startUnifiedRxListening();
+    }
+    
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     debugLog(`[PING] Ping sent successfully to channel ${ch.channelIdx}`);
 
@@ -3767,6 +3870,12 @@ async function sendPing(manual = false) {
       // Stop repeater tracking and get final results
       const repeaters = stopRepeaterTracking();
       debugLog(`[PING] Finalized heard repeats: ${repeaters.length} unique paths detected`);
+      
+      // If this was a manual TX ping with temporary RX listening, stop it now
+      if (needsTemporaryRxListening) {
+        debugLog(`[PING] Manual TX ping listening window complete - stopping temporary unified RX listening`);
+        stopUnifiedRxListening();
+      }
       
       // Update UI log with repeater data
       updatePingLogWithRepeaters(logEntry, repeaters);
@@ -3863,6 +3972,10 @@ function stopAutoPing(stopGps = false) {
   state.running = false;
   updateAutoButton();
   updateControlsForCooldown(); // Re-enable RX Auto button
+  
+  // Re-enable interval and power selection controls when Auto mode stops
+  enableIntervalAndPowerControls();
+  
   releaseWakeLock();
   debugLog("[AUTO] Auto ping stopped");
 }
@@ -3926,6 +4039,9 @@ function startAutoPing() {
   state.running = true;
   updateAutoButton();
   updateControlsForCooldown(); // Disable RX Auto button
+  
+  // Disable interval and power selection controls while Auto mode is active
+  disableIntervalAndPowerControls();
 
   // Acquire wake lock for auto mode
   debugLog("[AUTO] Acquiring wake lock for auto mode");
@@ -3954,6 +4070,10 @@ function stopRxAuto() {
   state.rxAutoRunning = false;
   updateAutoButton();
   updateControlsForCooldown(); // Re-enable TX/RX Auto button
+  
+  // Re-enable interval and power selection controls when RX Auto mode stops
+  enableIntervalAndPowerControls();
+  
   releaseWakeLock();
   debugLog("[RX AUTO] RX Auto mode stopped");
 }
@@ -3972,6 +4092,9 @@ function startRxAuto() {
   state.rxAutoRunning = true;
   updateAutoButton();
   updateControlsForCooldown(); // Disable TX/RX Auto button
+  
+  // Disable interval and power selection controls while RX Auto mode is active
+  disableIntervalAndPowerControls();
   
   // Acquire wake lock for RX Auto mode
   debugLog("[RX AUTO] Acquiring wake lock for RX Auto mode");
