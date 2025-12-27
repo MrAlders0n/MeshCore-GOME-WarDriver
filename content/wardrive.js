@@ -99,7 +99,6 @@ const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 
 // API Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
-const API_BATCH_FLUSH_INTERVAL_MS = 30000;  // Flush every 30 seconds
 const API_TX_FLUSH_DELAY_MS = 3000;         // Flush 3 seconds after TX ping
 
 // MeshMapper API Configuration
@@ -262,9 +261,15 @@ const state = {
 // API Batch Queue State
 const apiQueue = {
   messages: [],           // Array of pending payloads
-  flushTimerId: null,     // Timer ID for periodic flush (30s)
+  flushTimerId: null,     // Timer ID for periodic flush (uses war-drive interval)
   txFlushTimerId: null,   // Timer ID for TX-triggered flush (3s)
   isProcessing: false     // Lock to prevent concurrent flush operations
+};
+
+// Unified War-Drive Timer State (for RX mode)
+const wardriveTimer = {
+  timerId: null,          // Timer ID for RX war-drive tick
+  isProcessing: false     // Lock to prevent overlapping tick executions
 };
 
 // Status message management with minimum visibility duration
@@ -1597,10 +1602,11 @@ function scheduleTxFlush() {
 }
 
 /**
- * Start the 30-second periodic flush timer
+ * Start the periodic flush timer (uses war-drive interval: 15s/30s/60s)
  */
 function startFlushTimer() {
-  debugLog(`[API QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
+  const intervalMs = getSelectedIntervalMs();
+  debugLog(`[API QUEUE] Starting periodic flush timer (${intervalMs}ms)`);
   
   // Clear existing timer if present
   if (apiQueue.flushTimerId) {
@@ -1613,7 +1619,7 @@ function startFlushTimer() {
       debugLog(`[API QUEUE] Periodic flush timer fired, flushing ${apiQueue.messages.length} messages`);
       flushApiQueue();
     }
-  }, API_BATCH_FLUSH_INTERVAL_MS);
+  }, intervalMs);
 }
 
 /**
@@ -1748,6 +1754,124 @@ function getQueueStatus() {
     hasPeriodicTimer: apiQueue.flushTimerId !== null,
     hasTxTimer: apiQueue.txFlushTimerId !== null
   };
+}
+
+// ---- Unified War-Drive Timer System ----
+
+/**
+ * Execute one war-drive timer tick (RX mode only)
+ * Sequence: flush API queue FIRST → then refresh map AFTER flush completes
+ */
+async function executeRxWarDriveTick() {
+  // Prevent overlapping executions
+  if (wardriveTimer.isProcessing) {
+    debugWarn(`[RX AUTO] War-drive tick already in progress, skipping`);
+    return;
+  }
+  
+  wardriveTimer.isProcessing = true;
+  debugLog(`[RX AUTO] War-drive tick started`);
+  
+  try {
+    // Flush API queue
+    if (apiQueue.messages.length > 0) {
+      debugLog(`[RX AUTO] Flushing ${apiQueue.messages.length} queued messages`);
+      await flushApiQueue();
+    } else {
+      debugLog(`[RX AUTO] No messages to flush`);
+    }
+    
+    // Refresh coverage map after flush completes (reusing existing TX war-drive function)
+    if (state.lastFix) {
+      const { lat, lon } = state.lastFix;
+      debugLog(`[RX AUTO] Refreshing coverage map for location: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
+      scheduleCoverageRefresh(lat, lon, MAP_REFRESH_DELAY_MS);
+    } else {
+      debugLog("[RX AUTO] Cannot refresh coverage map - no GPS fix");
+    }
+    
+  } catch (error) {
+    debugError(`[RX AUTO] War-drive tick failed: ${error.message}`);
+  } finally {
+    wardriveTimer.isProcessing = false;
+    debugLog(`[RX AUTO] War-drive tick complete`);
+  }
+}
+
+/**
+ * Schedule next RX war-drive timer tick
+ * @param {boolean} immediate - If true, execute immediately without delay
+ */
+function scheduleRxWarDriveTick(immediate = false) {
+  if (!state.rxAutoRunning) {
+    debugLog("[RX AUTO] RX Auto mode not running, not scheduling tick");
+    return;
+  }
+  
+  // Clear existing timer
+  if (wardriveTimer.timerId) {
+    clearTimeout(wardriveTimer.timerId);
+    wardriveTimer.timerId = null;
+  }
+  
+  const intervalMs = getSelectedIntervalMs();
+  const delayMs = immediate ? 0 : intervalMs;
+  
+  debugLog(`[RX AUTO] Scheduling next war-drive tick in ${delayMs}ms (interval: ${intervalMs}ms)`);
+  
+  wardriveTimer.timerId = setTimeout(() => {
+    executeRxWarDriveTick().then(() => {
+      // Schedule next tick after this one completes
+      scheduleRxWarDriveTick(false);
+    });
+  }, delayMs);
+}
+
+/**
+ * Start RX war-drive timer for periodic flush and map updates
+ */
+function startRxWarDriveTimer() {
+  debugLog(`[RX AUTO] Starting RX war-drive timer`);
+  
+  // Stop any existing timer
+  stopRxWarDriveTimer();
+  
+  // Start GPS watch for RX mode
+  debugLog("[RX AUTO] Starting GPS watch");
+  startGeoWatch();
+  
+  // Schedule first tick immediately
+  scheduleRxWarDriveTick(true);
+}
+
+/**
+ * Stop RX war-drive timer
+ */
+function stopRxWarDriveTimer() {
+  debugLog(`[RX AUTO] Stopping RX war-drive timer`);
+  
+  if (wardriveTimer.timerId) {
+    clearTimeout(wardriveTimer.timerId);
+    wardriveTimer.timerId = null;
+  }
+  
+  wardriveTimer.isProcessing = false;
+  
+  // Stop GPS watch
+  stopGeoWatch();
+}
+
+/**
+ * Restart RX war-drive timer with new interval (when user changes interval selection)
+ */
+function restartRxWarDriveTimerWithNewInterval() {
+  if (!state.rxAutoRunning) {
+    debugLog("[RX AUTO] RX Auto mode not running, nothing to restart");
+    return;
+  }
+  
+  debugLog(`[RX AUTO] Restarting RX war-drive timer with new interval`);
+  startRxWarDriveTimer();
 }
 
 // ---- Repeater Echo Tracking ----
@@ -3821,6 +3945,9 @@ function stopRxAuto() {
     return;
   }
   
+  // Stop RX war-drive timer
+  stopRxWarDriveTimer();
+  
   // Stop unified RX listening
   stopUnifiedRxListening();
   
@@ -3849,6 +3976,9 @@ function startRxAuto() {
   // Acquire wake lock for RX Auto mode
   debugLog("[RX AUTO] Acquiring wake lock for RX Auto mode");
   acquireWakeLock().catch(console.error);
+  
+  // Start RX war-drive timer for periodic flush and map updates
+  startRxWarDriveTimer();
   
   setDynamicStatus("RX Auto mode started", STATUS_COLORS.success);
   debugLog("[RX AUTO] RX Auto mode started");
@@ -4255,6 +4385,29 @@ export async function onLoad() {
     radio.addEventListener("change", () => {
       debugLog(`[UI] Radio power changed to: ${getCurrentPowerSetting()}`);
       updateConnectButtonState();
+    });
+  });
+
+  // Add event listeners to interval radio buttons to restart timers with new interval
+  const intervalRadios = document.querySelectorAll('input[name="interval"]');
+  intervalRadios.forEach(radio => {
+    radio.addEventListener("change", () => {
+      const newInterval = getSelectedIntervalMs();
+      debugLog(`[UI] War-drive interval changed to: ${newInterval}ms`);
+      
+      // Restart RX war-drive timer if RX Auto is running
+      if (state.rxAutoRunning) {
+        debugLog("[UI] Restarting RX war-drive timer with new interval");
+        restartRxWarDriveTimerWithNewInterval();
+      }
+      
+      // Restart API flush timer if it's running
+      if (apiQueue.flushTimerId) {
+        debugLog("[UI] Restarting API flush timer with new interval");
+        startFlushTimer();
+      }
+      
+      // Note: TX Auto mode doesn't need restart - it picks up new interval on next ping
     });
   });
 

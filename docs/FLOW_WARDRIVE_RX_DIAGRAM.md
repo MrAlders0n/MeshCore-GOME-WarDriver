@@ -219,4 +219,56 @@
 ║   └───────────────────────────────────────────────────────────────────────┘   ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                      RX AUTO MODE - PERIODIC MAP UPDATES                      ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                                                                               ║
+║   When RX Auto mode is active, a unified war-drive timer runs periodically   ║
+║   at the user-selected interval (15s/30s/60s) to:                            ║
+║                                                                               ║
+║   1. FLUSH API QUEUE (post all pending RX messages)                          ║
+║   2. REFRESH COVERAGE MAP (after flush completes)                            ║
+║                                                                               ║
+║   This ensures the user sees updated map blocks immediately after posting    ║
+║   new coverage data, providing visual feedback on RX war-drive progress.     ║
+║                                                                               ║
+║   ┌───────────────────────────────────────────────────────────────────────┐   ║
+║   │                   RX AUTO MODE TIMER LIFECYCLE                        │   ║
+║   │                                                                       │   ║
+║   │   START RX AUTO:                                                     │   ║
+║   │   • Start GPS watch                                                  │   ║
+║   │   • Start unified RX listening                                       │   ║
+║   │   • Schedule first timer tick immediately                            │   ║
+║   │                                                                       │   ║
+║   │   TIMER TICK (every 15s/30s/60s):                                    │   ║
+║   │   • If queue has messages → flushApiQueue()                          │   ║
+║   │   • refreshCoverageMap() (after flush completes)                     │   ║
+║   │   • Schedule next tick                                               │   ║
+║   │                                                                       │   ║
+║   │   STOP RX AUTO:                                                      │   ║
+║   │   • Stop timer                                                       │   ║
+║   │   • Stop GPS watch                                                   │   ║
+║   │   • Stop unified RX listening                                        │   ║
+║   │   • Release wake lock                                                │   ║
+║   └───────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+║   ┌───────────────────────────────────────────────────────────────────────┐   ║
+║   │                   EXAMPLE: 15s INTERVAL                               │   ║
+║   │                                                                       │   ║
+║   │   0s         15s        30s        45s                                │   ║
+║   │   │           │          │          │                                 │   ║
+║   │   RX──────────┼──────────┼──────────┼                                 │   ║
+║   │   │  RX   RX  │  RX   RX │  RX      │                                 │   ║
+║   │   │           ▼          ▼          ▼                                 │   ║
+║   │   │      FLUSH+MAP   FLUSH+MAP  FLUSH+MAP                             │   ║
+║   │   │      (instant    (instant   (instant                              │   ║
+║   │   │       update)     update)    update)                              │   ║
+║   │   └───────────────────────────────────────                            │   ║
+║   │                                                                       │   ║
+║   │   User sees map refresh every 15s with latest RX coverage data       │   ║
+║   └───────────────────────────────────────────────────────────────────────┘   ║
+║                                                                               ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
 ```

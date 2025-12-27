@@ -44,7 +44,7 @@
 │                                                                                       │
 │   QUEUE STATE:                                                                        │
 │   • messages: []           ─── Array of pending payloads                              │
-│   • flushTimerId: null     ─── 30s periodic timer                                     │
+│   • flushTimerId: null     ─── War-drive interval periodic timer (15s/30s/60s)        │
 │   • txFlushTimerId: null   ─── 3s TX flush timer                                      │
 │   • isProcessing: false    ─── Lock to prevent concurrent flushes                     │
 │                                                                                       │
@@ -60,11 +60,11 @@
               ▼  ▼                                                   ▼    ▼
 ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
 │                     │ │                     │ │                     │ │                     │
-│   TX PING QUEUED    │ │   30s PERIODIC      │ │   QUEUE SIZE = 50   │ │   disconnect()      │
-│                     │ │                     │ │                     │ │                     │
+│   TX PING QUEUED    │ │   PERIODIC TIMER    │ │   QUEUE SIZE = 50   │ │   disconnect()      │
+│                     │ │   (15s/30s/60s)     │ │                     │ │                     │
 │  ┌───────────────┐  │ │  ┌───────────────┐  │ │  ┌───────────────┐  │ │  ┌───────────────┐  │
 │  │ Start/Reset   │  │ │  │ setInterval   │  │ │  │  Immediate    │  │ │  │ Flush before  │  │
-│  │ 3s timer      │  │ │  │ (30000ms)     │  │ │  │  flush        │  │ │  │ capacity      │  │
+│  │ 3s timer      │  │ │  │ (dynamic)     │  │ │  │  flush        │  │ │  │ capacity      │  │
 │  └───────────────┘  │ │  └───────────────┘  │ │  └───────────────┘  │ │  │ release       │  │
 │                     │ │                     │ │                     │ │  └───────────────┘  │
 │  Real-time map      │ │  Catches RX msgs    │ │  Batch limit        │ │                     │
@@ -130,16 +130,26 @@ Example 1: TX triggers fast flush, nearby RX messages ride along
                       3 second delay from TX
 
 
-Example 2: RX only (no pings) - 30s periodic flush
-──────────────────────────────────────────────────
-  0s       10s       20s       30s
+Example 2: RX only (no pings) - periodic flush at war-drive interval
+────────────────────────────────────────────────────────────────────
+  15s interval:
+  0s       5s       10s       15s
   │         │         │         │
-  RX────────┼─────────┼─────────┼─►FLUSH
+  RX────────┼─────────┼─────────┼─►FLUSH + MAP REFRESH
   │    RX   │    RX   │         │ (3x RX)
   │         │    RX   │         │
   │         │         │         │
   └─────────┴─────────┴─────────┘
   (listening continuously, no TX pings sent)
+  
+  30s interval:
+  0s       10s       20s       30s
+  │         │         │         │
+  RX────────┼─────────┼─────────┼─►FLUSH + MAP REFRESH
+  │    RX   │    RX   │         │ (3x RX)
+  │         │    RX   │         │
+  │         │         │         │
+  └─────────┴─────────┴─────────┘
 
 
 Example 3: Busy session - multiple TX pings with RX traffic
@@ -194,7 +204,7 @@ Example 4: Disconnect flushes everything
            ▼
   ┌──────────────────┐
   │ stopFlushTimers()│
-  │ • Clear 30s timer│
+  │ • Clear periodic │
   │ • Clear TX timer │
   └────────┬─────────┘
            │
@@ -210,4 +220,29 @@ Example 4: Disconnect flushes everything
   │ State cleanup    │
   │ UI updates       │
   └──────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                          RX WAR-DRIVE MODE BEHAVIOR                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+
+RX Auto Mode adds periodic map updates:
+- Timer ticks at war-drive interval (15s/30s/60s - user-selectable)
+- Each tick: FLUSH API queue → THEN refresh coverage map
+- Ensures map updates immediately after posting new coverage data
+- No TX transmissions (RX-only passive listening)
+
+Example: RX Auto with 15s interval
+──────────────────────────────────
+  0s         15s        30s        45s
+  │           │          │          │
+  RX──────────┼──────────┼──────────┼
+  │  RX   RX  │  RX   RX │  RX      │
+  │           ▼          ▼          ▼
+  │      FLUSH+MAP   FLUSH+MAP  FLUSH+MAP
+  │      (instant    (instant   (instant
+  │       update)     update)    update)
+  └───────────────────────────────────────
+  
+  User sees map refresh every 15s with latest RX data
   ```
