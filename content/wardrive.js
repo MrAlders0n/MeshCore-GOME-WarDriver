@@ -1759,20 +1759,6 @@ function getQueueStatus() {
 // ---- Unified War-Drive Timer System ----
 
 /**
- * Refresh the coverage map iframe
- */
-function refreshCoverageMap() {
-  if (!state.lastFix) {
-    debugLog("[UI] Cannot refresh coverage map - no GPS fix");
-    return;
-  }
-  
-  const { lat, lon } = state.lastFix;
-  debugLog(`[UI] Refreshing coverage map for location: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
-  scheduleCoverageRefresh(lat, lon, MAP_REFRESH_DELAY_MS);
-}
-
-/**
  * Execute one war-drive timer tick (RX mode only)
  * Sequence: flush API queue FIRST → then refresh map AFTER flush completes
  */
@@ -1795,9 +1781,14 @@ async function executeRxWarDriveTick() {
       debugLog(`[RX AUTO] No messages to flush`);
     }
     
-    // Refresh coverage map after flush completes
-    debugLog(`[RX AUTO] Refreshing coverage map`);
-    refreshCoverageMap();
+    // Refresh coverage map after flush completes (reusing existing TX war-drive function)
+    if (state.lastFix) {
+      const { lat, lon } = state.lastFix;
+      debugLog(`[RX AUTO] Refreshing coverage map for location: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
+      scheduleCoverageRefresh(lat, lon, MAP_REFRESH_DELAY_MS);
+    } else {
+      debugLog("[RX AUTO] Cannot refresh coverage map - no GPS fix");
+    }
     
   } catch (error) {
     debugError(`[RX AUTO] War-drive tick failed: ${error.message}`);
