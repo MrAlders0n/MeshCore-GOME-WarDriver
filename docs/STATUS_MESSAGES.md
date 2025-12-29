@@ -390,23 +390,41 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 #### 7. Auto Mode Messages
 
-##### Auto mode stopped
-- **Message**: `"Auto mode stopped"`
+##### TX/RX Auto mode stopped
+- **Message**: `"TX/RX Auto mode stopped"`
 - **Color**: Slate (idle)
-- **When**: User clicks "Stop Auto Ping" button
-- **Source**: `content/wardrive.js:autoToggleBtn click handler`
+- **When**: User clicks "Stop TX/RX" button
+- **Source**: `content/wardrive.js:txRxAutoBtn click handler`
 
-##### Lost focus, auto mode stopped
-- **Message**: `"Lost focus, auto mode stopped"`
+##### RX Auto mode stopped
+- **Message**: `"RX Auto mode stopped"`
+- **Color**: Slate (idle)
+- **When**: User clicks "Stop RX" button
+- **Source**: `content/wardrive.js:rxAutoBtn click handler`
+
+##### RX Auto running
+- **Message**: `"RX Auto running"`
+- **Color**: Green (success)
+- **When**: RX Auto mode starts successfully
+- **Source**: `content/wardrive.js:startRxAuto()`
+
+##### Lost focus, TX/RX Auto mode stopped
+- **Message**: `"Lost focus, TX/RX Auto mode stopped"`
 - **Color**: Amber (warning)
-- **When**: Browser tab hidden while auto mode running
+- **When**: Browser tab hidden while TX/RX Auto mode running
+- **Source**: `content/wardrive.js:visibilitychange handler`
+
+##### Lost focus, RX Auto mode stopped
+- **Message**: `"Lost focus, RX Auto mode stopped"`
+- **Color**: Amber (warning)
+- **When**: Browser tab hidden while RX Auto mode running
 - **Source**: `content/wardrive.js:visibilitychange handler`
 
 ##### Wait Xs before toggling auto mode
 - **Message**: `"Wait Xs before toggling auto mode"` (X is dynamic countdown)
 - **Color**: Amber (warning)
 - **When**: User attempts to toggle auto mode during cooldown period
-- **Source**: `content/wardrive.js:stopAutoPing()`, `startAutoPing()`
+- **Source**: `content/wardrive.js:stopTxRxAuto()`, `startTxRxAuto()`, `stopRxAuto()`, `startRxAuto()`
 
 #### 8. Error Messages
 
