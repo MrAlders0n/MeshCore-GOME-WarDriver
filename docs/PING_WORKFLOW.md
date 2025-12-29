@@ -3,9 +3,11 @@
 ## Table of Contents
 - [Overview](#overview)
   - [Ping Overview](#ping-overview)
-  - [Auto Ping Overview](#auto-ping-overview)
+  - [TX/RX Auto Mode Overview](#txrx-auto-mode-overview)
+  - [RX Auto Mode Overview](#rx-auto-mode-overview)
 - [Manual Ping Workflow](#manual-ping-workflow)
-- [Auto Ping Workflow](#auto-ping-workflow)
+- [TX/RX Auto Ping Workflow](#txrx-auto-ping-workflow)
+- [RX Auto Mode Workflow](#rx-auto-mode-workflow)
 - [Ping Lifecycle](#ping-lifecycle)
 - [Workflow Diagrams](#workflow-diagrams)
 - [Code References](#code-references)
@@ -18,9 +20,9 @@
 **What a "Ping" Does:**
 - Sends a wardrive ping to the mesh network via the `#wardriving` channel
 - Payload format: `@[MapperBot] <LAT>, <LON>[ [power] ]`
-- Triggers a 7-second RX listening window for repeater echo detection
-- Posts ping data to MeshMapper API after the listening window completes
-- Logs the ping in the session log with timestamp, coordinates, and repeater data
+- Triggers a 6-second RX listening window for repeater echo detection
+- Queues ping data to API batch queue for later posting
+- Logs the ping in the TX Log with timestamp, coordinates, and repeater data
 
 **Ping Requirements:**
 - Active BLE connection to a MeshCore device
@@ -30,20 +32,38 @@
 - Not in cooldown period (7 seconds after previous ping)
 - No ping currently in progress
 
-### Auto Ping Overview
+### TX/RX Auto Mode Overview
 
-**What "Auto Ping" Does:**
+**What "TX/RX Auto" Does:**
 - Automatically sends pings at configurable intervals (15s/30s/60s)
 - Acquires a wake lock to keep the screen awake
 - Displays countdown timer between pings
 - Skips pings that fail validation (GPS, geofence, distance) without stopping
 - Pauses countdown when manual ping is triggered during auto mode
+- Listens for repeater echoes during 6s window after each TX ping
+- Collects RX observations outside echo window for RX batch processing
 
-**Auto Ping State:**
-- `state.running`: Boolean indicating if auto mode is active
+**TX/RX Auto State:**
+- `state.txRxAutoRunning`: Boolean indicating if TX/RX Auto mode is active
 - `state.autoTimerId`: Timer ID for next scheduled ping
 - `state.nextAutoPingTime`: Timestamp when next auto ping will fire
 - `state.skipReason`: Reason if last ping was skipped (for countdown display)
+
+### RX Auto Mode Overview
+
+**What "RX Auto" Does:**
+- Passive-only wardriving mode with no TX pings
+- Listens for all mesh traffic on the wardriving channel
+- Collects RX observations in batch buffer
+- Posts observations to API when user moves 25m or after 30s timeout
+- Acquires a wake lock to keep the screen awake
+- No TX pings sent, only passive listening
+- Logs observations in RX Log
+
+**RX Auto State:**
+- `state.rxAutoRunning`: Boolean indicating if RX Auto mode is active
+- RX batch buffer: Collects observations per repeater
+- No TX operations performed
 
 ## Manual Ping Workflow
 
@@ -183,7 +203,7 @@ sendPingBtn.addEventListener("click", () => {
     - If manual ping during auto mode:  calls `resumeAutoCountdown()`
     - Resumes countdown from `state.pausedAutoTimerRemainingMs`
 
-## Auto Ping Workflow
+## TX/RX Auto Ping Workflow
 
 ### Auto Ping Start Sequence
 
@@ -310,6 +330,102 @@ When user sends a manual ping while auto mode is running:
 3. **Resume or Reschedule**
    - If manual ping succeeds: `scheduleNextAutoPing()` (fresh interval)
    - If manual ping blocked: `resumeAutoCountdown()` (resume from paused time)
+
+## RX Auto Mode Workflow
+
+### RX Auto Mode Overview
+
+RX Auto is a passive-only wardriving mode that listens for mesh traffic without sending any TX pings.
+
+**Key Characteristics:**
+- No TX pings sent (passive only)
+- Continuously listens for mesh traffic on wardriving channel
+- Collects observations in RX batch buffer (per repeater)
+- Posts to API when user moves 25m or after 30s timeout
+- Acquires wake lock to keep screen awake
+- Locks interval/power controls while running
+- Mutually exclusive with TX/RX Auto mode
+
+### RX Auto Start Sequence
+
+1. **User Initiates**
+   - User clicks "RX Auto" button
+   - Button validation: Not in cooldown, connected to device
+
+2. **Start GPS Watch**
+   - Starts continuous GPS updates (if not already running)
+   - Provides location for RX observations
+
+3. **Enable RX Auto State**
+   - Sets `state.rxAutoRunning = true`
+   - Updates button text to "Stop RX"
+   - Changes button color to amber
+
+4. **Lock Controls**
+   - Disables interval radio buttons (opacity 0.4, cursor not-allowed)
+   - Disables power radio buttons (opacity 0.4, cursor not-allowed)
+   - Disables TX/RX Auto button (mutual exclusivity)
+
+5. **Acquire Wake Lock**
+   - Requests wake lock to keep screen on
+   - Prevents app from sleeping during passive listening
+
+6. **Subscribe to RX Events**
+   - Calls `subscribeToRx('rxAuto')`
+   - Routes all RX events to RX Auto handler
+   - No echo window (all observations treated as RX)
+
+7. **Set Status**
+   - Dynamic Status: "RX Auto running" (green)
+
+### RX Auto Stop Sequence
+
+1. **User Initiates or Page Hidden**
+   - User clicks "Stop RX" button
+   - Or page loses focus (tab hidden)
+
+2. **Unsubscribe from RX Events**
+   - Calls `unsubscribeFromRx()`
+   - Stops routing RX events to RX Auto handler
+
+3. **Disable RX Auto State**
+   - Sets `state.rxAutoRunning = false`
+   - Updates button text to "RX Auto"
+   - Changes button color to indigo
+
+4. **Unlock Controls**
+   - Enables interval radio buttons
+   - Enables power radio buttons
+   - Enables TX/RX Auto button
+
+5. **Release Wake Lock**
+   - Releases wake lock
+   - Screen can sleep normally
+
+6. **Stop GPS Watch (Conditional)**
+   - Only stops GPS if `stopGps=true` (disconnect or page hidden)
+   - Normal stop keeps GPS running for potential next operation
+
+7. **Set Status**
+   - Dynamic Status: "RX Auto mode stopped" (idle)
+   - Or "Lost focus, RX Auto mode stopped" (warning) if page hidden
+
+### RX Batch Processing
+
+**Batch Buffer:**
+- Observations grouped by repeater ID
+- Each batch stores: first location, first timestamp, SNR samples
+- Batch triggers: Distance (25m) or Timeout (30s)
+
+**Flush Triggers:**
+1. User moves 25m from first observation location
+2. 30 seconds elapsed since first observation
+3. Disconnect (final flush)
+
+**API Post:**
+- Posts batch to MeshMapper API with "RX" wardrive type
+- Includes first location, SNR samples, timestamp
+- Updates RX Log UI on successful post
 
 ## Ping Lifecycle
 

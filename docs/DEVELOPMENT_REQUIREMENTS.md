@@ -29,12 +29,15 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[BLE]` | Bluetooth connection and device communication |
 | `[GPS]` | GPS/geolocation operations |
 | `[PING]` | Ping sending and validation |
-| `[API QUEUE]` | API batch queue operations |
+| `[TX/RX AUTO]` | TX/RX Auto mode operations (replaces `[AUTO]`) |
+| `[RX AUTO]` | RX Auto mode operations (NEW) |
+| `[UNIFIED RX]` | Unified RX handler and subscription |
 | `[RX BATCH]` | RX batch buffer operations |
+| `[TX LOG]` | TX Log tracking (replaces `[SESSION LOG]`) |
+| `[API QUEUE]` | API batch queue operations |
+| `[MAP]` | Background map refresh service (NEW) |
 | `[PASSIVE RX]` | Passive RX logging logic |
 | `[PASSIVE RX UI]` | Passive RX UI rendering |
-| `[SESSION LOG]` | Session log tracking |
-| `[UNIFIED RX]` | Unified RX handler |
 | `[DECRYPT]` | Message decryption |
 | `[UI]` | General UI updates (status bar, buttons, etc.) |
 | `[CHANNEL]` | Channel setup and management |
@@ -42,7 +45,6 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[WAKE LOCK]` | Wake lock acquisition/release |
 | `[GEOFENCE]` | Geofence and distance validation |
 | `[CAPACITY]` | Capacity check API calls |
-| `[AUTO]` | Auto ping mode operations |
 | `[INIT]` | Initialization and setup |
 | `[ERROR LOG]` | Error log UI operations |
 

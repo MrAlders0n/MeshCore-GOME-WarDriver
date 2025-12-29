@@ -179,13 +179,17 @@
       <section class="bg-slate-800/80 border border-slate-700 rounded-xl p-4 space-y-2">
         <!-- Ping controls (always visible, disabled when not connected) -->
         <div id="pingControls" class="w-full flex gap-2">
-          <button id="sendPingBtn"
+          <button id="txPingBtn"
             class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
-            Send Ping
+            TX Ping
           </button>
-          <button id="autoToggleBtn"
+          <button id="txRxAutoBtn"
             class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
-            Start Auto Ping
+            TX/RX Auto
+          </button>
+          <button id="rxAutoBtn"
+            class="flex-1 min-w-0 px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed">
+            RX Auto
           </button>
         </div>
 
@@ -196,19 +200,19 @@
         </button>
       </section>
 
-      <!-- Session Log: Unified Static Section (replaces mobile bottom sheet and desktop log) -->
-      <section class="bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden" aria-labelledby="sessionPingsHeading">
+      <!-- TX Log: Unified Static Section (replaces mobile bottom sheet and desktop log) -->
+      <section class="bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden" aria-labelledby="txPingsHeading">
         <!-- Log Header (collapsible toggle) -->
         <div id="logSummaryBar" class="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-slate-800/60 transition-colors">
           <div class="flex items-center gap-3 text-sm min-w-0 flex-1">
-            <h2 id="sessionPingsHeading" class="text-sm font-medium text-slate-300 uppercase tracking-wide">Session Log</h2>
+            <h2 id="txPingsHeading" class="text-sm font-medium text-slate-300 uppercase tracking-wide">TX Log</h2>
             <span class="text-slate-500">|</span>
             <span id="logCount" class="font-medium text-slate-300">0 pings</span>
             <span id="logLastTime" class="text-slate-400 text-xs truncate hidden sm:inline">No data</span>
           </div>
           <div class="flex items-center gap-2">
             <span id="logLastSnr" class="text-xs font-mono text-slate-400">—</span>
-            <button id="sessionLogCopyBtn" class="copy-btn text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded transition-colors hidden">
+            <button id="txLogCopyBtn" class="copy-btn text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded transition-colors hidden">
               Copy
             </button>
             <svg id="logExpandArrow" class="w-4 h-4 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -221,7 +225,7 @@
         <div id="logBottomSheet" class="border-t border-slate-700 hidden">
           <!-- Log entries (scrollable) -->
           <div id="logScrollContainer" class="overflow-y-auto px-4 py-2 max-h-64" style="-webkit-overflow-scrolling: touch;">
-            <div id="sessionPings" class="space-y-2">
+            <div id="txPings" class="space-y-2">
               <!-- Log entries will be appended here -->
               <div class="text-xs text-slate-500 italic text-center py-4">No pings logged yet</div>
             </div>

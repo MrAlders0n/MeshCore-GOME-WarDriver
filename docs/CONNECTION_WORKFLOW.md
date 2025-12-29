@@ -64,7 +64,9 @@
 8. **Channel Setup** → Creates/finds #wardriving channel
 9. **Passive RX Listening** → Starts background packet monitoring
 10. **GPS Init** → Starts GPS tracking
-11. **Connected** → Enables all controls, ready for wardriving
+11. **Always-On Services** → Starts background services (Map Refresh, API Queue Flush)
+12. **Session Initialization** → Clears TX Log and RX Log for new session
+13. **Connected** → Enables all controls, ready for wardriving
 
 ### Detailed Connection Steps
 
@@ -205,12 +207,26 @@ connectBtn.addEventListener("click", async () => {
     - Updates UI with coordinates and accuracy
     - Refreshes coverage map if accuracy < 100m
 
-11. **Connection Complete**
+11. **Start Always-On Background Services**
+    - **Map Refresh Service**: Refreshes coverage map every 5s or when user moves 25m
+    - **API Queue Flush Timer**: Flushes queued messages at war-drive interval (15s/30s/60s)
+    - These services run continuously until disconnect
+    - GPS Watch: Already running from step 10, continues to provide location data
+    - RX Listening: Already running from step 9, continues to monitor mesh traffic
+    - **Debug Logging**: `[MAP]` and `[API QUEUE]` prefixes
+
+12. **Session Initialization**
+    - Clears TX Log (Session Log) for new wardrive session
+    - Clears RX Log (Passive observations) for new session
+    - Preserves previous session data is lost
+    - **Debug Logging**: `[TX LOG]` and `[RX LOG]` prefixes
+
+13. **Connection Complete**
     - **Connection Status**: `"Connected"` (green) - **NOW shown after GPS init**
     - **Dynamic Status**: `"—"` (em dash - cleared to show empty state)
     - Enables all UI controls
     - Ready for wardriving operations
-    - Passive RX listening running in background
+    - All always-on services running in background
 
 ## Disconnection Workflow
 
@@ -218,14 +234,17 @@ connectBtn.addEventListener("click", async () => {
 
 1. **Disconnect Trigger** → User clicks "Disconnect" or error occurs
 2. **Status Update** → Connection Status shows "Disconnecting", Dynamic Status cleared to em dash
-3. **API Queue Flush** → **CRITICAL: Flush pending messages BEFORE capacity release (session_id still valid)**
-4. **Stop Flush Timers** → Stop periodic and TX flush timers
-5. **Capacity Release** → Returns API slot to MeshMapper
-6. **Channel Deletion** → Removes #wardriving channel from device
-7. **BLE Disconnect** → Closes GATT connection
-8. **Cleanup** → Stops timers, GPS, wake locks, clears queue
-9. **State Reset** → Clears all connection state
-10. **Disconnected** → Connection Status shows "Disconnected", Dynamic Status shows em dash or error message
+3. **Stop Active Modes** → Stop TX/RX Auto or RX Auto if running
+4. **Stop Always-On Services** → Stop Map Refresh and RX Listening
+5. **API Queue Flush** → **CRITICAL: Flush pending messages BEFORE capacity release (session_id still valid)**
+6. **Stop Flush Timer** → Stop periodic flush timer
+7. **Capacity Release** → Returns API slot to MeshMapper
+8. **Channel Deletion** → Removes #wardriving channel from device
+9. **BLE Disconnect** → Closes GATT connection
+10. **Cleanup** → Stops timers, GPS, wake locks, clears queue
+11. **State Reset** → Clears all connection state
+12. **Disconnected** → Connection Status shows "Disconnected", Dynamic Status shows em dash or error message
+13. **Session Preservation** → TX Log and RX Log preserved for user review
 
 ### Detailed Disconnection Steps
 
