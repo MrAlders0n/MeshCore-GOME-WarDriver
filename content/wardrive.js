@@ -2934,7 +2934,7 @@ function addLogEntry(timestamp, lat, lon, eventsStr) {
 /**
  * Clear all TX Log entries (called on new connection)
  */
-function clearSessionLog() {
+function clearTxLog() {
   sessionLogState.entries = [];
   renderLogEntries();
   updateLogSummary();
@@ -3859,6 +3859,21 @@ async function sendPing(manual = false) {
     state.capturedPingCoords = { lat, lon, accuracy };
     debugLog(`[PING] GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
     
+    // Subscribe to RX events based on mode
+    if (manual && !state.txRxAutoRunning) {
+      // Manual TX Ping (not during auto mode): Subscribe as txPing for echo tracking only
+      debugLog(`[UNIFIED RX] Subscribing to RX events for manual TX Ping`);
+      subscribeToRx('txPing');
+      startEchoWindow(); // 6-second echo window
+    } else if (state.txRxAutoRunning) {
+      // TX/RX Auto mode: Already subscribed as txRxAuto, start echo window
+      if (rxSubscription.mode !== 'txRxAuto') {
+        debugLog(`[UNIFIED RX] Subscribing to RX events for TX/RX Auto mode`);
+        subscribeToRx('txRxAuto');
+      }
+      startEchoWindow(); // 6-second echo window for this TX ping
+    }
+    
     // Start repeater echo tracking BEFORE sending the ping
     debugLog(`[PING] Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
     startRepeaterTracking(payload, ch.channelIdx);
@@ -3991,6 +4006,10 @@ function stopTxRxAuto(stopGps = false) {
   state.skipReason = null;
   state.pausedAutoTimerRemainingMs = null;
   
+  // Unsubscribe from RX events
+  debugLog("[TX/RX AUTO] Unsubscribing from RX events");
+  unsubscribeFromRx();
+  
   // Only stop GPS watch when disconnecting or page hidden, not during normal stop
   if (stopGps) {
     stopGeoWatch();
@@ -4059,6 +4078,11 @@ function startTxRxAuto() {
   state.txRxAutoRunning = true;
   updateAutoButton();
   disableIntervalAndPowerControls();
+  
+  // Subscribe to RX events for TX/RX Auto mode
+  // This enables both echo tracking (during 6s windows) and RX batch collection (outside windows)
+  debugLog("[TX/RX AUTO] Subscribing to RX events for TX/RX Auto mode");
+  subscribeToRx('txRxAuto');
 
   // Acquire wake lock for auto mode
   debugLog("[TX/RX AUTO] Acquiring wake lock for auto mode");
@@ -4225,7 +4249,7 @@ async function connect() {
         
         // Clear TX Log and RX Log for new session
         debugLog("[TX LOG] Clearing TX Log for new session");
-        clearSessionLog();
+        clearTxLog();
         debugLog("[RX LOG] Clearing RX Log for new session");
         clearRxLog();
         
