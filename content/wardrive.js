@@ -2681,9 +2681,13 @@ function parseRxLogEntry(entry) {
     rssi: entry.rssi,
     pathLength: entry.pathLength,
     header: entry.header,
-    lat: entry.lat.toFixed(5),
-    lon: entry.lon.toFixed(5),
-    timestamp: entry.timestamp
+    // Keep original numeric values for CSV export and short formatted strings for UI
+    lat: (typeof entry.lat === 'number') ? entry.lat.toFixed(5) : entry.lat,
+    lon: (typeof entry.lon === 'number') ? entry.lon.toFixed(5) : entry.lon,
+    timestamp: entry.timestamp,
+    // New: pass sample_count through (fall back to 1 if not present)
+    sampleCount: (typeof entry.sample_count !== 'undefined') ? entry.sample_count : (
+                  typeof entry.sampleCount !== 'undefined' ? entry.sampleCount : 1)
   };
 }
 
@@ -2714,13 +2718,20 @@ function createRxLogEntryElement(entry) {
   topRow.appendChild(time);
   topRow.appendChild(coords);
   
-  // Chips row: repeater ID and SNR
+  // Chips row: repeater ID, SNR and sample count
   const chipsRow = document.createElement('div');
   chipsRow.className = 'heardChips';
   
-  // Create chip for repeater with SNR
+  // Create chip for repeater with SNR (existing helper)
   const chip = createChipElement(parsed.repeaterId, parsed.snr);
   chipsRow.appendChild(chip);
+  
+  // New: sample count chip (small, subtle)
+  const sampleChip = document.createElement('span');
+  sampleChip.className = 'text-xs font-mono text-slate-400 ml-2 sample-count-chip';
+  sampleChip.setAttribute('title', `sample count: ${parsed.sampleCount}`);
+  sampleChip.textContent = `×${parsed.sampleCount}`;
+  chipsRow.appendChild(sampleChip);
   
   logEntry.appendChild(topRow);
   logEntry.appendChild(chipsRow);
@@ -3154,28 +3165,33 @@ function sessionLogToCSV() {
 }
 
 /**
- * Convert RX Log to CSV format
- * Columns: Timestamp,RepeaterID,SNR,RSSI,PathLength
- * @returns {string} CSV formatted string
+ * Export RX log entries to CSV (used by the copy button)
+ * Columns: Timestamp,RepeaterId,Lat,Lon,SNR,SampleCount,PathLength,Header
  */
 function rxLogToCSV() {
-  debugLog('[PASSIVE RX UI] Converting RX log to CSV format');
-  
-  if (rxLogState.entries.length === 0) {
+  if (!rxLogState || !Array.isArray(rxLogState.entries) || rxLogState.entries.length === 0) {
     debugWarn('[PASSIVE RX UI] No RX log entries to export');
-    return 'Timestamp,RepeaterID,SNR,RSSI,PathLength\n';
+    return 'Timestamp,RepeaterId,Lat,Lon,SNR,SampleCount,PathLength,Header\n';
   }
-  
-  const header = 'Timestamp,RepeaterID,SNR,RSSI,PathLength\n';
-  
+
+  const header = 'Timestamp,RepeaterId,Lat,Lon,SNR,SampleCount,PathLength,Header\n';
+
   const rows = rxLogState.entries.map(entry => {
-    // Handle potentially missing fields from old entries
-    const snr = entry.snr !== undefined ? entry.snr.toFixed(2) : '';
-    const rssi = entry.rssi !== undefined ? entry.rssi : '';
-    const pathLength = entry.pathLength !== undefined ? entry.pathLength : '';
-    return `${entry.timestamp},${entry.repeaterId},${snr},${rssi},${pathLength}`;
+    // normalize fields
+    const ts = entry.timestamp || '';
+    const repeater = (entry.repeaterId || '').toString().replace(/"/g, '""');
+    const lat = (typeof entry.lat === 'number') ? entry.lat.toFixed(5) : (entry.lat || '');
+    const lon = (typeof entry.lon === 'number') ? entry.lon.toFixed(5) : (entry.lon || '');
+    const snr = (typeof entry.snr !== 'undefined') ? entry.snr : '';
+    const sampleCount = (typeof entry.sample_count !== 'undefined') ? entry.sample_count :
+                        (typeof entry.sampleCount !== 'undefined' ? entry.sampleCount : 1);
+    const pathLength = (typeof entry.pathLength !== 'undefined') ? entry.pathLength : '';
+    const headerField = (entry.header || '').toString().replace(/"/g, '""');
+
+    // Quote repeater and header to be safe
+    return `${ts},"${repeater}",${lat},${lon},${snr},${sampleCount},${pathLength},"${headerField}"`;
   });
-  
+
   const csv = header + rows.join('\n');
   debugLog(`[PASSIVE RX UI] CSV export complete: ${rxLogState.entries.length} entries`);
   return csv;
