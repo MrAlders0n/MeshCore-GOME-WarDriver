@@ -2358,6 +2358,16 @@ async function handlePassiveRxLogging(packet, data) {
   try {
     debugLog(`[PASSIVE RX] Processing packet for passive logging`);
     
+    // Check if any auto mode is subscribed to RX events
+    // Only log observations when TX/RX Auto OR RX Auto is active
+    // Manual TX pings (mode='txPing') should NOT enable passive RX logging
+    if (!rxSubscription.mode || rxSubscription.mode === 'txPing') {
+      debugLog(`[PASSIVE RX] No RX subscription active or manual ping mode - skipping observation (auto modes OFF)`);
+      return;
+    }
+    
+    debugLog(`[PASSIVE RX] RX subscription active (mode=${rxSubscription.mode}) - processing observation`);
+    
     // VALIDATION: Check path length (need at least one hop)
     // A packet's path array contains the sequence of repeater IDs that forwarded the message.
     // Packets with no path are direct transmissions (node-to-node) and don't provide
@@ -3981,6 +3991,7 @@ function stopTxRxAuto(stopGps = false) {
   
   state.txRxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown(); // Re-enable RX Auto button
   releaseWakeLock();
   enableIntervalAndPowerControls();
   debugLog("[TX/RX AUTO] Auto ping stopped");
@@ -4041,6 +4052,7 @@ function startTxRxAuto() {
   
   state.txRxAutoRunning = true;
   updateAutoButton();
+  updateControlsForCooldown(); // Disable RX Auto button while TX/RX Auto is running
   disableIntervalAndPowerControls();
   
   // Subscribe to RX events for TX/RX Auto mode
@@ -4082,6 +4094,7 @@ function stopRxAuto(stopGps = false) {
   
   state.rxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown(); // Re-enable TX/RX Auto button
   releaseWakeLock();
   enableIntervalAndPowerControls();
   debugLog("[RX AUTO] RX Auto stopped");
@@ -4109,6 +4122,7 @@ function startRxAuto() {
   
   state.rxAutoRunning = true;
   updateAutoButton();
+  updateControlsForCooldown(); // Disable TX/RX Auto button while RX Auto is running
   disableIntervalAndPowerControls();
   
   // Acquire wake lock for RX Auto mode
