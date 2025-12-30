@@ -101,8 +101,7 @@ const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
 
 // Map Refresh Service Configuration
-const MAP_REFRESH_INTERVAL_MS = 5000;  // Refresh map every 5 seconds
-const MAP_REFRESH_DISTANCE_M = 25;     // Or when user moves 25 meters
+const MAP_REFRESH_DISTANCE_M = 25;     // Refresh map when user moves 25 meters or on API flush
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
@@ -270,7 +269,6 @@ const rxSubscription = {
 
 // Map Refresh Service State
 const mapRefreshService = {
-  timerId: null,              // 5-second interval timer
   lastRefreshLocation: null,  // { lat, lon } of last refresh
   isRunning: false,
 };
@@ -856,7 +854,7 @@ function refreshCoverageMap() {
 
 /**
  * Check if map should refresh based on trigger type
- * @param {string} trigger - 'timer' | 'gps'
+ * @param {string} trigger - 'initial' | 'gps' | 'api_flush'
  */
 function checkAndRefreshMap(trigger) {
   if (!mapRefreshService.isRunning) {
@@ -871,9 +869,9 @@ function checkAndRefreshMap(trigger) {
   
   const { lat, lon } = state.lastFix;
   
-  // For timer trigger, always refresh
-  if (trigger === 'timer') {
-    debugLog(`[MAP] Timer trigger - refreshing map`);
+  // For initial or API flush trigger, always refresh
+  if (trigger === 'initial' || trigger === 'api_flush') {
+    debugLog(`[MAP] ${trigger} trigger - refreshing map`);
     refreshCoverageMap();
     mapRefreshService.lastRefreshLocation = { lat, lon };
     return;
@@ -913,7 +911,7 @@ function onGpsPositionUpdateForMap() {
 
 /**
  * Start the background map refresh service
- * Refreshes map every 5s or when user moves 25m
+ * Refreshes map on 25m movement or API flush
  */
 function startMapRefreshService() {
   if (mapRefreshService.isRunning) {
@@ -921,17 +919,12 @@ function startMapRefreshService() {
     return;
   }
   
-  debugLog("[MAP] Starting map refresh service (5s interval, 25m movement)");
+  debugLog("[MAP] Starting map refresh service (25m movement, API flush triggers)");
   mapRefreshService.isRunning = true;
   mapRefreshService.lastRefreshLocation = null;
   
-  // Start 5-second interval timer
-  mapRefreshService.timerId = setInterval(() => {
-    checkAndRefreshMap('timer');
-  }, MAP_REFRESH_INTERVAL_MS);
-  
   // Do initial refresh
-  checkAndRefreshMap('timer');
+  checkAndRefreshMap('initial');
 }
 
 /**
@@ -944,11 +937,6 @@ function stopMapRefreshService() {
   }
   
   debugLog("[MAP] Stopping map refresh service");
-  
-  if (mapRefreshService.timerId) {
-    clearInterval(mapRefreshService.timerId);
-    mapRefreshService.timerId = null;
-  }
   
   mapRefreshService.isRunning = false;
   mapRefreshService.lastRefreshLocation = null;
@@ -1327,16 +1315,8 @@ async function primeGpsOnce() {
     state.gpsState = "acquired";
     updateGpsUi();
 
-    // Only refresh the coverage map if we have an accurate fix
-    if (state.lastFix.accM && state.lastFix.accM < GPS_ACCURACY_THRESHOLD_M) {
-      debugLog(`[GPS] GPS accuracy ${state.lastFix.accM}m is within threshold, refreshing coverage map`);
-      scheduleCoverageRefresh(
-        state.lastFix.lat,
-        state.lastFix.lon
-      );
-    } else {
-      debugLog(`[GPS] GPS accuracy ${state.lastFix.accM}m exceeds threshold (${GPS_ACCURACY_THRESHOLD_M}m), skipping map refresh`);
-    }
+    // Map refresh is handled by the Map Refresh Service (started after GPS init)
+    // No manual refresh needed here
 
   } catch (e) {
     debugError(`[GPS] primeGpsOnce failed: ${e.message}`);
@@ -1726,18 +1706,8 @@ async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
     throw error;
   }
   
-  // Update map after API post
-  debugLog("[UI] Scheduling coverage map refresh");
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-  }, MAP_REFRESH_DELAY_MS);
+  // Map refresh is handled by the Map Refresh Service (25m movement or API flush)
+  // No manual refresh needed here
 }
 
 /**
@@ -1769,38 +1739,29 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
   queueApiMessage(payload, "TX");
   debugLog(`[API QUEUE] TX message queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
   
-  // Update map after queueing
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-    
-    // Unlock ping controls now that message is queued
-    unlockPingControls("after TX message queued");
-    
-    // Update status based on current mode
-    if (state.connection) {
-      if (state.txRxAutoRunning) {
-        // Check if we should resume a paused auto countdown (manual ping during auto mode)
-        const resumed = resumeAutoCountdown();
-        if (!resumed) {
-          // No paused timer to resume, schedule new auto ping (this was an auto ping)
-          debugLog("[TX/RX AUTO] Scheduling next auto ping");
-          scheduleNextAutoPing();
-        } else {
-          debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
-        }
+  // Map refresh is handled by the Map Refresh Service (25m movement or API flush)
+  // No manual refresh needed here
+  
+  // Unlock ping controls now that message is queued
+  unlockPingControls("after TX message queued");
+  
+  // Update status based on current mode
+  if (state.connection) {
+    if (state.txRxAutoRunning) {
+      // Check if we should resume a paused auto countdown (manual ping during auto mode)
+      const resumed = resumeAutoCountdown();
+      if (!resumed) {
+        // No paused timer to resume, schedule new auto ping (this was an auto ping)
+        debugLog("[TX/RX AUTO] Scheduling next auto ping");
+        scheduleNextAutoPing();
       } else {
-        debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
-        // Status already set by queueApiMessage()
+        debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
       }
+    } else {
+      debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
+      // Status already set by queueApiMessage()
     }
-  }, MAP_REFRESH_DELAY_MS);
+  }
 }
 
 // ---- API Batch Queue System ----
@@ -1965,6 +1926,10 @@ async function flushApiQueue() {
       setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
     } else {
       debugLog(`[API QUEUE] Batch post successful: ${txCount} TX, ${rxCount} RX`);
+      
+      // Refresh map after successful API flush
+      checkAndRefreshMap('api_flush');
+      
       // Clear status after successful post
       if (state.connection && !state.txRxAutoRunning) {
         setDynamicStatus("Idle");
@@ -4244,7 +4209,7 @@ async function connect() {
         
         // Start always-on services
         debugLog("[BLE] Starting always-on background services");
-        startMapRefreshService(); // Map refresh every 5s or 25m movement
+        startMapRefreshService(); // Map refresh on 25m movement or API flush
         startFlushTimer(); // API queue flush at war-drive interval
         
         // Clear TX Log and RX Log for new session
