@@ -2157,7 +2157,7 @@ async function handlePassiveRxLogging(packet, data) {
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
     // Handle batch tracking for API (parallel batch per repeater)
-    handlePassiveRxForAPI(repeaterId, data.lastSnr, { lat, lon });
+    handlePassiveRxForAPI(repeaterId, data.lastSnr, data.lastRssi, packet.path.length, packet.header, { lat, lon });
     
   } catch (error) {
     debugError(`[PASSIVE RX] Error processing passive RX: ${error.message}`, error);
@@ -2237,10 +2237,13 @@ async function postRxLogToMeshMapperAPI(entries) {
  * Each repeater is tracked independently with its own batch and timer
  * @param {string} repeaterId - Repeater ID (hex string)
  * @param {number} snr - Signal to noise ratio
+ * @param {number} rssi - Received signal strength indicator
+ * @param {number} pathLength - Number of hops in the packet path
+ * @param {number} header - Packet header value
  * @param {Object} currentLocation - Current GPS location {lat, lon}
  */
-function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
-  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}`);
+function handlePassiveRxForAPI(repeaterId, snr, rssi, pathLength, header, currentLocation) {
+  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}, rssi=${rssi}, pathLength=${pathLength}, header=0x${header.toString(16)}`);
   
   // Get or create batch for this repeater
   let batch = state.rxBatchBuffer.get(repeaterId);
@@ -2268,6 +2271,9 @@ function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
   // Add sample to batch
   const sample = {
     snr,
+    rssi,
+    pathLength,
+    header,
     location: { lat: currentLocation.lat, lng: currentLocation.lon },
     timestamp: Date.now()
   };
@@ -2316,6 +2322,19 @@ function flushBatch(repeaterId, trigger) {
   const snrAvg = snrValues.reduce((sum, val) => sum + val, 0) / snrValues.length;
   const snrMax = Math.max(...snrValues);
   const snrMin = Math.min(...snrValues);
+  
+  // Calculate RSSI average
+  const rssiValues = batch.samples.map(s => s.rssi);
+  const rssiAvg = rssiValues.reduce((sum, val) => sum + val, 0) / rssiValues.length;
+  
+  // Collect unique pathLength values and join with |
+  const uniquePathLengths = [...new Set(batch.samples.map(s => s.pathLength))];
+  const pathLengthStr = uniquePathLengths.join('|');
+  
+  // Collect unique header values (as hex strings) and join with |
+  const uniqueHeaders = [...new Set(batch.samples.map(s => s.header))];
+  const headerStr = uniqueHeaders.map(h => '0x' + h.toString(16).padStart(2, '0')).join('|');
+  
   const sampleCount = batch.samples.length;
   const timestampStart = batch.firstTimestamp;
   const timestampEnd = batch.samples[batch.samples.length - 1].timestamp;
@@ -2327,6 +2346,9 @@ function flushBatch(repeaterId, trigger) {
     snr_avg: parseFloat(snrAvg.toFixed(3)),
     snr_max: parseFloat(snrMax.toFixed(3)),
     snr_min: parseFloat(snrMin.toFixed(3)),
+    rssi_avg: parseFloat(rssiAvg.toFixed(3)),
+    path_length: pathLengthStr,
+    header: headerStr,
     sample_count: sampleCount,
     timestamp_start: timestampStart,
     timestamp_end: timestampEnd,
@@ -2335,6 +2357,7 @@ function flushBatch(repeaterId, trigger) {
   
   debugLog(`[RX BATCH] Aggregated entry for repeater ${repeaterId}:`, entry);
   debugLog(`[RX BATCH]   snr_avg=${snrAvg.toFixed(3)}, snr_max=${snrMax.toFixed(3)}, snr_min=${snrMin.toFixed(3)}`);
+  debugLog(`[RX BATCH]   rssi_avg=${rssiAvg.toFixed(3)}, path_length=${pathLengthStr}, header=${headerStr}`);
   debugLog(`[RX BATCH]   sample_count=${sampleCount}, duration=${((timestampEnd - timestampStart) / 1000).toFixed(1)}s`);
   
   // Queue for API posting
@@ -2402,7 +2425,7 @@ function queueApiPost(entry) {
   
   // Add aggregated entry to RX log UI
   const timestamp = new Date(entry.timestamp_start).toISOString();
-  addRxLogEntry(entry.repeater_id, entry.snr_avg, null, null, null, entry.location.lat, entry.location.lng, timestamp);
+  addRxLogEntry(entry.repeater_id, entry.snr_avg, entry.rssi_avg, entry.path_length, entry.header, entry.location.lat, entry.location.lng, timestamp);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
