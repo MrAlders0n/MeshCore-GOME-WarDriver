@@ -89,7 +89,7 @@ const OTTAWA_CENTER_LON = -75.6972; // Parliament Hill longitude
 const OTTAWA_GEOFENCE_RADIUS_M = 150000; // 150 km in meters
 
 // Distance-Based Ping Filtering
-const MIN_PING_DISTANCE_M = 500; // Minimum distance (500m) between pings
+const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // Passive RX Log Batch Configuration
 const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
@@ -100,7 +100,7 @@ const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
 
 // Map Refresh Service Configuration
-const MAP_REFRESH_DISTANCE_M = 25;     // Refresh map when user moves 25 meters or on API flush
+const MAP_REFRESH_DISTANCE_M = 500;     // Refresh map when user moves 25 meters or on API flush
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
