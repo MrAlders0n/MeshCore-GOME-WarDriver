@@ -1327,16 +1327,8 @@ async function primeGpsOnce() {
     state.gpsState = "acquired";
     updateGpsUi();
 
-    // Only refresh the coverage map if we have an accurate fix
-    if (state.lastFix.accM && state.lastFix.accM < GPS_ACCURACY_THRESHOLD_M) {
-      debugLog(`[GPS] GPS accuracy ${state.lastFix.accM}m is within threshold, refreshing coverage map`);
-      scheduleCoverageRefresh(
-        state.lastFix.lat,
-        state.lastFix.lon
-      );
-    } else {
-      debugLog(`[GPS] GPS accuracy ${state.lastFix.accM}m exceeds threshold (${GPS_ACCURACY_THRESHOLD_M}m), skipping map refresh`);
-    }
+    // Map refresh is handled by the Map Refresh Service (started after GPS init)
+    // No manual refresh needed here
 
   } catch (e) {
     debugError(`[GPS] primeGpsOnce failed: ${e.message}`);
@@ -1726,18 +1718,8 @@ async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
     throw error;
   }
   
-  // Update map after API post
-  debugLog("[UI] Scheduling coverage map refresh");
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-  }, MAP_REFRESH_DELAY_MS);
+  // Map refresh is handled by the Map Refresh Service (5s interval or 25m movement)
+  // No manual refresh needed here
 }
 
 /**
@@ -1769,38 +1751,29 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
   queueApiMessage(payload, "TX");
   debugLog(`[API QUEUE] TX message queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
   
-  // Update map after queueing
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-    
-    // Unlock ping controls now that message is queued
-    unlockPingControls("after TX message queued");
-    
-    // Update status based on current mode
-    if (state.connection) {
-      if (state.txRxAutoRunning) {
-        // Check if we should resume a paused auto countdown (manual ping during auto mode)
-        const resumed = resumeAutoCountdown();
-        if (!resumed) {
-          // No paused timer to resume, schedule new auto ping (this was an auto ping)
-          debugLog("[TX/RX AUTO] Scheduling next auto ping");
-          scheduleNextAutoPing();
-        } else {
-          debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
-        }
+  // Map refresh is handled by the Map Refresh Service (5s interval or 25m movement)
+  // No manual refresh needed here
+  
+  // Unlock ping controls now that message is queued
+  unlockPingControls("after TX message queued");
+  
+  // Update status based on current mode
+  if (state.connection) {
+    if (state.txRxAutoRunning) {
+      // Check if we should resume a paused auto countdown (manual ping during auto mode)
+      const resumed = resumeAutoCountdown();
+      if (!resumed) {
+        // No paused timer to resume, schedule new auto ping (this was an auto ping)
+        debugLog("[TX/RX AUTO] Scheduling next auto ping");
+        scheduleNextAutoPing();
       } else {
-        debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
-        // Status already set by queueApiMessage()
+        debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
       }
+    } else {
+      debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
+      // Status already set by queueApiMessage()
     }
-  }, MAP_REFRESH_DELAY_MS);
+  }
 }
 
 // ---- API Batch Queue System ----
