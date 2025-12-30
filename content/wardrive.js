@@ -879,7 +879,7 @@ function checkAndRefreshMap(trigger) {
   
   // For GPS trigger, check distance
   if (trigger === 'gps' && mapRefreshService.lastRefreshLocation) {
-    const distance = haversineDistance(
+    const distance = calculateHaversineDistance(
       mapRefreshService.lastRefreshLocation.lat,
       mapRefreshService.lastRefreshLocation.lon,
       lat,
