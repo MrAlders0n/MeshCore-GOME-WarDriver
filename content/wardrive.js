@@ -2243,7 +2243,7 @@ async function postRxLogToMeshMapperAPI(entries) {
  * @param {Object} currentLocation - Current GPS location {lat, lon}
  */
 function handlePassiveRxForAPI(repeaterId, snr, rssi, pathLength, header, currentLocation) {
-  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}, rssi=${rssi}, pathLength=${pathLength}, header=0x${header.toString(16)}`);
+  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}, rssi=${rssi}, pathLength=${pathLength}, header=0x${header.toString(16).padStart(2, '0')}`);
   
   // Get or create batch for this repeater
   let batch = state.rxBatchBuffer.get(repeaterId);
@@ -2333,11 +2333,7 @@ function flushBatch(repeaterId, trigger) {
   
   // Collect unique header values (as hex strings) and join with | (filter out undefined/null)
   const uniqueHeaders = [...new Set(batch.samples.map(s => s.header).filter(v => v !== undefined && v !== null))];
-  const headerStr = uniqueHeaders.map(h => {
-    const hexStr = h.toString(16);
-    // Use dynamic padding: at least 2 chars, but more if needed
-    return '0x' + hexStr.padStart(Math.max(2, hexStr.length), '0');
-  }).join('|');
+  const headerStr = uniqueHeaders.map(h => '0x' + h.toString(16).padStart(2, '0')).join('|');
   
   const sampleCount = batch.samples.length;
   const timestampStart = batch.firstTimestamp;
