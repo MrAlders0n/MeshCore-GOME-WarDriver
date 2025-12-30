@@ -2358,6 +2358,15 @@ async function handlePassiveRxLogging(packet, data) {
   try {
     debugLog(`[PASSIVE RX] Processing packet for passive logging`);
     
+    // Check if any auto mode is subscribed to RX events
+    // Only log observations when TX/RX Auto OR RX Auto is active
+    if (!rxSubscription.mode) {
+      debugLog(`[PASSIVE RX] No RX subscription active - skipping observation (auto modes OFF)`);
+      return;
+    }
+    
+    debugLog(`[PASSIVE RX] RX subscription active (mode=${rxSubscription.mode}) - processing observation`);
+    
     // VALIDATION: Check path length (need at least one hop)
     // A packet's path array contains the sequence of repeater IDs that forwarded the message.
     // Packets with no path are direct transmissions (node-to-node) and don't provide
@@ -3981,6 +3990,7 @@ function stopTxRxAuto(stopGps = false) {
   
   state.txRxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown(); // Re-enable RX Auto button
   releaseWakeLock();
   enableIntervalAndPowerControls();
   debugLog("[TX/RX AUTO] Auto ping stopped");
@@ -4082,6 +4092,7 @@ function stopRxAuto(stopGps = false) {
   
   state.rxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown(); // Re-enable TX/RX Auto button
   releaseWakeLock();
   enableIntervalAndPowerControls();
   debugLog("[RX AUTO] RX Auto stopped");
