@@ -2323,16 +2323,16 @@ function flushBatch(repeaterId, trigger) {
   const snrMax = Math.max(...snrValues);
   const snrMin = Math.min(...snrValues);
   
-  // Calculate RSSI average
-  const rssiValues = batch.samples.map(s => s.rssi);
-  const rssiAvg = rssiValues.reduce((sum, val) => sum + val, 0) / rssiValues.length;
+  // Calculate RSSI average (filter out undefined/null values)
+  const rssiValues = batch.samples.map(s => s.rssi).filter(v => v !== undefined && v !== null);
+  const rssiAvg = rssiValues.length > 0 ? rssiValues.reduce((sum, val) => sum + val, 0) / rssiValues.length : 0;
   
-  // Collect unique pathLength values and join with |
-  const uniquePathLengths = [...new Set(batch.samples.map(s => s.pathLength))];
+  // Collect unique pathLength values and join with | (filter out undefined/null)
+  const uniquePathLengths = [...new Set(batch.samples.map(s => s.pathLength).filter(v => v !== undefined && v !== null))];
   const pathLengthStr = uniquePathLengths.join('|');
   
-  // Collect unique header values (as hex strings) and join with |
-  const uniqueHeaders = [...new Set(batch.samples.map(s => s.header))];
+  // Collect unique header values (as hex strings) and join with | (filter out undefined/null)
+  const uniqueHeaders = [...new Set(batch.samples.map(s => s.header).filter(v => v !== undefined && v !== null))];
   const headerStr = uniqueHeaders.map(h => '0x' + h.toString(16).padStart(2, '0')).join('|');
   
   const sampleCount = batch.samples.length;
