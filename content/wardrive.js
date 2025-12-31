@@ -2663,7 +2663,7 @@ function queueApiPost(entry) {
   
   // Add aggregated entry to RX log UI
   const timestamp = new Date(entry.timestamp_start).toISOString();
-  addRxLogEntry(entry.repeater_id, entry.snr_avg, entry.rssi_avg, entry.path_length, entry.header, entry.location.lat, entry.location.lng, timestamp);
+  addRxLogEntry(entry.repeater_id, entry.snr_avg, entry.rssi_avg, entry.path_length, entry.header, entry.location.lat, entry.location.lng, timestamp, entry.sample_count);
 }
 
 // ---- Mobile TX Log Bottom Sheet ----
@@ -3003,6 +3003,14 @@ function createRxLogEntryElement(entry) {
   const chip = createChipElement(parsed.repeaterId, parsed.snr);
   chipsRow.appendChild(chip);
   
+  // Add sample count badge if aggregated (sampleCount > 1)
+  if (entry.sampleCount && entry.sampleCount > 1) {
+    const badge = document.createElement('span');
+    badge.className = 'text-xs text-slate-400 ml-1';
+    badge.textContent = `x${entry.sampleCount}`;
+    chipsRow.appendChild(badge);
+  }
+  
   logEntry.appendChild(topRow);
   logEntry.appendChild(chipsRow);
   
@@ -3162,7 +3170,7 @@ function toggleRxLogBottomSheet() {
  * @param {number} lon - Longitude
  * @param {string} timestamp - ISO timestamp
  */
-function addRxLogEntry(repeaterId, snr, rssi, pathLength, header, lat, lon, timestamp) {
+function addRxLogEntry(repeaterId, snr, rssi, pathLength, header, lat, lon, timestamp, sampleCount = 1) {
   const entry = {
     repeaterId,
     snr,
@@ -3171,7 +3179,8 @@ function addRxLogEntry(repeaterId, snr, rssi, pathLength, header, lat, lon, time
     header,
     lat,
     lon,
-    timestamp
+    timestamp,
+    sampleCount
   };
   
   rxLogState.entries.push(entry);
