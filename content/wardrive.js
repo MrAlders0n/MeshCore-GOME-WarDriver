@@ -2681,13 +2681,9 @@ function parseRxLogEntry(entry) {
     rssi: entry.rssi,
     pathLength: entry.pathLength,
     header: entry.header,
-    // Keep original numeric values for CSV export and short formatted strings for UI
-    lat: (typeof entry.lat === 'number') ? entry.lat.toFixed(5) : entry.lat,
-    lon: (typeof entry.lon === 'number') ? entry.lon.toFixed(5) : entry.lon,
-    timestamp: entry.timestamp,
-    // New: pass sample_count through (fall back to 1 if not present)
-    sampleCount: (typeof entry.sample_count !== 'undefined') ? entry.sample_count : (
-                  typeof entry.sampleCount !== 'undefined' ? entry.sampleCount : 1)
+    lat: entry.lat.toFixed(5),
+    lon: entry.lon.toFixed(5),
+    timestamp: entry.timestamp
   };
 }
 
@@ -2718,20 +2714,13 @@ function createRxLogEntryElement(entry) {
   topRow.appendChild(time);
   topRow.appendChild(coords);
   
-  // Chips row: repeater ID, SNR and sample count
+  // Chips row: repeater ID and SNR
   const chipsRow = document.createElement('div');
   chipsRow.className = 'heardChips';
   
-  // Create chip for repeater with SNR (existing helper)
+  // Create chip for repeater with SNR
   const chip = createChipElement(parsed.repeaterId, parsed.snr);
   chipsRow.appendChild(chip);
-  
-  // New: sample count chip (small, subtle)
-  const sampleChip = document.createElement('span');
-  sampleChip.className = 'text-xs font-mono text-slate-400 ml-2 sample-count-chip';
-  sampleChip.setAttribute('title', `sample count: ${parsed.sampleCount}`);
-  sampleChip.textContent = `×${parsed.sampleCount}`;
-  chipsRow.appendChild(sampleChip);
   
   logEntry.appendChild(topRow);
   logEntry.appendChild(chipsRow);
