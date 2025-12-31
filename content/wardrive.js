@@ -11,6 +11,7 @@ import { WebBleConnection, Constants, Packet, BufferUtils } from "./mc/index.js"
 // Enable debug logging via URL parameter (?debug=true) or set default here
 const urlParams = new URLSearchParams(window.location.search);
 const DEBUG_ENABLED = urlParams.get('debug') === 'true' || false; // Set to true to enable debug logging by default
+const DISABLE_API = urlParams.get('disableapi') === 'true' || false; // Set to true to disable API posts (logs payload instead)
 
 // Debug logging helper function
 function debugLog(message, ...args) {
@@ -1528,6 +1529,18 @@ async function checkCapacity(reason) {
 
     debugLog(`[CAPACITY] Checking capacity: reason=${reason}, public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}`);
 
+    // If API is disabled, log the payload and return true for connect requests
+    if (DISABLE_API) {
+      console.log(`[API DISABLED] checkCapacity would have posted to ${MESHMAPPER_CAPACITY_CHECK_URL}:`, JSON.stringify(payload, null, 2));
+      if (reason === "connect") {
+        // For testing, pretend we got a session_id
+        state.wardriveSessionId = "test-session-id-" + Date.now();
+        debugLog(`[CAPACITY] API disabled - using test session ID: ${state.wardriveSessionId}`);
+        return true;
+      }
+      return true;
+    }
+
     const response = await fetch(MESHMAPPER_CAPACITY_CHECK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1632,6 +1645,12 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
     };
 
     debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}`);
+
+    // If API is disabled, log the payload and return early
+    if (DISABLE_API) {
+      console.log(`[API DISABLED] postToMeshMapperAPI would have posted to ${MESHMAPPER_API_URL}:`, JSON.stringify(payload, null, 2));
+      return;
+    }
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -1890,6 +1909,13 @@ async function flushApiQueue() {
     }
     
     debugLog(`[API QUEUE] POST to ${MESHMAPPER_API_URL} with ${batch.length} messages`);
+    
+    // If API is disabled, log the batch payload and skip the fetch
+    if (DISABLE_API) {
+      console.log(`[API DISABLED] flushApiQueue would have posted batch to ${MESHMAPPER_API_URL}:`, JSON.stringify(batch, null, 2));
+      debugLog(`[API QUEUE] API disabled - batch of ${txCount} TX, ${rxCount} RX messages logged (not sent)`);
+      return;
+    }
     
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -2391,6 +2417,12 @@ async function handlePassiveRxLogging(packet, data) {
     
     const lat = state.lastFix.lat;
     const lon = state.lastFix.lon;
+    
+    // VALIDATION: Check geofence (must be within Ottawa 150km)
+    if (!validateGeofence(lat, lon)) {
+      debugLog(`[PASSIVE RX] Packet ignored: outside geofence (lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)})`);
+      return;
+    }
     
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
