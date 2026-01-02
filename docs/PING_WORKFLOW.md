@@ -618,3 +618,103 @@ MeshCore-GOME-WarDriver implements a comprehensive ping system with both manual 
 **Debug Mode:** Add `? debug=true` to URL for detailed logging
 
 The workflow prioritizes reliability, validation-first design, and comprehensive user feedback throughout the ping operation. 
+---
+
+## RX Auto Mode
+
+### Overview
+RX Auto mode provides passive-only wardriving without transmitting on the mesh network. It listens for all mesh traffic and logs received packets to the RX Log, which are then batched and posted to MeshMapper API.
+
+### RX Auto Start Sequence
+1. User clicks "RX Auto" button
+2. Verify BLE connection active
+3. Defensive check: ensure unified listener running
+4. Set `state.rxTracking.isWardriving = true`
+5. Set `state.rxAutoRunning = true`
+6. Update button to "Stop RX" (amber)
+7. Disable TX/RX Auto button (mutual exclusivity)
+8. Acquire wake lock
+9. Show "RX Auto started" status (green)
+
+### RX Auto Stop Sequence
+1. User clicks "Stop RX" button
+2. Set `state.rxTracking.isWardriving = false`
+3. Set `state.rxAutoRunning = false`
+4. Update button to "RX Auto" (indigo)
+5. Re-enable TX/RX Auto button
+6. Release wake lock
+7. Show "RX Auto stopped" status (idle)
+
+### RX Auto Characteristics
+- **Zero mesh TX** (no network impact)
+- **No GPS requirement** to start
+- **No cooldown restrictions**
+- **Mutually exclusive** with TX/RX Auto mode
+- **Unified listener stays on** (does not stop when mode stops)
+
+### Behavior Comparison
+
+| Feature | TX Ping | TX/RX Auto | RX Auto |
+|---------|---------|------------|---------|
+| Transmits | Yes (once) | Yes (auto) | No |
+| TX Echo Tracking | Yes (7s) | Yes (per ping) | No |
+| RX Wardriving | No | Yes | Yes |
+| Mesh Load | Low | High | None |
+| Cooldown | Yes (7s) | Yes (7s) | No |
+| GPS Required | Yes | Yes | No |
+| Wake Lock | No | Yes | Yes |
+| Unified Listener | Always on | Always on | Always on |
+| TX Tracking Flag | True (7s) | True (per ping) | False |
+| RX Wardriving Flag | False | True | True |
+
+### Always-On Unified Listener Architecture
+
+The unified RX listener operates independently of wardriving modes:
+
+**Lifecycle:**
+- **Starts**: Immediately on connect (after channel setup)
+- **Stops**: Only on disconnect
+- **Never stops**: During mode changes or page visibility changes
+
+**Routing Logic:**
+1. Listener receives all rx_log events from device
+2. Parse packet metadata once with `parseRxPacketMetadata()`
+3. If `state.txTracking.isListening` → check for TX echo
+4. If `state.rxTracking.isWardriving` → log RX observation
+5. If neither → packet ignored (but listener stays active)
+
+**Defensive Checks:**
+- `startUnifiedRxListening()` is idempotent (safe to call multiple times)
+- Handler checks `isListening` and reactivates if needed
+- Page visibility handler verifies listener active when page visible
+- Auto mode start functions ensure listener running
+
+### Page Visibility
+- When page becomes hidden during RX Auto:
+  - RX Auto mode stops immediately
+  - Wake lock released
+  - Unified listener stays active
+  - **Dynamic Status**: `"Lost focus, RX Auto stopped"` (yellow)
+- When page becomes hidden during TX/RX Auto:
+  - TX/RX Auto mode stops immediately  
+  - GPS watch stops
+  - Wake lock released
+  - Unified listener stays active
+  - **Dynamic Status**: `"Lost focus, TX/RX Auto stopped"` (yellow)
+- User must manually restart auto modes when returning
+
+### Edge Cases
+- **Start RX Auto while TX/RX Auto running**: Button disabled (mutual exclusivity)
+- **Start TX/RX Auto while RX Auto running**: Button disabled (mutual exclusivity)
+- **Disconnect during RX Auto**: Mode stops, listener stops, logs preserved
+- **Page hidden during RX Auto**: Mode stops, listener stays on
+- **Listener fails**: Defensive checks reactivate listener
+
+### Validation Requirements
+- Unified listener must start on connect and stay on entire connection
+- Unified listener only stops on disconnect
+- RX wardriving flag controls whether packets are logged
+- TX/RX Auto and RX Auto are mutually exclusive
+- All logs cleared on connect, preserved on disconnect
+- Defensive checks ensure listener stays active
+- `startUnifiedRxListening()` is idempotent (safe to call multiple times)

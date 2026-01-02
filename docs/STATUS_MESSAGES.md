@@ -390,23 +390,41 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 
 #### 7. Auto Mode Messages
 
-##### Auto mode stopped
+##### TX/RX Auto stopped
 - **Message**: `"Auto mode stopped"`
 - **Color**: Slate (idle)
-- **When**: User clicks "Stop Auto Ping" button
-- **Source**: `content/wardrive.js:autoToggleBtn click handler`
+- **When**: User clicks "Stop TX/RX" button
+- **Source**: `content/wardrive.js:txRxAutoBtn click handler`
 
-##### Lost focus, auto mode stopped
-- **Message**: `"Lost focus, auto mode stopped"`
+##### Lost focus, TX/RX Auto stopped
+- **Message**: `"Lost focus, TX/RX Auto stopped"`
 - **Color**: Amber (warning)
-- **When**: Browser tab hidden while auto mode running
+- **When**: Browser tab hidden while TX/RX Auto mode running
 - **Source**: `content/wardrive.js:visibilitychange handler`
 
-##### Wait Xs before toggling auto mode
-- **Message**: `"Wait Xs before toggling auto mode"` (X is dynamic countdown)
+##### Wait Xs before toggling TX/RX Auto
+- **Message**: `"Wait Xs before toggling TX/RX Auto"` (X is dynamic countdown)
 - **Color**: Amber (warning)
-- **When**: User attempts to toggle auto mode during cooldown period
+- **When**: User attempts to toggle TX/RX Auto mode during cooldown period
 - **Source**: `content/wardrive.js:stopAutoPing()`, `startAutoPing()`
+
+##### RX Auto started
+- **Message**: `"RX Auto started"`
+- **Color**: Green (success)
+- **When**: User clicks "RX Auto" button to start passive RX-only listening
+- **Source**: `content/wardrive.js:startRxAuto()`
+
+##### RX Auto stopped
+- **Message**: `"RX Auto stopped"`
+- **Color**: Slate (idle)
+- **When**: User clicks "Stop RX" button
+- **Source**: `content/wardrive.js:stopRxAuto()`
+
+##### Lost focus, RX Auto stopped
+- **Message**: `"Lost focus, RX Auto stopped"`
+- **Color**: Amber (warning)
+- **When**: Browser tab hidden while RX Auto mode running
+- **Source**: `content/wardrive.js:visibilitychange handler`
 
 #### 8. Error Messages
 

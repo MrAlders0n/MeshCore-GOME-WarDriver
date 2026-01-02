@@ -44,6 +44,7 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[GEOFENCE]` | Geofence and distance validation |
 | `[CAPACITY]` | Capacity check API calls |
 | `[TX/RX AUTO]` | TX/RX Auto mode operations |
+| `[RX AUTO]` | RX Auto mode operations |
 | `[INIT]` | Initialization and setup |
 | `[ERROR LOG]` | Error log UI operations |
 
