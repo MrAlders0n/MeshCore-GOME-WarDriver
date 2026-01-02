@@ -1857,7 +1857,7 @@ function parseRxPacketMetadata(data) {
   const pathLength = data.raw[1];
   
   // Extract raw path bytes:  raw[2] through raw[2 + pathLength - 1]
-  const pathBytes = Array.from(data.raw.slice(2, 2 + pathLength));
+  const pathBytes = Array.from(data.raw. slice(2, 2 + pathLength));
   
   // Derive first hop (for TX repeater ID): pathBytes[0]
   const firstHop = pathBytes. length > 0 ? pathBytes[0] : null;
@@ -1871,9 +1871,9 @@ function parseRxPacketMetadata(data) {
   debugLog(`[RX PARSE] Parsed metadata: header=0x${header.toString(16).padStart(2, '0')}, pathLength=${pathLength}, firstHop=${firstHop ?  '0x' + firstHop. toString(16).padStart(2, '0') : 'null'}, lastHop=${lastHop ? '0x' + lastHop.toString(16).padStart(2, '0') : 'null'}`);
   
   return {
-    raw: data. raw,                     // Full raw packet bytes
+    raw:  data.raw,                     // Full raw packet bytes
     header:  header,                    // Header byte
-    pathLength: pathLength,            // Number of hops
+    pathLength:  pathLength,            // Number of hops
     pathBytes: pathBytes,              // Raw path bytes array
     firstHop: firstHop,                // First hop ID (TX)
     lastHop: lastHop,                  // Last hop ID (RX)
