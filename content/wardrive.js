@@ -143,6 +143,7 @@ const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const txPingBtn      = $("txPingBtn");
 const txRxAutoBtn    = $("txRxAutoBtn");
+const rxAutoBtn      = $("rxAutoBtn");
 const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
@@ -218,6 +219,7 @@ const state = {
   channel: null,
   autoTimerId: null,
   txRxAutoRunning: false,  // TX/RX Auto mode flag (renamed from running)
+  rxAutoRunning: false,    // RX Auto mode flag (passive-only wardriving)
   wakeLock: null,
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
@@ -252,7 +254,8 @@ const state = {
     currentLogEntry: null,        // Current log entry being updated (for incremental UI updates)
   },
   rxTracking: {
-    isListening: false,           // Whether we're currently listening to unified RX
+    isListening: false,           // TRUE when unified listener is active (always on when connected)
+    isWardriving: false,          // TRUE when TX/RX Auto OR RX Auto enabled
     rxLogHandler: null,           // Handler function for RX log events
   },
   rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, bestObservation}>
@@ -562,9 +565,19 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
+  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}`);
+  
+  // TX Ping button - disabled during cooldown or ping in progress
   txPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
-  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  
+  // TX/RX Auto button - disabled during cooldown, ping in progress, OR when RX Auto running
+  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
+  
+  // RX Auto button - disabled when TX/RX Auto running (no cooldown restriction for RX-only mode)
+  // Note: rxAutoBtn will be added to HTML and needs to be defined at the top of the file
+  if (typeof rxAutoBtn !== 'undefined') {
+    rxAutoBtn.disabled = !connected || state.txRxAutoRunning;
+  }
 }
 
 /**
@@ -640,14 +653,28 @@ function enableControls(connected) {
   // No need to show/hide the controls anymore
 }
 function updateAutoButton() {
+  // Update TX/RX Auto button
   if (state.txRxAutoRunning) {
-    txRxAutoBtn.textContent = "Stop Auto Ping";
+    txRxAutoBtn.textContent = "Stop TX/RX";
     txRxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
     txRxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
   } else {
-    txRxAutoBtn.textContent = "Start Auto Ping";
+    txRxAutoBtn.textContent = "TX/RX Auto";
     txRxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
     txRxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+  }
+  
+  // Update RX Auto button
+  if (typeof rxAutoBtn !== 'undefined') {
+    if (state.rxAutoRunning) {
+      rxAutoBtn.textContent = "Stop RX";
+      rxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
+      rxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
+    } else {
+      rxAutoBtn.textContent = "RX Auto";
+      rxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
+      rxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+    }
   }
 }
 function buildCoverageEmbedUrl(lat, lon) {
@@ -2201,14 +2228,20 @@ function formatRepeaterTelemetry(repeaters) {
  */
 async function handleUnifiedRxLogEvent(data) {
   try {
+    // Defensive check: ensure listener is marked as active
+    if (!state.rxTracking.isListening) {
+      debugWarn("[UNIFIED RX] Received event but listener marked inactive - reactivating");
+      state.rxTracking.isListening = true;
+    }
+    
     // Parse metadata ONCE
     const metadata = parseRxPacketMetadata(data);
     
     debugLog(`[UNIFIED RX] Packet received: header=0x${metadata.header.toString(16)}, pathLength=${metadata.pathLength}`);
     
-    // Route to TX tracking if active
+    // Route to TX tracking if active (during 7s echo window)
     if (state.txTracking.isListening) {
-      debugLog("[UNIFIED RX] TX tracking active - delegating to TX handler");
+      debugLog("[UNIFIED RX] TX tracking active - checking for echo");
       const wasEcho = await handleTxLogging(metadata, data);
       if (wasEcho) {
         debugLog("[UNIFIED RX] Packet was TX echo, done");
@@ -2216,11 +2249,15 @@ async function handleUnifiedRxLogEvent(data) {
       }
     }
     
-    // Route to RX wardriving if active
-    if (state.rxTracking.isListening) {
-      debugLog("[UNIFIED RX] RX wardriving active - delegating to RX handler");
+    // Route to RX wardriving if active (when TX/RX Auto OR RX Auto enabled)
+    if (state.rxTracking.isWardriving) {
+      debugLog("[UNIFIED RX] RX wardriving active - logging observation");
       await handleRxLogging(metadata, data);
     }
+    
+    // If neither active, packet is received but ignored
+    // Listener stays on, just not processing for wardriving
+    
   } catch (error) {
     debugError("[UNIFIED RX] Error processing rx_log entry", error);
   }
@@ -2285,16 +2322,18 @@ async function handleRxLogging(metadata, data) {
 
 
 /**
- * Start unified RX listening - handles both Session Log tracking and passive RX logging
+ * Start unified RX listening - handles both TX Log tracking and RX logging
+ * Idempotent: safe to call multiple times
  */
 function startUnifiedRxListening() {
-  if (state.rxTracking.isListening) {
+  // Idempotent: safe to call multiple times
+  if (state.rxTracking.isListening && state.rxTracking.rxLogHandler) {
     debugLog(`[UNIFIED RX] Already listening, skipping start`);
     return;
   }
   
   if (!state.connection) {
-    debugWarn(`[UNIFIED RX] Cannot start listening: no connection`);
+    debugWarn(`[UNIFIED RX] Cannot start: no connection`);
     return;
   }
   
@@ -2324,6 +2363,7 @@ function stopUnifiedRxListening() {
   }
   
   state.rxTracking.isListening = false;
+  state.rxTracking.isWardriving = false;  // Also disable wardriving
   state.rxTracking.rxLogHandler = null;
   
   debugLog(`[UNIFIED RX] ✅ Unified listening stopped`);
@@ -3816,7 +3856,7 @@ function stopAutoPing(stopGps = false) {
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
     debugLog(`[TX/RX AUTO] Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setDynamicStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    setDynamicStatus(`Wait ${remainingSec}s before toggling TX/RX Auto`, STATUS_COLORS.warning);
     return;
   }
   
@@ -3831,6 +3871,13 @@ function stopAutoPing(stopGps = false) {
   state.skipReason = null;
   state.pausedAutoTimerRemainingMs = null;
   
+  // DISABLE RX wardriving
+  state.rxTracking.isWardriving = false;
+  debugLog("[TX/RX AUTO] RX wardriving disabled");
+  
+  // DO NOT stop unified listener (stays on)
+  // REMOVED: stopUnifiedRxListening();
+  
   // Only stop GPS watch when disconnecting or page hidden, not during normal stop
   if (stopGps) {
     stopGeoWatch();
@@ -3838,9 +3885,74 @@ function stopAutoPing(stopGps = false) {
   
   state.txRxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown();  // Re-enable RX Auto button
   releaseWakeLock();
-  debugLog("[TX/RX AUTO] Auto ping stopped");
+  debugLog("[TX/RX AUTO] TX/RX Auto stopped");
 }
+
+/**
+ * Start RX Auto mode (passive-only wardriving)
+ */
+function startRxAuto() {
+  debugLog("[RX AUTO] Starting RX Auto mode");
+  
+  if (!state.connection) {
+    debugError("[RX AUTO] Cannot start - not connected");
+    alert("Connect to a MeshCore device first.");
+    return;
+  }
+  
+  // Defensive check: ensure unified listener is running
+  if (state.connection && !state.rxTracking.isListening) {
+    debugWarn("[RX AUTO] Unified listener not active - restarting");
+    startUnifiedRxListening();
+  }
+  
+  // ENABLE RX wardriving
+  state.rxTracking.isWardriving = true;
+  debugLog("[RX AUTO] RX wardriving enabled");
+  
+  // Set RX Auto mode flag
+  state.rxAutoRunning = true;
+  updateAutoButton();
+  updateControlsForCooldown();  // Disable TX/RX Auto button
+  
+  // Acquire wake lock
+  debugLog("[RX AUTO] Acquiring wake lock");
+  acquireWakeLock().catch(console.error);
+  
+  setDynamicStatus("RX Auto started", STATUS_COLORS.success);
+  debugLog("[RX AUTO] RX Auto mode started successfully");
+}
+
+/**
+ * Stop RX Auto mode
+ */
+function stopRxAuto() {
+  debugLog("[RX AUTO] Stopping RX Auto mode");
+  
+  if (!state.rxAutoRunning) {
+    debugLog("[RX AUTO] RX Auto not running, nothing to stop");
+    return;
+  }
+  
+  // DISABLE RX wardriving
+  state.rxTracking.isWardriving = false;
+  debugLog("[RX AUTO] RX wardriving disabled");
+  
+  // DO NOT stop unified listener (stays on)
+  // REMOVED: stopUnifiedRxListening();
+  
+  // Clear RX Auto mode flag
+  state.rxAutoRunning = false;
+  updateAutoButton();
+  updateControlsForCooldown();  // Re-enable TX/RX Auto button
+  releaseWakeLock();
+  
+  setDynamicStatus("RX Auto stopped", STATUS_COLORS.idle);
+  debugLog("[RX AUTO] RX Auto mode stopped");
+}
+
 function scheduleNextAutoPing() {
   if (!state.txRxAutoRunning) {
     debugLog("[TX/RX AUTO] Not scheduling next auto ping - auto mode not running");
@@ -3891,12 +4003,23 @@ function startAutoPing() {
   // Clear any previous skip reason
   state.skipReason = null;
   
+  // Defensive check: ensure unified listener is running
+  if (state.connection && !state.rxTracking.isListening) {
+    debugWarn("[TX/RX AUTO] Unified listener not active - restarting");
+    startUnifiedRxListening();
+  }
+  
+  // ENABLE RX wardriving
+  state.rxTracking.isWardriving = true;
+  debugLog("[TX/RX AUTO] RX wardriving enabled");
+  
   // Start GPS watch for continuous updates
   debugLog("[TX/RX AUTO] Starting GPS watch for auto mode");
   startGeoWatch();
   
   state.txRxAutoRunning = true;
   updateAutoButton();
+  updateControlsForCooldown();  // Disable RX Auto button
 
   // Acquire wake lock for auto mode
   debugLog("[TX/RX AUTO] Acquiring wake lock for auto mode");
@@ -3984,6 +4107,22 @@ async function connect() {
         
         // Start unified RX listening after channel setup
         startUnifiedRxListening();
+        debugLog("[BLE] Unified RX listener started on connect");
+        
+        // CLEAR all logs on connect (new session)
+        txLogState.entries = [];
+        renderTxLogEntries(true);
+        updateTxLogSummary();
+        
+        rxLogState.entries = [];
+        renderRxLogEntries(true);
+        updateRxLogSummary();
+        
+        errorLogState.entries = [];
+        renderErrorLogEntries(true);
+        updateErrorLogSummary();
+        
+        debugLog("[BLE] All logs cleared on connect (new session)");
         
         // GPS initialization
         setDynamicStatus("Priming GPS", STATUS_COLORS.info);
@@ -4068,13 +4207,20 @@ async function connect() {
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
-      stopAutoPing(true); // Ignore cooldown check on disconnect
+      
+      // Stop auto modes
+      stopAutoPing(true); // Ignore cooldown check on disconnect, stop GPS
+      stopRxAuto();  // Stop RX Auto mode
+      
       enableControls(false);
       updateAutoButton();
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
-      stopTxTracking(); // Stop repeater echo tracking
-      stopUnifiedRxListening(); // Stop unified RX listening
+      stopTxTracking(); // Stop TX echo tracking
+      
+      // Stop unified RX listening on disconnect
+      stopUnifiedRxListening();
+      debugLog("[BLE] Unified RX listener stopped on disconnect");
       
       // Flush all pending RX batch data before cleanup
       flushAllRxBatches('disconnect');
@@ -4184,17 +4330,39 @@ async function disconnect() {
 document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
     debugLog("[UI] Page visibility changed to hidden");
+    
+    // Stop TX/RX Auto if running
     if (state.txRxAutoRunning) {
-      debugLog("[UI] Stopping auto ping due to page hidden");
-      stopAutoPing(true); // Ignore cooldown check when page is hidden
-      setDynamicStatus("Lost focus, auto mode stopped", STATUS_COLORS.warning);
-    } else {
+      debugLog("[UI] Stopping TX/RX Auto due to page hidden");
+      stopAutoPing(true); // Ignore cooldown, stop GPS
+      setDynamicStatus("Lost focus, TX/RX Auto stopped", STATUS_COLORS.warning);
+    }
+    
+    // Stop RX Auto if running
+    if (state.rxAutoRunning) {
+      debugLog("[UI] Stopping RX Auto due to page hidden");
+      stopRxAuto();
+      setDynamicStatus("Lost focus, RX Auto stopped", STATUS_COLORS.warning);
+    }
+    
+    // Release wake lock if neither mode running
+    if (!state.txRxAutoRunning && !state.rxAutoRunning) {
       debugLog("[UI] Releasing wake lock due to page hidden");
       releaseWakeLock();
     }
+    
+    // DO NOT stop unified listener
+    
   } else {
     debugLog("[UI] Page visibility changed to visible");
-    // On visible again, user can manually re-start Auto.
+    
+    // Defensive check: ensure unified listener is running if connected
+    if (state.connection && !state.rxTracking.isListening) {
+      debugWarn("[UI] Page visible but unified listener inactive - restarting");
+      startUnifiedRxListening();
+    }
+    
+    // User must manually restart auto modes
   }
 });
 
@@ -4253,6 +4421,16 @@ export async function onLoad() {
       setDynamicStatus("Auto mode stopped", STATUS_COLORS.idle);
     } else {
       startAutoPing();
+    }
+  });
+  
+  // NEW: RX Auto button listener
+  rxAutoBtn.addEventListener("click", () => {
+    debugLog("[UI] RX Auto button clicked");
+    if (state.rxAutoRunning) {
+      stopRxAuto();
+    } else {
+      startRxAuto();
     }
   });
 
