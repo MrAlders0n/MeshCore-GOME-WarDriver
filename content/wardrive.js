@@ -1012,7 +1012,13 @@ function startGeoWatch() {
       };
       state.gpsState = "acquired";
       updateGpsUi();
-      updateDistanceUi(); // Update distance when GPS position changes
+      updateDistanceUi(); 
+      
+      // Update distance when GPS position changes
+      // NEW: Check RX batches for distance trigger when GPS position updates
+      if (state.rxTracking. isWardriving && state.rxBatchBuffer.size > 0) {
+        checkAllRxBatchesForDistanceTrigger({ lat: pos.coords. latitude, lon: pos.coords. longitude });
+      }
     },
     (err) => {
       debugError(`[GPS] GPS watch error: ${err.code} - ${err.message}`);
@@ -2453,6 +2459,47 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
   if (distance >= RX_BATCH_DISTANCE_M) {
     debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing`);
     flushRepeater(repeaterId);
+  }
+}
+
+/**
+ * Check all active RX batches for distance threshold on GPS position update
+ * Called from GPS watch callback when position changes
+ * @param {Object} currentLocation - Current GPS location {lat, lon}
+ */
+function checkAllRxBatchesForDistanceTrigger(currentLocation) {
+  if (state.rxBatchBuffer.size === 0) {
+    return; // No active batches to check
+  }
+  
+  debugLog(`[RX BATCH] GPS position updated, checking ${state.rxBatchBuffer. size} active batches for distance trigger`);
+  
+  const repeatersToFlush = [];
+  
+  // Check each active batch
+  for (const [repeaterId, buffer] of state.rxBatchBuffer. entries()) {
+    const distance = calculateHaversineDistance(
+      currentLocation.lat,
+      currentLocation.lon,
+      buffer.firstLocation.lat,
+      buffer.firstLocation.lng
+    );
+    
+    debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}:  ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
+    
+    if (distance >= RX_BATCH_DISTANCE_M) {
+      debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, marking for flush`);
+      repeatersToFlush.push(repeaterId);
+    }
+  }
+  
+  // Flush all repeaters that met the distance threshold
+  for (const repeaterId of repeatersToFlush) {
+    flushRepeater(repeaterId);
+  }
+  
+  if (repeatersToFlush.length > 0) {
+    debugLog(`[RX BATCH] Flushed ${repeatersToFlush.length} repeater(s) due to GPS movement`);
   }
 }
 
