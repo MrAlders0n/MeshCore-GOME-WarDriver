@@ -236,6 +236,8 @@ const state = {
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
   wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
+  debugMode: false, // Whether debug mode is enabled by MeshMapper API
+  tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
@@ -254,7 +256,7 @@ const state = {
     rxLogHandler: null,           // Handler function for passive rx_log events
     entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
   },
-  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
+  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, bestObservation}>
 };
 
 // API Batch Queue State
@@ -617,16 +619,13 @@ function cleanupAllTimers() {
   // Clear device public key
   state.devicePublicKey = null;
   
-  // Clear wardrive session ID
+  // Clear wardrive session ID and debug mode
   state.wardriveSessionId = null;
+  state.debugMode = false;
+  state.tempTxRepeaterData = null;
   
-  // Clear RX batch buffer and cancel any pending timeouts
+  // Clear RX batch buffer (no timeouts to clear anymore)
   if (state.rxBatchBuffer && state.rxBatchBuffer.size > 0) {
-    for (const [repeaterId, batch] of state.rxBatchBuffer.entries()) {
-      if (batch.timeoutId) {
-        clearTimeout(batch.timeoutId);
-      }
-    }
     state.rxBatchBuffer.clear();
     debugLog("[RX BATCH] RX batch buffer cleared");
   }
@@ -1281,7 +1280,7 @@ async function checkCapacity(reason) {
     }
 
     const data = await response.json();
-    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, reason=${data.reason || 'none'}`);
+    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, debug_mode=${data.debug_mode || 'not set'}, reason=${data.reason || 'none'}`);
 
     // Handle capacity full vs. allowed cases separately
     if (data.allowed === false && reason === "connect") {
@@ -1295,7 +1294,7 @@ async function checkCapacity(reason) {
       return false;
     }
     
-    // For connect requests, validate session_id is present when allowed === true
+    // For connect requests, validate session_id and check debug_mode
     if (reason === "connect" && data.allowed === true) {
       if (!data.session_id) {
         debugError("[CAPACITY] Capacity check returned allowed=true but session_id is missing");
@@ -1306,14 +1305,25 @@ async function checkCapacity(reason) {
       // Store the session_id for use in MeshMapper API posts
       state.wardriveSessionId = data.session_id;
       debugLog(`[CAPACITY] Wardrive session ID received and stored: ${state.wardriveSessionId}`);
+      
+      // Check for debug_mode flag (optional field)
+      if (data.debug_mode === 1) {
+        state.debugMode = true;
+        debugLog(`[CAPACITY] 🐛 DEBUG MODE ENABLED by API`);
+      } else {
+        state.debugMode = false;
+        debugLog(`[CAPACITY] Debug mode NOT enabled`);
+      }
     }
     
-    // For disconnect requests, clear the session_id
+    // For disconnect requests, clear the session_id and debug mode
     if (reason === "disconnect") {
       if (state.wardriveSessionId) {
         debugLog(`[CAPACITY] Clearing wardrive session ID on disconnect: ${state.wardriveSessionId}`);
         state.wardriveSessionId = null;
       }
+      state.debugMode = false;
+      debugLog(`[CAPACITY] Debug mode cleared on disconnect`);
     }
     
     return data.allowed === true;
@@ -1330,6 +1340,39 @@ async function checkCapacity(reason) {
     
     return true; // Always allow disconnect to proceed
   }
+}
+
+/**
+ * Convert raw bytes to hex string
+ * @param {Uint8Array} bytes - Raw bytes
+ * @returns {string} Hex string representation
+ */
+function bytesToHex(bytes) {
+  return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join('');
+}
+
+/**
+ * Build debug data object for a single packet observation
+ * @param {Object} rawPacketData - Raw packet data from handleSessionLogTracking or handlePassiveRxLogging
+ * @param {string} heardByte - The "heard" byte (first for TX, last for RX) as hex string
+ * @returns {Object} Debug data object
+ */
+function buildDebugData(rawPacketData, heardByte) {
+  const { raw, lastSnr, lastRssi, packet } = rawPacketData;
+  
+  // Convert path array to hex string (from parsed packet object)
+  const parsedPathHex = packet.path.map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join('');
+  
+  return {
+    raw_packet: bytesToHex(raw),  // Send complete raw packet as hex string
+    raw_snr: lastSnr,
+    raw_rssi: lastRssi,
+    parsed_header: packet.header.toString(16).padStart(2, '0').toUpperCase(),
+    parsed_path_length: packet.path.length,
+    parsed_path: parsedPathHex,
+    parsed_payload: bytesToHex(packet.payload),
+    parsed_heard: heardByte
+  };
 }
 
 /**
@@ -1366,7 +1409,32 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       WARDRIVE_TYPE: "TX"
     };
 
-    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}`);
+    // Add debug data if debug mode is enabled and repeater data is available
+    if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
+      debugLog(`[API QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
+      
+      const debugDataArray = [];
+      
+      for (const repeater of state.tempTxRepeaterData) {
+        if (repeater.rawPacketData) {
+          const heardByte = repeater.repeaterId;  // First byte of path
+          const debugData = buildDebugData(repeater.rawPacketData, heardByte);
+          debugData.repeaterId = repeater.repeaterId;  // Add repeater ID
+          debugDataArray.push(debugData);
+          debugLog(`[API QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
+        }
+      }
+      
+      if (debugDataArray.length > 0) {
+        payload.debug_data = debugDataArray;
+        debugLog(`[API QUEUE] 🐛 TX payload includes ${debugDataArray.length} debug_data entries`);
+      }
+      
+      // Clear temp data after use
+      state.tempTxRepeaterData = null;
+    }
+
+    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}${payload.debug_data ? `, debug_data=${payload.debug_data.length} entries` : ''}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -1997,7 +2065,13 @@ async function handleSessionLogTracking(packet, data) {
         debugLog(`[PING] Deduplication decision: updating path ${pathHex} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
         state.repeaterTracking.repeaters.set(pathHex, {
           snr: data.lastSnr,
-          seenCount: existing.seenCount + 1
+          seenCount: existing.seenCount + 1,
+          rawPacketData: {  // Update with better SNR packet data
+            raw: data.raw,
+            lastSnr: data.lastSnr,
+            lastRssi: data.lastRssi,
+            packet: packet
+          }
         });
         
         // Trigger incremental UI update since SNR changed
@@ -2012,7 +2086,13 @@ async function handleSessionLogTracking(packet, data) {
       debugLog(`[PING] Adding new repeater echo: path=${pathHex}, SNR=${data.lastSnr}`);
       state.repeaterTracking.repeaters.set(pathHex, {
         snr: data.lastSnr,
-        seenCount: 1
+        seenCount: 1,
+        rawPacketData: {  // Store for debug mode
+          raw: data.raw,
+          lastSnr: data.lastSnr,
+          lastRssi: data.lastRssi,
+          packet: packet
+        }
       });
       
       // Trigger incremental UI update for the new repeater
@@ -2043,10 +2123,11 @@ function stopRepeaterTracking() {
   // No need to unregister handler - unified handler continues running
   // Just clear the tracking state
   
-  // Get the results
+  // Get the results with full data (including rawPacketData for debug mode)
   const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
     repeaterId: id,
-    snr: data.snr
+    snr: data.snr,
+    rawPacketData: data.rawPacketData  // Include for debug mode
   }));
   
   // Sort by repeater ID for deterministic output
@@ -2160,8 +2241,24 @@ async function handlePassiveRxLogging(packet, data) {
     
     debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
-    // Handle batch tracking for API (parallel batch per repeater)
-    handlePassiveRxForAPI(repeaterId, data.lastSnr, { lat, lon });
+    // Store raw packet data for API handling
+    const rawPacketData = {
+      raw: data.raw,
+      lastSnr: data.lastSnr,
+      lastRssi: data.lastRssi,
+      packet: packet
+    };
+    
+    // Handle tracking for API (best SNR with distance trigger)
+    handlePassiveRxForAPI(
+      repeaterId, 
+      data.lastSnr, 
+      data.lastRssi, 
+      packet.path.length, 
+      packet.header, 
+      { lat, lon }, 
+      rawPacketData
+    );
     
   } catch (error) {
     debugError(`[PASSIVE RX] Error processing passive RX: ${error.message}`, error);
@@ -2238,115 +2335,106 @@ async function postRxLogToMeshMapperAPI(entries) {
 
 /**
  * Handle passive RX event for API batching
- * Each repeater is tracked independently with its own batch and timer
+ * Tracks best SNR observation per repeater with distance-based trigger
  * @param {string} repeaterId - Repeater ID (hex string)
  * @param {number} snr - Signal to noise ratio
+ * @param {number} rssi - Received signal strength indicator
+ * @param {number} pathLength - Number of hops in the path
+ * @param {number} header - Packet header byte
  * @param {Object} currentLocation - Current GPS location {lat, lon}
+ * @param {Object} rawPacketData - Raw packet data for debug mode
  */
-function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
-  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}`);
+function handlePassiveRxForAPI(repeaterId, snr, rssi, pathLength, header, currentLocation, rawPacketData) {
+  // Get or create buffer entry for this repeater
+  let buffer = state.rxBatchBuffer.get(repeaterId);
   
-  // Get or create batch for this repeater
-  let batch = state.rxBatchBuffer.get(repeaterId);
-  
-  if (!batch) {
-    // First RX from this repeater - create new batch
-    debugLog(`[RX BATCH] Creating new batch for repeater ${repeaterId}`);
-    batch = {
+  if (!buffer) {
+    // First time hearing this repeater - create new entry
+    buffer = {
       firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
-      firstTimestamp: Date.now(),
-      samples: [],
-      timeoutId: null
+      bestObservation: {
+        snr,
+        rssi,
+        pathLength,
+        header,
+        lat: currentLocation.lat,
+        lon: currentLocation.lon,
+        timestamp: Date.now(),
+        rawPacketData
+      }
     };
-    state.rxBatchBuffer.set(repeaterId, batch);
-    
-    // Set timeout for this repeater (independent timer)
-    batch.timeoutId = setTimeout(() => {
-      debugLog(`[RX BATCH] Timeout triggered for repeater ${repeaterId} after ${RX_BATCH_TIMEOUT_MS}ms`);
-      flushBatch(repeaterId, 'timeout');
-    }, RX_BATCH_TIMEOUT_MS);
-    
-    debugLog(`[RX BATCH] Timeout set for repeater ${repeaterId}: ${RX_BATCH_TIMEOUT_MS}ms`);
+    state.rxBatchBuffer.set(repeaterId, buffer);
+    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}`);
+  } else {
+    // Already tracking this repeater - check if new SNR is better
+    if (snr > buffer.bestObservation.snr) {
+      debugLog(`[RX BATCH] Better SNR for repeater ${repeaterId}: ${buffer.bestObservation.snr} -> ${snr}`);
+      buffer.bestObservation = {
+        snr,
+        rssi,
+        pathLength,
+        header,
+        lat: currentLocation.lat,
+        lon: currentLocation.lon,
+        timestamp: Date.now(),
+        rawPacketData
+      };
+    } else {
+      debugLog(`[RX BATCH] Ignoring worse SNR for repeater ${repeaterId}: current=${buffer.bestObservation.snr}, new=${snr}`);
+    }
   }
   
-  // Add sample to batch
-  const sample = {
-    snr,
-    location: { lat: currentLocation.lat, lng: currentLocation.lon },
-    timestamp: Date.now()
-  };
-  batch.samples.push(sample);
-  
-  debugLog(`[RX BATCH] Sample added to batch for repeater ${repeaterId}: sample_count=${batch.samples.length}`);
-  
-  // Check distance trigger (has user moved >= RX_BATCH_DISTANCE_M from first location?)
+  // Check distance trigger (25m from firstLocation)
   const distance = calculateHaversineDistance(
     currentLocation.lat,
     currentLocation.lon,
-    batch.firstLocation.lat,
-    batch.firstLocation.lng
+    buffer.firstLocation.lat,
+    buffer.firstLocation.lng
   );
   
-  debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first location (threshold=${RX_BATCH_DISTANCE_M}m)`);
+  debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
   
   if (distance >= RX_BATCH_DISTANCE_M) {
-    debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing batch`);
-    flushBatch(repeaterId, 'distance');
+    debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing`);
+    flushRepeater(repeaterId);
   }
 }
 
 /**
- * Flush a single repeater's batch - aggregate and post to API
+ * Flush a single repeater's batch - post best observation to API
  * @param {string} repeaterId - Repeater ID to flush
- * @param {string} trigger - What caused the flush: 'distance' | 'timeout' | 'session_end'
  */
-function flushBatch(repeaterId, trigger) {
-  debugLog(`[RX BATCH] Flushing batch for repeater ${repeaterId}, trigger=${trigger}`);
+function flushRepeater(repeaterId) {
+  debugLog(`[RX BATCH] Flushing repeater ${repeaterId}`);
   
-  const batch = state.rxBatchBuffer.get(repeaterId);
-  if (!batch || batch.samples.length === 0) {
-    debugLog(`[RX BATCH] No batch to flush for repeater ${repeaterId}`);
+  const buffer = state.rxBatchBuffer.get(repeaterId);
+  if (!buffer) {
+    debugLog(`[RX BATCH] No buffer to flush for repeater ${repeaterId}`);
     return;
   }
   
-  // Clear timeout if it exists
-  if (batch.timeoutId) {
-    clearTimeout(batch.timeoutId);
-    debugLog(`[RX BATCH] Cleared timeout for repeater ${repeaterId}`);
-  }
+  const best = buffer.bestObservation;
   
-  // Calculate aggregations
-  const snrValues = batch.samples.map(s => s.snr);
-  const snrAvg = snrValues.reduce((sum, val) => sum + val, 0) / snrValues.length;
-  const snrMax = Math.max(...snrValues);
-  const snrMin = Math.min(...snrValues);
-  const sampleCount = batch.samples.length;
-  const timestampStart = batch.firstTimestamp;
-  const timestampEnd = batch.samples[batch.samples.length - 1].timestamp;
-  
-  // Build API entry
+  // Build API entry using BEST observation's location
   const entry = {
     repeater_id: repeaterId,
-    location: batch.firstLocation,
-    snr_avg: parseFloat(snrAvg.toFixed(3)),
-    snr_max: parseFloat(snrMax.toFixed(3)),
-    snr_min: parseFloat(snrMin.toFixed(3)),
-    sample_count: sampleCount,
-    timestamp_start: timestampStart,
-    timestamp_end: timestampEnd,
-    trigger: trigger
+    location: { lat: best.lat, lng: best.lon },  // Location of BEST SNR packet
+    snr: best.snr,
+    rssi: best.rssi,
+    pathLength: best.pathLength,
+    header: best.header,
+    timestamp: best.timestamp,
+    rawPacketData: best.rawPacketData  // For future debug mode
   };
   
-  debugLog(`[RX BATCH] Aggregated entry for repeater ${repeaterId}:`, entry);
-  debugLog(`[RX BATCH]   snr_avg=${snrAvg.toFixed(3)}, snr_max=${snrMax.toFixed(3)}, snr_min=${snrMin.toFixed(3)}`);
-  debugLog(`[RX BATCH]   sample_count=${sampleCount}, duration=${((timestampEnd - timestampStart) / 1000).toFixed(1)}s`);
+  debugLog(`[RX BATCH] Posting repeater ${repeaterId}: snr=${best.snr}, location=${best.lat.toFixed(5)},${best.lon.toFixed(5)}`);
   
   // Queue for API posting
   queueApiPost(entry);
   
-  // Remove batch from buffer (cleanup)
+  // Remove from buffer
   state.rxBatchBuffer.delete(repeaterId);
-  debugLog(`[RX BATCH] Batch removed from buffer for repeater ${repeaterId}`);
+  debugLog(`[RX BATCH] Repeater ${repeaterId} removed from buffer`);
 }
 
 /**
@@ -2354,26 +2442,26 @@ function flushBatch(repeaterId, trigger) {
  * @param {string} trigger - What caused the flush: 'session_end' | 'disconnect' | etc.
  */
 function flushAllBatches(trigger = 'session_end') {
-  debugLog(`[RX BATCH] Flushing all batches, trigger=${trigger}, active_batches=${state.rxBatchBuffer.size}`);
+  debugLog(`[RX BATCH] Flushing all repeaters, trigger=${trigger}, active_repeaters=${state.rxBatchBuffer.size}`);
   
   if (state.rxBatchBuffer.size === 0) {
-    debugLog(`[RX BATCH] No batches to flush`);
+    debugLog(`[RX BATCH] No repeaters to flush`);
     return;
   }
   
-  // Iterate all repeater batches and flush each one
+  // Iterate all repeaters and flush each one
   const repeaterIds = Array.from(state.rxBatchBuffer.keys());
   for (const repeaterId of repeaterIds) {
-    flushBatch(repeaterId, trigger);
+    flushRepeater(repeaterId);
   }
   
-  debugLog(`[RX BATCH] All batches flushed: ${repeaterIds.length} repeaters`);
+  debugLog(`[RX BATCH] All repeaters flushed: ${repeaterIds.length} total`);
 }
 
 /**
  * Queue an entry for API posting
  * Uses the batch queue system to aggregate RX messages
- * @param {Object} entry - The aggregated entry to post
+ * @param {Object} entry - The entry to post (with best observation data)
  */
 function queueApiPost(entry) {
   // Validate session_id exists
@@ -2382,10 +2470,9 @@ function queueApiPost(entry) {
     return;
   }
   
-  // Build unified API payload (without WARDRIVE_TYPE yet)
-  // Format heard_repeats as "repeater_id(snr_avg)" - e.g., "4e(12.0)"
+  // Format heard_repeats as "repeater_id(snr)" - e.g., "4e(12.0)"
   // Use absolute value and format with one decimal place
-  const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr_avg).toFixed(1)})`;
+  const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr).toFixed(1)})`;
   
   const payload = {
     key: MESHMAPPER_API_KEY,
@@ -2400,9 +2487,25 @@ function queueApiPost(entry) {
     session_id: state.wardriveSessionId
   };
   
+  // Add debug data if debug mode is enabled
+  if (state.debugMode && entry.rawPacketData) {
+    debugLog(`[RX BATCH API] 🐛 Debug mode active - adding debug_data for RX`);
+    
+    const packet = entry.rawPacketData.packet;
+    
+    // For RX, parsed_heard is the LAST byte of path
+    const lastHopId = packet.path[packet.path.length - 1];
+    const heardByte = lastHopId.toString(16).padStart(2, '0').toUpperCase();
+    
+    const debugData = buildDebugData(entry.rawPacketData, heardByte);
+    payload.debug_data = debugData;
+    
+    debugLog(`[RX BATCH API] 🐛 RX payload includes debug_data for repeater ${entry.repeater_id}`);
+  }
+  
   // Queue message instead of posting immediately
   queueApiMessage(payload, "RX");
-  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr_avg.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
+  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -3630,6 +3733,12 @@ async function sendPing(manual = false) {
       const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
       debugLog(`[PING] Formatted heard_repeats for API: "${heardRepeatsStr}"`);
       
+      // Store repeater data temporarily for debug mode
+      if (state.debugMode) {
+        state.tempTxRepeaterData = repeaters;
+        debugLog(`[PING] 🐛 Stored ${repeaters.length} repeater(s) data for debug mode`);
+      }
+      
       // Update status and start next timer IMMEDIATELY (before API post)
       // This is the key change: we don't wait for API to complete
       if (state.connection) {
@@ -3939,6 +4048,8 @@ async function connect() {
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
       state.wardriveSessionId = null; // Clear wardrive session ID
+      state.debugMode = false; // Clear debug mode
+      state.tempTxRepeaterData = null; // Clear temp TX data
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
