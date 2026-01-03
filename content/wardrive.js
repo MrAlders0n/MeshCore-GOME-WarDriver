@@ -594,8 +594,8 @@ function updateControlsForCooldown() {
   // TX/RX Auto button - disabled during cooldown, ping in progress, OR when RX Auto running
   txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
   
-  // RX Auto button - disabled when TX/RX Auto running (no cooldown restriction for RX-only mode)
-  rxAutoBtn.disabled = !connected || state.txRxAutoRunning;
+  // RX Auto button - permanently disabled (backend API not ready)
+  rxAutoBtn.disabled = true;
 }
 
 /**
@@ -4684,7 +4684,8 @@ function lockWardriveSettings() {
     input.disabled = true;
     const label = input.closest("label");
     if (label) {
-      label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
+      label.classList.add("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "0.5";
     }
   });
   
@@ -4694,7 +4695,8 @@ function lockWardriveSettings() {
     input.disabled = true;
     const label = input.closest("label");
     if (label) {
-      label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
+      label.classList.add("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "0.5";
     }
   });
 }
@@ -4711,7 +4713,8 @@ function unlockWardriveSettings() {
     input.disabled = false;
     const label = input.closest("label");
     if (label) {
-      label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
+      label.classList.remove("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "";
     }
   });
   
@@ -4721,7 +4724,8 @@ function unlockWardriveSettings() {
     input.disabled = false;
     const label = input.closest("label");
     if (label) {
-      label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
+      label.classList.remove("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "";
     }
   });
 }
