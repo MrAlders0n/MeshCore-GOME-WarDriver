@@ -1264,6 +1264,11 @@ function getCurrentPowerSetting() {
   return checkedPower ? checkedPower.value : "";
 }
 
+function getExternalAntennaSetting() {
+  const checkedAntenna = document.querySelector('input[name="externalAntenna"]:checked');
+  return checkedAntenna ? checkedAntenna.value : "";
+}
+
 function buildPayload(lat, lon) {
   const coordsStr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   const power = getCurrentPowerSetting();
@@ -1450,6 +1455,7 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       lon,
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting(),
+      external_antenna: getExternalAntennaSetting(),
       heard_repeats: heardRepeats,
       ver: APP_VERSION,
       test: 0,
@@ -2797,6 +2803,7 @@ function queueRxApiPost(entry) {
     lon: entry.location.lng,
     who: getDeviceIdentifier(),
     power: getCurrentPowerSetting(),
+    external_antenna: getExternalAntennaSetting(),
     heard_repeats: heardRepeats,
     ver: APP_VERSION,
     test: 0,
@@ -4395,6 +4402,10 @@ async function connect() {
         // Connection complete, show Connected status in connection bar
         setConnStatus("Connected", STATUS_COLORS.success);
         setDynamicStatus("Idle"); // Clear dynamic status to em dash
+        
+        // Lock wardrive settings after successful connection
+        lockWardriveSettings();
+        
         debugLog("[BLE] Full connection process completed successfully");
       } catch (e) {
         debugError(`[CHANNEL] Channel setup failed: ${e.message}`, e);
@@ -4470,6 +4481,9 @@ async function connect() {
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
+      
+      // Unlock wardrive settings after disconnect
+      unlockWardriveSettings();
       
       // Stop auto modes
       stopAutoPing(true); // Ignore cooldown check on disconnect, stop GPS
@@ -4630,25 +4644,82 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 /**
- * Update Connect button state based on radio power selection
+ * Update Connect button state based on radio power and external antenna selection
  */
 function updateConnectButtonState() {
   const radioPowerSelected = getCurrentPowerSetting() !== "";
+  const externalAntennaSelected = getExternalAntennaSetting() !== "";
   const isConnected = !!state.connection;
   
   if (!isConnected) {
-    // Only enable Connect if radio power is selected
-    connectBtn.disabled = !radioPowerSelected;
+    // Only enable Connect if both settings are selected
+    connectBtn.disabled = !radioPowerSelected || !externalAntennaSelected;
     
-    // Update dynamic status based on power selection
-    if (!radioPowerSelected) {
+    // Update dynamic status based on selections
+    if (!radioPowerSelected && !externalAntennaSelected) {
+      debugLog("[UI] Radio power and external antenna not selected - showing message in status bar");
+      setDynamicStatus("Select radio power and external antenna to connect", STATUS_COLORS.warning);
+    } else if (!radioPowerSelected) {
       debugLog("[UI] Radio power not selected - showing message in status bar");
       setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
+    } else if (!externalAntennaSelected) {
+      debugLog("[UI] External antenna not selected - showing message in status bar");
+      setDynamicStatus("Select external antenna to connect", STATUS_COLORS.warning);
     } else {
-      debugLog("[UI] Radio power selected - clearing message from status bar");
+      debugLog("[UI] Radio power and external antenna selected - clearing message from status bar");
       setDynamicStatus("Idle");
     }
   }
+}
+
+/**
+ * Lock wardrive settings (Radio Power and External Antenna) after connection
+ */
+function lockWardriveSettings() {
+  debugLog("[UI] Locking wardrive settings (power and external antenna)");
+  
+  // Lock all radio power labels
+  const powerLabels = document.querySelectorAll('input[name="power"]');
+  powerLabels.forEach(input => {
+    const label = input.closest("label");
+    if (label) {
+      label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
+    }
+  });
+  
+  // Lock all external antenna labels
+  const antennaLabels = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaLabels.forEach(input => {
+    const label = input.closest("label");
+    if (label) {
+      label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
+    }
+  });
+}
+
+/**
+ * Unlock wardrive settings (Radio Power and External Antenna) after disconnect
+ */
+function unlockWardriveSettings() {
+  debugLog("[UI] Unlocking wardrive settings (power and external antenna)");
+  
+  // Unlock all radio power labels
+  const powerLabels = document.querySelectorAll('input[name="power"]');
+  powerLabels.forEach(input => {
+    const label = input.closest("label");
+    if (label) {
+      label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
+    }
+  });
+  
+  // Unlock all external antenna labels
+  const antennaLabels = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaLabels.forEach(input => {
+    const label = input.closest("label");
+    if (label) {
+      label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
+    }
+  });
 }
 
 // ---- Bind UI & init ----
@@ -4657,6 +4728,11 @@ export async function onLoad() {
   setConnStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  
+  // Disable RX Auto button (backend API not ready)
+  rxAutoBtn.disabled = true;
+  rxAutoBtn.title = "RX Auto temporarily disabled - backend API not ready";
+  debugLog("[INIT] RX Auto button disabled - backend API not ready");
   
   // Initialize Connect button state based on radio power
   updateConnectButtonState();
@@ -4737,6 +4813,15 @@ export async function onLoad() {
   powerRadios.forEach(radio => {
     radio.addEventListener("change", () => {
       debugLog(`[UI] Radio power changed to: ${getCurrentPowerSetting()}`);
+      updateConnectButtonState();
+    });
+  });
+
+  // Add event listeners to external antenna options to update Connect button state
+  const antennaRadios = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaRadios.forEach(radio => {
+    radio.addEventListener("change", () => {
+      debugLog(`[UI] External antenna changed to: ${getExternalAntennaSetting()}`);
       updateConnectButtonState();
     });
   });
