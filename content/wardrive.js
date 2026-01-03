@@ -64,19 +64,39 @@ const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second)
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
 const RX_LOG_LISTEN_WINDOW_MS = 6000;         // Listen window for repeater echoes (6 seconds)
 const CHANNEL_GROUP_TEXT_HEADER = 0x15;       // Header byte for Meshtastic GroupText packets (0x15) - used exclusively for Session Log echo detection
+const ADVERT_HEADER = 0x11;                   // Header byte for ADVERT packets (0x11)
+
+// RX Packet Filter Configuration
+const MAX_RX_PATH_LENGTH = 9;                 // Maximum path length for RX packets (drop if exceeded to filter corrupted packets)
+const RX_ALLOWED_CHANNELS = ['#wardriving', '#public', '#testing', '#ottawa']; // Allowed channels for RX wardriving
+const RX_PRINTABLE_THRESHOLD = 0.80;          // Minimum printable character ratio for GRP_TXT (80%)
 
 // Pre-computed channel hash and key for the wardriving channel
 // These will be computed once at startup and used for message correlation and decryption
 let WARDRIVING_CHANNEL_HASH = null;
 let WARDRIVING_CHANNEL_KEY = null;
 
-// Initialize the wardriving channel hash and key at startup
+// Pre-computed channel hashes and keys for all allowed RX channels
+const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
+
+// Initialize channel hashes and keys at startup
 (async function initializeChannelHash() {
   try {
+    // Initialize wardriving channel (for TX tracking)
     WARDRIVING_CHANNEL_KEY = await deriveChannelKey(CHANNEL_NAME);
     WARDRIVING_CHANNEL_HASH = await computeChannelHash(WARDRIVING_CHANNEL_KEY);
     debugLog(`[INIT] Wardriving channel hash pre-computed at startup: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
     debugLog(`[INIT] Wardriving channel key cached for message decryption (${WARDRIVING_CHANNEL_KEY.length} bytes)`);
+    
+    // Initialize all allowed RX channels
+    debugLog(`[INIT] Pre-computing hashes/keys for ${RX_ALLOWED_CHANNELS.length} allowed RX channels...`);
+    for (const channelName of RX_ALLOWED_CHANNELS) {
+      const key = await deriveChannelKey(channelName);
+      const hash = await computeChannelHash(key);
+      RX_CHANNEL_MAP.set(hash, { name: channelName, key: key });
+      debugLog(`[INIT] ${channelName} -> hash=0x${hash.toString(16).padStart(2, '0')}`);
+    }
+    debugLog(`[INIT] ✅ All RX channel hashes/keys initialized successfully`);
   } catch (error) {
     debugError(`[INIT] CRITICAL: Failed to pre-compute channel hash/key: ${error.message}`);
     debugError(`[INIT] Repeater echo tracking will be disabled. Please reload the page.`);
@@ -141,13 +161,14 @@ const statusEl       = $("status");
 const deviceInfoEl   = $("deviceInfo");
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
-const sendPingBtn    = $("sendPingBtn");
-const autoToggleBtn  = $("autoToggleBtn");
+const txPingBtn      = $("txPingBtn");
+const txRxAutoBtn    = $("txRxAutoBtn");
+const rxAutoBtn      = $("rxAutoBtn");
 const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
 const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
-const sessionPingsEl = document.getElementById("sessionPings"); // optional
+const txPingsEl = document.getElementById("txPings"); // TX log container
 const coverageFrameEl = document.getElementById("coverageFrame");
 setConnectButton(false);
 setConnStatus("Disconnected", STATUS_COLORS.error);
@@ -156,14 +177,14 @@ setConnStatus("Disconnected", STATUS_COLORS.error);
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
 
-// Session Log selectors
-const logSummaryBar = $("logSummaryBar");
-const logBottomSheet = $("logBottomSheet");
-const logScrollContainer = $("logScrollContainer");
-const logCount = $("logCount");
-const logLastTime = $("logLastTime");
-const logLastSnr = $("logLastSnr");
-const sessionLogCopyBtn = $("sessionLogCopyBtn");
+// TX Log selectors
+const txLogSummaryBar = $("txLogSummaryBar");
+const txLogBottomSheet = $("txLogBottomSheet");
+const txLogScrollContainer = $("txLogScrollContainer");
+const txLogCount = $("txLogCount");
+const txLogLastTime = $("txLogLastTime");
+const txLogLastSnr = $("txLogLastSnr");
+const txLogCopyBtn = $("txLogCopyBtn");
 
 // RX Log selectors
 const rxLogSummaryBar = $("rxLogSummaryBar");
@@ -189,7 +210,7 @@ const errorLogExpandArrow = $("errorLogExpandArrow");
 const errorLogCopyBtn = $("errorLogCopyBtn");
 
 // Session log state
-const sessionLogState = {
+const txLogState = {
   entries: [],  // Array of parsed log entries
   isExpanded: false,
   autoScroll: true
@@ -198,6 +219,7 @@ const sessionLogState = {
 // RX log state (passive observations)
 const rxLogState = {
   entries: [],  // Array of parsed RX log entries
+  dropCount: 0, // Count of dropped/filtered packets
   isExpanded: false,
   autoScroll: true,
   maxEntries: 100  // Limit to prevent memory issues
@@ -217,7 +239,8 @@ const state = {
   connection: null,
   channel: null,
   autoTimerId: null,
-  running: false,
+  txRxAutoRunning: false,  // TX/RX Auto mode flag (renamed from running)
+  rxAutoRunning: false,    // RX Auto mode flag (passive-only wardriving)
   wakeLock: null,
   geoWatchId: null,
   lastFix: null, // { lat, lon, accM, tsMs }
@@ -236,25 +259,28 @@ const state = {
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
   wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
+  debugMode: false, // Whether debug mode is enabled by MeshMapper API
+  tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
-  repeaterTracking: {
-    isListening: false,           // Whether we're currently listening for echoes
+  pendingApiPosts: [], // Array of pending background API post promises
+  txTracking: {
+    isListening: false,           // Whether we're currently listening for TX echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
     sentPayload: null,            // The payload text that was sent
     channelIdx: null,             // Channel index for reference
-    repeaters: new Map(),         // Map<repeaterId, {snr, seenCount}>
+    repeaters: new Map(),         // Map<repeaterId, {snr, seenCount, metadata}>
     listenTimeout: null,          // Timeout handle for 7-second window
     rxLogHandler: null,           // Handler function for rx_log events
     currentLogEntry: null,        // Current log entry being updated (for incremental UI updates)
   },
-  passiveRxTracking: {
-    isListening: false,           // Whether we're currently listening passively
-    rxLogHandler: null,           // Handler function for passive rx_log events
-    entries: []                   // Array of { repeaterId, snr, lat, lon, timestamp }
+  rxTracking: {
+    isListening: false,           // TRUE when unified listener is active (always on when connected)
+    isWardriving: false,          // TRUE when TX/RX Auto OR RX Auto enabled
+    rxLogHandler: null,           // Handler function for RX log events
   },
-  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, firstTimestamp, samples, timeoutId}>
+  rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, bestObservation}>
 };
 
 // API Batch Queue State
@@ -410,7 +436,7 @@ function createCountdownTimer(getEndTime, getStatusMessage) {
 const autoCountdownTimer = createCountdownTimer(
   () => state.nextAutoPingTime,
   (remainingSec) => {
-    if (!state.running) return null;
+    if (!state.txRxAutoRunning) return null;
     if (remainingSec === 0) {
       return { message: "Sending auto ping", color: STATUS_COLORS.info };
     }
@@ -512,11 +538,11 @@ function resumeAutoCountdown() {
  * @returns {void}
  */
 function handleManualPingBlockedDuringAutoMode() {
-  if (state.running) {
-    debugLog("[AUTO] Manual ping blocked during auto mode - resuming auto countdown");
+  if (state.txRxAutoRunning) {
+    debugLog("[TX/RX AUTO] Manual ping blocked during auto mode - resuming auto countdown");
     const resumed = resumeAutoCountdown();
     if (!resumed) {
-      debugLog("[AUTO] No paused countdown to resume, scheduling new auto ping");
+      debugLog("[TX/RX AUTO] No paused countdown to resume, scheduling new auto ping");
       scheduleNextAutoPing();
     }
   }
@@ -561,9 +587,16 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}`);
-  sendPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
-  autoToggleBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}`);
+  
+  // TX Ping button - disabled during cooldown or ping in progress
+  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  
+  // TX/RX Auto button - disabled during cooldown, ping in progress, OR when RX Auto running
+  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
+  
+  // RX Auto button - permanently disabled (backend API not ready)
+  rxAutoBtn.disabled = true;
 }
 
 /**
@@ -617,16 +650,13 @@ function cleanupAllTimers() {
   // Clear device public key
   state.devicePublicKey = null;
   
-  // Clear wardrive session ID
+  // Clear wardrive session ID and debug mode
   state.wardriveSessionId = null;
+  state.debugMode = false;
+  state.tempTxRepeaterData = null;
   
-  // Clear RX batch buffer and cancel any pending timeouts
+  // Clear RX batch buffer (no timeouts to clear anymore)
   if (state.rxBatchBuffer && state.rxBatchBuffer.size > 0) {
-    for (const [repeaterId, batch] of state.rxBatchBuffer.entries()) {
-      if (batch.timeoutId) {
-        clearTimeout(batch.timeoutId);
-      }
-    }
     state.rxBatchBuffer.clear();
     debugLog("[RX BATCH] RX batch buffer cleared");
   }
@@ -642,14 +672,26 @@ function enableControls(connected) {
   // No need to show/hide the controls anymore
 }
 function updateAutoButton() {
-  if (state.running) {
-    autoToggleBtn.textContent = "Stop Auto Ping";
-    autoToggleBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
-    autoToggleBtn.classList.add("bg-amber-600","hover:bg-amber-500");
+  // Update TX/RX Auto button
+  if (state.txRxAutoRunning) {
+    txRxAutoBtn.textContent = "Stop TX/RX";
+    txRxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
+    txRxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
   } else {
-    autoToggleBtn.textContent = "Start Auto Ping";
-    autoToggleBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
-    autoToggleBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+    txRxAutoBtn.textContent = "TX/RX Auto";
+    txRxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
+    txRxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
+  }
+  
+  // Update RX Auto button
+  if (state.rxAutoRunning) {
+    rxAutoBtn.textContent = "Stop RX";
+    rxAutoBtn.classList.remove("bg-indigo-600","hover:bg-indigo-500");
+    rxAutoBtn.classList.add("bg-amber-600","hover:bg-amber-500");
+  } else {
+    rxAutoBtn.textContent = "RX Auto";
+    rxAutoBtn.classList.add("bg-indigo-600","hover:bg-indigo-500");
+    rxAutoBtn.classList.remove("bg-amber-600","hover:bg-amber-500");
   }
 }
 function buildCoverageEmbedUrl(lat, lon) {
@@ -992,7 +1034,13 @@ function startGeoWatch() {
       };
       state.gpsState = "acquired";
       updateGpsUi();
-      updateDistanceUi(); // Update distance when GPS position changes
+      updateDistanceUi(); 
+      
+      // Update distance when GPS position changes
+      // NEW: Check RX batches for distance trigger when GPS position updates
+      if (state.rxTracking. isWardriving && state.rxBatchBuffer.size > 0) {
+        checkAllRxBatchesForDistanceTrigger({ lat: pos.coords. latitude, lon: pos.coords. longitude });
+      }
     },
     (err) => {
       debugError(`[GPS] GPS watch error: ${err.code} - ${err.message}`);
@@ -1217,6 +1265,11 @@ function getCurrentPowerSetting() {
   return checkedPower ? checkedPower.value : "";
 }
 
+function getExternalAntennaSetting() {
+  const checkedAntenna = document.querySelector('input[name="externalAntenna"]:checked');
+  return checkedAntenna ? checkedAntenna.value : "";
+}
+
 function buildPayload(lat, lon) {
   const coordsStr = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   const power = getCurrentPowerSetting();
@@ -1281,7 +1334,7 @@ async function checkCapacity(reason) {
     }
 
     const data = await response.json();
-    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, reason=${data.reason || 'none'}`);
+    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, debug_mode=${data.debug_mode || 'not set'}, reason=${data.reason || 'none'}`);
 
     // Handle capacity full vs. allowed cases separately
     if (data.allowed === false && reason === "connect") {
@@ -1295,7 +1348,7 @@ async function checkCapacity(reason) {
       return false;
     }
     
-    // For connect requests, validate session_id is present when allowed === true
+    // For connect requests, validate session_id and check debug_mode
     if (reason === "connect" && data.allowed === true) {
       if (!data.session_id) {
         debugError("[CAPACITY] Capacity check returned allowed=true but session_id is missing");
@@ -1306,14 +1359,25 @@ async function checkCapacity(reason) {
       // Store the session_id for use in MeshMapper API posts
       state.wardriveSessionId = data.session_id;
       debugLog(`[CAPACITY] Wardrive session ID received and stored: ${state.wardriveSessionId}`);
+      
+      // Check for debug_mode flag (optional field)
+      if (data.debug_mode === 1) {
+        state.debugMode = true;
+        debugLog(`[CAPACITY] 🐛 DEBUG MODE ENABLED by API`);
+      } else {
+        state.debugMode = false;
+        debugLog(`[CAPACITY] Debug mode NOT enabled`);
+      }
     }
     
-    // For disconnect requests, clear the session_id
+    // For disconnect requests, clear the session_id and debug mode
     if (reason === "disconnect") {
       if (state.wardriveSessionId) {
         debugLog(`[CAPACITY] Clearing wardrive session ID on disconnect: ${state.wardriveSessionId}`);
         state.wardriveSessionId = null;
       }
+      state.debugMode = false;
+      debugLog(`[CAPACITY] Debug mode cleared on disconnect`);
     }
     
     return data.allowed === true;
@@ -1330,6 +1394,40 @@ async function checkCapacity(reason) {
     
     return true; // Always allow disconnect to proceed
   }
+}
+
+/**
+ * Convert raw bytes to hex string
+ * @param {Uint8Array} bytes - Raw bytes
+ * @returns {string} Hex string representation
+ */
+function bytesToHex(bytes) {
+  return Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0').toUpperCase()).join('');
+}
+
+/**
+ * Build debug data object for a single packet observation
+ * @param {Object} rawPacketData - Raw packet data from handleTxLogging or handleRxLogging
+ * @param {string} heardByte - The "heard" byte (first for TX, last for RX) as hex string
+ * @returns {Object} Debug data object
+ */
+function buildDebugData(metadata, heardByte, repeaterId) {
+  // Convert path bytes to hex string - these are the ACTUAL bytes used
+  const parsedPathHex = Array.from(metadata.pathBytes)
+    .map(byte => byte.toString(16).padStart(2, '0').toUpperCase())
+    .join('');
+  
+  return {
+    raw_packet: bytesToHex(metadata.raw),
+    raw_snr: metadata.snr,
+    raw_rssi: metadata.rssi,
+    parsed_header: metadata.header.toString(16).padStart(2, '0').toUpperCase(),
+    parsed_path_length: metadata.pathLength,
+    parsed_path: parsedPathHex,  // ACTUAL raw bytes
+    parsed_payload: bytesToHex(metadata.encryptedPayload),
+    parsed_heard: heardByte,
+    repeaterId: repeaterId
+  };
 }
 
 /**
@@ -1358,6 +1456,7 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       lon,
       who: getDeviceIdentifier(),
       power: getCurrentPowerSetting(),
+      external_antenna: getExternalAntennaSetting(),
       heard_repeats: heardRepeats,
       ver: APP_VERSION,
       test: 0,
@@ -1366,7 +1465,31 @@ async function postToMeshMapperAPI(lat, lon, heardRepeats) {
       WARDRIVE_TYPE: "TX"
     };
 
-    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}`);
+    // Add debug data if debug mode is enabled and repeater data is available
+    if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
+      debugLog(`[API QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
+      
+      const debugDataArray = [];
+      
+      for (const repeater of state.tempTxRepeaterData) {
+        if (repeater.metadata) {
+          const heardByte = repeater.repeaterId;  // First byte of path
+          const debugData = buildDebugData(repeater.metadata, heardByte, repeater.repeaterId);
+          debugDataArray.push(debugData);
+          debugLog(`[API QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
+        }
+      }
+      
+      if (debugDataArray.length > 0) {
+        payload.debug_data = debugDataArray;
+        debugLog(`[API QUEUE] 🐛 TX payload includes ${debugDataArray.length} debug_data entries`);
+      }
+      
+      // Clear temp data after use
+      state.tempTxRepeaterData = null;
+    }
+
+    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}${payload.debug_data ? `, debug_data=${payload.debug_data.length} entries` : ''}`);
 
     const response = await fetch(MESHMAPPER_API_URL, {
       method: "POST",
@@ -1428,6 +1551,12 @@ async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
   // Hidden 3-second delay before API POST (no user-facing status message)
   debugLog("[API QUEUE] Starting 3-second delay before API POST");
   await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  // Check if we're still connected before posting (disconnect may have happened during delay)
+  if (!state.connection || !state.wardriveSessionId) {
+    debugLog("[API QUEUE] Skipping background API post - disconnected or no session_id");
+    return;
+  }
   
   debugLog("[API QUEUE] 3-second delay complete, posting to API");
   try {
@@ -1499,18 +1628,18 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
     
     // Update status based on current mode
     if (state.connection) {
-      if (state.running) {
+      if (state.txRxAutoRunning) {
         // Check if we should resume a paused auto countdown (manual ping during auto mode)
         const resumed = resumeAutoCountdown();
         if (!resumed) {
           // No paused timer to resume, schedule new auto ping (this was an auto ping)
-          debugLog("[AUTO] Scheduling next auto ping");
+          debugLog("[TX/RX AUTO] Scheduling next auto ping");
           scheduleNextAutoPing();
         } else {
-          debugLog("[AUTO] Resumed auto countdown after manual ping");
+          debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
         }
       } else {
-        debugLog("[AUTO] Setting dynamic status to show queue size");
+        debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
         // Status already set by queueApiMessage()
       }
     }
@@ -1702,7 +1831,7 @@ async function flushApiQueue() {
     } else {
       debugLog(`[API QUEUE] Batch post successful: ${txCount} TX, ${rxCount} RX`);
       // Clear status after successful post
-      if (state.connection && !state.running) {
+      if (state.connection && !state.txRxAutoRunning) {
         setDynamicStatus("Idle");
       }
     }
@@ -1740,6 +1869,58 @@ async function computeChannelHash(channelSecret) {
   const hashBuffer = await crypto.subtle.digest('SHA-256', channelSecret);
   const hashArray = new Uint8Array(hashBuffer);
   return hashArray[0];
+}
+
+/**
+ * Parse RX packet metadata from raw bytes
+ * Single source of truth for header/path extraction
+ * @param {Object} data - LogRxData event data (contains lastSnr, lastRssi, raw)
+ * @returns {Object} Parsed metadata object
+ */
+function parseRxPacketMetadata(data) {
+  debugLog(`[RX PARSE] Starting metadata parsing`);
+  
+  // Dump entire raw packet
+  const rawHex = Array.from(data. raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+  debugLog(`[RX PARSE] RAW Packet: ${rawHex}`);
+  
+  // Extract header byte from raw[0]
+  const header = data.raw[0];
+  const routeType = header & 0x03;
+  
+  // Calculate offset for Path Length based on route type
+  let pathLengthOffset = 1;
+  if (routeType === 0x00 || routeType === 0x03) {  // TransportFlood or TransportDirect
+    pathLengthOffset = 5;  // Skip 4-byte transport codes
+  }
+  
+  // Extract path length from calculated offset
+  const pathLength = data.raw[pathLengthOffset];
+  
+  // Path data starts after path length byte
+  const pathDataOffset = pathLengthOffset + 1;
+  const pathBytes = Array.from(data.raw.slice(pathDataOffset, pathDataOffset + pathLength));
+  
+  // Derive first and last hops
+  const firstHop = pathBytes. length > 0 ? pathBytes[0] : null;
+  const lastHop = pathBytes.length > 0 ? pathBytes[pathLength - 1] : null;
+  
+  // Extract encrypted payload after path data
+  const encryptedPayload = data.raw.slice(pathDataOffset + pathLength);
+  
+  debugLog(`[RX PARSE] Parsed metadata: header=0x${header.toString(16).padStart(2, '0')}, pathLength=${pathLength}, firstHop=${firstHop ?  '0x' + firstHop. toString(16).padStart(2, '0') : 'null'}, lastHop=${lastHop ? '0x' + lastHop.toString(16).padStart(2, '0') : 'null'}`);
+  
+  return {
+    raw: data.raw,
+    header:  header,
+    pathLength: pathLength,
+    pathBytes: pathBytes,
+    firstHop: firstHop,
+    lastHop: lastHop,
+    snr: data.lastSnr,
+    rssi: data.lastRssi,
+    encryptedPayload: encryptedPayload
+  };
 }
 
 /**
@@ -1858,12 +2039,183 @@ async function decryptGroupTextPayload(payload, channelKey) {
 }
 
 /**
+ * Check if a string is printable ASCII (basic ASCII only, no extended chars)
+ * @param {string} str - String to check
+ * @returns {boolean} True if all characters are printable ASCII (32-126)
+ */
+function isStrictAscii(str) {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code < 32 || code > 126) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Calculate ratio of printable characters in a string
+ * @param {string} str - String to analyze
+ * @returns {number} Ratio of printable chars (0.0 to 1.0)
+ */
+function getPrintableRatio(str) {
+  if (str.length === 0) return 0;
+  let printableCount = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    // Printable: ASCII 32-126 or common whitespace (9=tab, 10=newline, 13=CR)
+    if ((code >= 32 && code <= 126) || code === 9 || code === 10 || code === 13) {
+      printableCount++;
+    }
+  }
+  return printableCount / str.length;
+}
+
+/**
+ * Parse and validate ADVERT packet name field
+ * @param {Uint8Array} payload - Encrypted payload from metadata
+ * @returns {Object} {valid: boolean, name: string, reason: string}
+ */
+function parseAdvertName(payload) {
+  try {
+    // ADVERT structure: [32 bytes pubkey][4 bytes timestamp][64 bytes signature][1 byte flags][name...]
+    const PUBKEY_SIZE = 32;
+    const TIMESTAMP_SIZE = 4;
+    const SIGNATURE_SIZE = 64;
+    const FLAGS_SIZE = 1;
+    const NAME_OFFSET = PUBKEY_SIZE + TIMESTAMP_SIZE + SIGNATURE_SIZE + FLAGS_SIZE;
+    
+    if (payload.length <= NAME_OFFSET) {
+      return { valid: false, name: '', reason: 'payload too short for name' };
+    }
+    
+    const nameBytes = payload.slice(NAME_OFFSET);
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const name = decoder.decode(nameBytes).replace(/\0+$/, '').trim();
+    
+    debugLog(`[RX FILTER] ADVERT name extracted: "${name}" (${name.length} chars)`);
+    
+    if (name.length === 0) {
+      return { valid: false, name: '', reason: 'name empty' };
+    }
+    
+    // Check if name is printable
+    const printableRatio = getPrintableRatio(name);
+    debugLog(`[RX FILTER] ADVERT name printable ratio: ${(printableRatio * 100).toFixed(1)}%`);
+    
+    if (printableRatio < 0.9) {
+      return { valid: false, name: name, reason: 'name not printable' };
+    }
+    
+    // Check strict ASCII (no extended characters)
+    if (!isStrictAscii(name)) {
+      return { valid: false, name: name, reason: 'name contains non-ASCII chars' };
+    }
+    
+    return { valid: true, name: name, reason: 'kept' };
+    
+  } catch (error) {
+    debugError(`[RX FILTER] Error parsing ADVERT name: ${error.message}`);
+    return { valid: false, name: '', reason: 'parse error' };
+  }
+}
+
+/**
+ * Validate RX packet for wardriving logging
+ * @param {Object} metadata - Parsed metadata from parseRxPacketMetadata()
+ * @returns {Promise<Object>} {valid: boolean, reason: string, channelName?: string, plaintext?: string}
+ */
+async function validateRxPacket(metadata) {
+  try {
+    // Log raw packet for debugging
+    const rawHex = Array.from(metadata.raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+    debugLog(`[RX FILTER] ========== VALIDATING PACKET ==========`);
+    debugLog(`[RX FILTER] Raw packet (${metadata.raw.length} bytes): ${rawHex}`);
+    debugLog(`[RX FILTER] Header: 0x${metadata.header.toString(16).padStart(2, '0')} | PathLength: ${metadata.pathLength} | SNR: ${metadata.snr}`);
+    
+    // VALIDATION 1: Check path length
+    if (metadata.pathLength > MAX_RX_PATH_LENGTH) {
+      debugLog(`[RX FILTER] ❌ DROPPED: pathLen>${MAX_RX_PATH_LENGTH} (${metadata.pathLength} hops)`);
+      return { valid: false, reason: `pathLen>${MAX_RX_PATH_LENGTH}` };
+    }
+    debugLog(`[RX FILTER] ✓ Path length OK (${metadata.pathLength} ≤ ${MAX_RX_PATH_LENGTH})`);
+    
+    // VALIDATION 2: Check packet type (only ADVERT and GRP_TXT)
+    if (metadata.header === CHANNEL_GROUP_TEXT_HEADER) {
+      debugLog(`[RX FILTER] Packet type: GRP_TXT (0x15)`);
+      
+      // GRP_TXT validation
+      if (metadata.encryptedPayload.length < 3) {
+        debugLog(`[RX FILTER] ❌ DROPPED: GRP_TXT payload too short (${metadata.encryptedPayload.length} bytes)`);
+        return { valid: false, reason: 'payload too short' };
+      }
+      
+      const channelHash = metadata.encryptedPayload[0];
+      debugLog(`[RX FILTER] Channel hash: 0x${channelHash.toString(16).padStart(2, '0')}`);
+      
+      // Check if channel is in allowed list
+      const channelInfo = RX_CHANNEL_MAP.get(channelHash);
+      if (!channelInfo) {
+        debugLog(`[RX FILTER] ❌ DROPPED: Unknown channel hash 0x${channelHash.toString(16).padStart(2, '0')}`);
+        return { valid: false, reason: 'unknown channel hash' };
+      }
+      
+      debugLog(`[RX FILTER] ✓ Channel matched: ${channelInfo.name}`);
+      
+      // Decrypt message
+      const plaintext = await decryptGroupTextPayload(metadata.encryptedPayload, channelInfo.key);
+      if (!plaintext) {
+        debugLog(`[RX FILTER] ❌ DROPPED: Decryption failed`);
+        return { valid: false, reason: 'decrypt failed' };
+      }
+      
+      debugLog(`[RX FILTER] Decrypted message (${plaintext.length} chars): "${plaintext.substring(0, 60)}${plaintext.length > 60 ? '...' : ''}"}`);
+      
+      // Check printable ratio
+      const printableRatio = getPrintableRatio(plaintext);
+      debugLog(`[RX FILTER] Printable ratio: ${(printableRatio * 100).toFixed(1)}% (threshold: ${(RX_PRINTABLE_THRESHOLD * 100).toFixed(1)}%)`);
+      
+      if (printableRatio < RX_PRINTABLE_THRESHOLD) {
+        debugLog(`[RX FILTER] ❌ DROPPED: plaintext not printable`);
+        return { valid: false, reason: 'plaintext not printable' };
+      }
+      
+      debugLog(`[RX FILTER] ✅ KEPT: GRP_TXT passed all validations`);
+      return { valid: true, reason: 'kept', channelName: channelInfo.name, plaintext: plaintext };
+      
+    } else if (metadata.header === ADVERT_HEADER) {
+      debugLog(`[RX FILTER] Packet type: ADVERT (0x11)`);
+      
+      // ADVERT validation
+      const nameResult = parseAdvertName(metadata.encryptedPayload);
+      
+      if (!nameResult.valid) {
+        debugLog(`[RX FILTER] ❌ DROPPED: ${nameResult.reason}`);
+        return { valid: false, reason: nameResult.reason };
+      }
+      
+      debugLog(`[RX FILTER] ✅ KEPT: ADVERT passed all validations (name="${nameResult.name}")`);
+      return { valid: true, reason: 'kept' };
+      
+    } else {
+      // Unsupported packet type
+      debugLog(`[RX FILTER] ❌ DROPPED: unsupported ptype (header=0x${metadata.header.toString(16).padStart(2, '0')})`);
+      return { valid: false, reason: 'unsupported ptype' };
+    }
+    
+  } catch (error) {
+    debugError(`[RX FILTER] ❌ Validation error: ${error.message}`);
+    return { valid: false, reason: 'validation error' };
+  }
+}
+
+/**
  * Start listening for repeater echoes via rx_log
  * Uses the pre-computed WARDRIVING_CHANNEL_HASH for message correlation
  * @param {string} payload - The ping payload that was sent
  * @param {number} channelIdx - The channel index where the ping was sent
  */
-function startRepeaterTracking(payload, channelIdx) {
+function startTxTracking(payload, channelIdx) {
   debugLog(`[PING] Starting repeater echo tracking for ping: "${payload}" on channel ${channelIdx}`);
   debugLog(`[PING] 7-second rx_log listening window opened at ${new Date().toISOString()}`);
   
@@ -1874,63 +2226,63 @@ function startRepeaterTracking(payload, channelIdx) {
   }
   
   // Clear any existing tracking state
-  stopRepeaterTracking();
+  stopTxTracking();
   
   debugLog(`[PING] Using pre-computed channel hash for correlation: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
   
   // Initialize tracking state
-  state.repeaterTracking.isListening = true;
-  state.repeaterTracking.sentTimestamp = Date.now();
-  state.repeaterTracking.sentPayload = payload;
-  state.repeaterTracking.channelIdx = channelIdx;
-  state.repeaterTracking.repeaters.clear();
+  state.txTracking.isListening = true;
+  state.txTracking.sentTimestamp = Date.now();
+  state.txTracking.sentPayload = payload;
+  state.txTracking.channelIdx = channelIdx;
+  state.txTracking.repeaters.clear();
   
-  debugLog(`[SESSION LOG] Session Log tracking activated - unified handler will delegate echoes to Session Log`);
+  debugLog(`[TX LOG] Session Log tracking activated - unified handler will delegate echoes to Session Log`);
   
   // Note: The unified RX handler (started at connect) will automatically delegate to
-  // handleSessionLogTracking() when isListening = true. No separate handler needed.
+  // handleTxLogging() when isListening = true. No separate handler needed.
   // The 7-second timeout to stop listening is managed by the caller (sendPing function)
 }
 
 /**
  * Handle Session Log tracking for repeater echoes
  * Called by unified RX handler when tracking is active
- * @param {Object} packet - Parsed packet from Packet.fromBytes
+ * @param {Object} metadata - Parsed metadata from parseRxPacketMetadata()
  * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
  * @returns {boolean} True if packet was an echo and tracked, false otherwise
  */
-async function handleSessionLogTracking(packet, data) {
-  const originalPayload = state.repeaterTracking.sentPayload;
-  const channelIdx = state.repeaterTracking.channelIdx;
+async function handleTxLogging(metadata, data) {
+  const originalPayload = state.txTracking.sentPayload;
+  const channelIdx = state.txTracking.channelIdx;
   const expectedChannelHash = WARDRIVING_CHANNEL_HASH;
   try {
-    debugLog(`[SESSION LOG] Processing rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
+    debugLog(`[TX LOG] Processing rx_log entry: SNR=${metadata.snr}, RSSI=${metadata.rssi}`);
     
     // VALIDATION STEP 1: Header validation for echo detection
     // Only GroupText packets (CHANNEL_GROUP_TEXT_HEADER) can be echoes of our channel messages
-    if (packet.header !== CHANNEL_GROUP_TEXT_HEADER) {
-      debugLog(`[SESSION LOG] Ignoring: header validation failed (header=0x${packet.header.toString(16).padStart(2, '0')})`);
+    if (metadata.header !== CHANNEL_GROUP_TEXT_HEADER) {
+      debugLog(`[TX LOG] Ignoring: header validation failed (header=0x${metadata.header.toString(16).padStart(2, '0')})`);
       return false;
     }
     
-    debugLog(`[SESSION LOG] Header validation passed: 0x${packet.header.toString(16).padStart(2, '0')}`);
+    debugLog(`[TX LOG] Header validation passed: 0x${metadata.header.toString(16).padStart(2, '0')}`);
     
     // VALIDATION STEP 2: Validate this message is for our channel by comparing channel hash
     // Channel message payload structure: [1 byte channel_hash][2 bytes MAC][encrypted message]
-    if (packet.payload.length < 3) {
-      debugLog(`[SESSION LOG] Ignoring: payload too short to contain channel hash`);
+    if (metadata.encryptedPayload.length < 3) {
+      debugLog(`[TX LOG] Ignoring: payload too short to contain channel hash`);
       return false;
     }
     
-    const packetChannelHash = packet.payload[0];
-    debugLog(`[SESSION LOG] Message correlation check: packet_channel_hash=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')}`);
+    const packetChannelHash = metadata.encryptedPayload[0];
+    debugLog(`[TX LOG] Message correlation check: packet_channel_hash=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')}`);
     
     if (packetChannelHash !== expectedChannelHash) {
-      debugLog(`[SESSION LOG] Ignoring: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')})`);
+      debugLog(`[TX LOG] Ignoring: channel hash mismatch (packet=0x${packetChannelHash.toString(16).padStart(2, '0')}, expected=0x${expectedChannelHash.toString(16).padStart(2, '0')})`);
       return false;
     }
     
-    debugLog(`[SESSION LOG] Channel hash match confirmed - this is a message on our channel`);
+    debugLog(`[TX LOG] Channel hash match confirmed - this is a message on our channel`);
     
     // VALIDATION STEP 3: Decrypt and verify message content matches what we sent
     // This ensures we're tracking echoes of OUR specific ping, not other messages on the channel
@@ -1938,7 +2290,7 @@ async function handleSessionLogTracking(packet, data) {
     
     if (WARDRIVING_CHANNEL_KEY) {
       debugLog(`[MESSAGE_CORRELATION] Channel key available, attempting decryption...`);
-      const decryptedMessage = await decryptGroupTextPayload(packet.payload, WARDRIVING_CHANNEL_KEY);
+      const decryptedMessage = await decryptGroupTextPayload(metadata.encryptedPayload, WARDRIVING_CHANNEL_KEY);
       
       if (decryptedMessage === null) {
         debugLog(`[MESSAGE_CORRELATION] ❌ REJECT: Failed to decrypt message`);
@@ -1973,8 +2325,8 @@ async function handleSessionLogTracking(packet, data) {
     // VALIDATION STEP 4: Check path length (repeater echo vs direct transmission)
     // For channel messages, the path contains repeater hops
     // Each hop in the path is 1 byte (repeater ID)
-    if (packet.path.length === 0) {
-      debugLog(`[SESSION LOG] Ignoring: no path (direct transmission, not a repeater echo)`);
+    if (metadata.pathLength === 0) {
+      debugLog(`[TX LOG] Ignoring: no path (direct transmission, not a repeater echo)`);
       return false;
     }
     
@@ -1982,49 +2334,51 @@ async function handleSessionLogTracking(packet, data) {
     // The path may contain multiple hops (e.g., [0x22, 0xd0, 0x5d, 0x46, 0x8b])
     // but we only care about the first repeater that echoed our message
     // Example: path [0x22, 0xd0, 0x5d] becomes "22" (only first hop)
-    const firstHopId = packet.path[0];
+    const firstHopId = metadata.firstHop;
     const pathHex = firstHopId.toString(16).padStart(2, '0');
     
-    debugLog(`[PING] Repeater echo accepted: first_hop=${pathHex}, SNR=${data.lastSnr}, full_path_length=${packet.path.length}`);
+    debugLog(`[PING] Repeater echo accepted: first_hop=${pathHex}, SNR=${metadata.snr}, full_path_length=${metadata.pathLength}`);
     
     // Check if we already have this path
-    if (state.repeaterTracking.repeaters.has(pathHex)) {
-      const existing = state.repeaterTracking.repeaters.get(pathHex);
-      debugLog(`[PING] Deduplication: path ${pathHex} already seen (existing SNR=${existing.snr}, new SNR=${data.lastSnr})`);
+    if (state.txTracking.repeaters.has(pathHex)) {
+      const existing = state.txTracking.repeaters.get(pathHex);
+      debugLog(`[PING] Deduplication: path ${pathHex} already seen (existing SNR=${existing.snr}, new SNR=${metadata.snr})`);
       
       // Keep the best (highest) SNR
-      if (data.lastSnr > existing.snr) {
-        debugLog(`[PING] Deduplication decision: updating path ${pathHex} with better SNR: ${existing.snr} -> ${data.lastSnr}`);
-        state.repeaterTracking.repeaters.set(pathHex, {
-          snr: data.lastSnr,
-          seenCount: existing.seenCount + 1
+      if (metadata.snr > existing.snr) {
+        debugLog(`[PING] Deduplication decision: updating path ${pathHex} with better SNR: ${existing.snr} -> ${metadata.snr}`);
+        state.txTracking.repeaters.set(pathHex, {
+          snr: metadata.snr,
+          seenCount: existing.seenCount + 1,
+          metadata: metadata  // Store full metadata for debug mode
         });
         
         // Trigger incremental UI update since SNR changed
-        updateCurrentLogEntryWithLiveRepeaters();
+        updateCurrentTxLogEntryWithLiveRepeaters();
       } else {
-        debugLog(`[PING] Deduplication decision: keeping existing SNR for path ${pathHex} (existing ${existing.snr} >= new ${data.lastSnr})`);
+        debugLog(`[PING] Deduplication decision: keeping existing SNR for path ${pathHex} (existing ${existing.snr} >= new ${metadata.snr})`);
         // Still increment seen count
         existing.seenCount++;
       }
     } else {
       // New path
-      debugLog(`[PING] Adding new repeater echo: path=${pathHex}, SNR=${data.lastSnr}`);
-      state.repeaterTracking.repeaters.set(pathHex, {
-        snr: data.lastSnr,
-        seenCount: 1
+      debugLog(`[PING] Adding new repeater echo: path=${pathHex}, SNR=${metadata.snr}`);
+      state.txTracking.repeaters.set(pathHex, {
+        snr: metadata.snr,
+        seenCount: 1,
+        metadata: metadata  // Store full metadata for debug mode
       });
       
       // Trigger incremental UI update for the new repeater
-      updateCurrentLogEntryWithLiveRepeaters();
+      updateCurrentTxLogEntryWithLiveRepeaters();
     }
     
     // Successfully tracked this echo
-    debugLog(`[SESSION LOG] ✅ Echo tracked successfully`);
+    debugLog(`[TX LOG] ✅ Echo tracked successfully`);
     return true;
     
   } catch (error) {
-    debugError(`[SESSION LOG] Error processing rx_log entry: ${error.message}`, error);
+    debugError(`[TX LOG] Error processing rx_log entry: ${error.message}`, error);
     return false;
   }
 }
@@ -2033,8 +2387,8 @@ async function handleSessionLogTracking(packet, data) {
  * Stop listening for repeater echoes and return the results
  * @returns {Array<{repeaterId: string, snr: number}>} Array of repeater telemetry
  */
-function stopRepeaterTracking() {
-  if (!state.repeaterTracking.isListening) {
+function stopTxTracking() {
+  if (!state.txTracking.isListening) {
     return [];
   }
   
@@ -2043,10 +2397,11 @@ function stopRepeaterTracking() {
   // No need to unregister handler - unified handler continues running
   // Just clear the tracking state
   
-  // Get the results
-  const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
+  // Get the results with full data (including metadata for debug mode)
+  const repeaters = Array.from(state.txTracking.repeaters.entries()).map(([id, data]) => ({
     repeaterId: id,
-    snr: data.snr
+    snr: data.snr,
+    metadata: data.metadata  // Include metadata for debug mode
   }));
   
   // Sort by repeater ID for deterministic output
@@ -2055,12 +2410,12 @@ function stopRepeaterTracking() {
   debugLog(`[PING] Final aggregated repeater list: ${repeaters.length > 0 ? repeaters.map(r => `${r.repeaterId}(${r.snr}dB)`).join(', ') : 'none'}`);
   
   // Reset state
-  state.repeaterTracking.isListening = false;
-  state.repeaterTracking.sentTimestamp = null;
-  state.repeaterTracking.sentPayload = null;
-  state.repeaterTracking.repeaters.clear();
-  state.repeaterTracking.rxLogHandler = null; // Kept for compatibility
-  state.repeaterTracking.currentLogEntry = null;
+  state.txTracking.isListening = false;
+  state.txTracking.sentTimestamp = null;
+  state.txTracking.sentPayload = null;
+  state.txTracking.repeaters.clear();
+  state.txTracking.rxLogHandler = null; // Kept for compatibility
+  state.txTracking.currentLogEntry = null;
   
   return repeaters;
 }
@@ -2089,107 +2444,137 @@ function formatRepeaterTelemetry(repeaters) {
  */
 async function handleUnifiedRxLogEvent(data) {
   try {
-    debugLog(`[UNIFIED RX] Received rx_log entry: SNR=${data.lastSnr}, RSSI=${data.lastRssi}`);
-    
-    // Parse the packet from raw data (once for both handlers)
-    const packet = Packet.fromBytes(data.raw);
-    
-    // Log header for debugging (informational for all packet processing)
-    debugLog(`[UNIFIED RX] Packet header: 0x${packet.header.toString(16).padStart(2, '0')}`);
-    
-    // DELEGATION: If Session Log is actively tracking, delegate to it first
-    // Session Log requires header validation (CHANNEL_GROUP_TEXT_HEADER) and will handle validation internally
-    if (state.repeaterTracking.isListening) {
-      debugLog(`[UNIFIED RX] Session Log is tracking - delegating to Session Log handler`);
-      const wasTracked = await handleSessionLogTracking(packet, data);
-      
-      if (wasTracked) {
-        debugLog(`[UNIFIED RX] Packet was an echo and tracked by Session Log`);
-        return; // Echo handled, done
-      }
-      
-      debugLog(`[UNIFIED RX] Packet was not an echo, continuing to Passive RX processing`);
+    // Defensive check: ensure listener is marked as active
+    if (!state.rxTracking.isListening) {
+      debugWarn("[UNIFIED RX] Received event but listener marked inactive - reactivating");
+      state.rxTracking.isListening = true;
     }
     
-    // DELEGATION: Handle passive RX logging for all other cases
-    // Passive RX accepts any packet regardless of header type
-    await handlePassiveRxLogging(packet, data);
+    // Parse metadata ONCE
+    const metadata = parseRxPacketMetadata(data);
+    
+    debugLog(`[UNIFIED RX] Packet received: header=0x${metadata.header.toString(16)}, pathLength=${metadata.pathLength}`);
+    
+    // Route to TX tracking if active (during 7s echo window)
+    if (state.txTracking.isListening) {
+      debugLog("[UNIFIED RX] TX tracking active - checking for echo");
+      const wasEcho = await handleTxLogging(metadata, data);
+      if (wasEcho) {
+        debugLog("[UNIFIED RX] Packet was TX echo, done");
+        return;
+      }
+    }
+    
+    // Route to RX wardriving if active (when TX/RX Auto OR RX Auto enabled)
+    if (state.rxTracking.isWardriving) {
+      debugLog("[UNIFIED RX] RX wardriving active - logging observation");
+      await handleRxLogging(metadata, data);
+    }
+    
+    // If neither active, packet is received but ignored
+    // Listener stays on, just not processing for wardriving
     
   } catch (error) {
-    debugError(`[UNIFIED RX] Error processing rx_log entry: ${error.message}`, error);
+    debugError("[UNIFIED RX] Error processing rx_log entry", error);
   }
 }
 
 /**
  * Handle passive RX logging - monitors all incoming packets not handled by Session Log
  * Extracts the LAST hop from the path (direct repeater) and records observation
- * @param {Object} packet - Parsed packet from Packet.fromBytes
+ * @param {Object} metadata - Parsed metadata from parseRxPacketMetadata()
  * @param {Object} data - The LogRxData event data (contains lastSnr, lastRssi, raw)
  */
-async function handlePassiveRxLogging(packet, data) {
+async function handleRxLogging(metadata, data) {
   try {
-    debugLog(`[PASSIVE RX] Processing packet for passive logging`);
+    debugLog(`[RX LOG] Processing packet for passive logging`);
     
     // VALIDATION: Check path length (need at least one hop)
     // A packet's path array contains the sequence of repeater IDs that forwarded the message.
     // Packets with no path are direct transmissions (node-to-node) and don't provide
     // information about repeater coverage, so we skip them for RX wardriving purposes.
-    if (packet.path.length === 0) {
-      debugLog(`[PASSIVE RX] Ignoring: no path (direct transmission, not via repeater)`);
+    if (metadata.pathLength === 0) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
+      debugLog(`[RX LOG] Ignoring: no path (direct transmission, not via repeater)`);
+      return;
+    }
+    
+    // Get current GPS location (must have GPS before further validation)
+    if (!state.lastFix) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
+      debugLog(`[RX LOG] No GPS fix available, skipping entry`);
+      return;
+    }
+    
+    // PACKET FILTER: Validate packet before logging
+    const validation = await validateRxPacket(metadata);
+    if (!validation.valid) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
+      const rawHex = Array.from(metadata.raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+      debugLog(`[RX LOG] ❌ Packet dropped: ${validation.reason}`);
+      debugLog(`[RX LOG] Dropped packet hex: ${rawHex}`);
       return;
     }
     
     // Extract LAST hop from path (the repeater that directly delivered to us)
-    const lastHopId = packet.path[packet.path.length - 1];
+    const lastHopId = metadata.lastHop;
     const repeaterId = lastHopId.toString(16).padStart(2, '0');
     
-    debugLog(`[PASSIVE RX] Packet heard via last hop: ${repeaterId}, SNR=${data.lastSnr}, path_length=${packet.path.length}`);
-    
-    // Get current GPS location
-    if (!state.lastFix) {
-      debugLog(`[PASSIVE RX] No GPS fix available, skipping entry`);
-      return;
-    }
+    debugLog(`[RX LOG] Packet heard via last hop: ${repeaterId}, SNR=${metadata.snr}, path_length=${metadata.pathLength}`);
+    debugLog(`[RX LOG] ✅ Packet validated and passed filter`);
     
     const lat = state.lastFix.lat;
     const lon = state.lastFix.lon;
     const timestamp = new Date().toISOString();
     
     // Add entry to RX log (including RSSI, path length, and header for CSV export)
-    addRxLogEntry(repeaterId, data.lastSnr, data.lastRssi, packet.path.length, packet.header, lat, lon, timestamp);
+    addRxLogEntry(repeaterId, metadata.snr, metadata.rssi, metadata.pathLength, metadata.header, lat, lon, timestamp);
     
-    debugLog(`[PASSIVE RX] ✅ Observation logged: repeater=${repeaterId}, snr=${data.lastSnr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
+    debugLog(`[RX LOG] ✅ Observation logged: repeater=${repeaterId}, snr=${metadata.snr}, location=${lat.toFixed(5)},${lon.toFixed(5)}`);
     
-    // Handle batch tracking for API (parallel batch per repeater)
-    handlePassiveRxForAPI(repeaterId, data.lastSnr, { lat, lon });
+    // Handle tracking for API (best SNR with distance trigger)
+    handleRxBatching(
+      repeaterId, 
+      metadata.snr, 
+      metadata.rssi, 
+      metadata.pathLength, 
+      metadata.header, 
+      { lat, lon }, 
+      metadata
+    );
     
   } catch (error) {
-    debugError(`[PASSIVE RX] Error processing passive RX: ${error.message}`, error);
+    debugError(`[RX LOG] Error processing passive RX: ${error.message}`, error);
   }
 }
 
 
 
 /**
- * Start unified RX listening - handles both Session Log tracking and passive RX logging
+ * Start unified RX listening - handles both TX Log tracking and RX logging
+ * Idempotent: safe to call multiple times
  */
 function startUnifiedRxListening() {
-  if (state.passiveRxTracking.isListening) {
+  // Idempotent: safe to call multiple times
+  if (state.rxTracking.isListening && state.rxTracking.rxLogHandler) {
     debugLog(`[UNIFIED RX] Already listening, skipping start`);
     return;
   }
   
   if (!state.connection) {
-    debugWarn(`[UNIFIED RX] Cannot start listening: no connection`);
+    debugWarn(`[UNIFIED RX] Cannot start: no connection`);
     return;
   }
   
   debugLog(`[UNIFIED RX] Starting unified RX listening`);
   
   const handler = (data) => handleUnifiedRxLogEvent(data);
-  state.passiveRxTracking.rxLogHandler = handler;
+  state.rxTracking.rxLogHandler = handler;
   state.connection.on(Constants.PushCodes.LogRxData, handler);
-  state.passiveRxTracking.isListening = true;
+  state.rxTracking.isListening = true;
   
   debugLog(`[UNIFIED RX] ✅ Unified listening started successfully`);
 }
@@ -2198,19 +2583,20 @@ function startUnifiedRxListening() {
  * Stop unified RX listening
  */
 function stopUnifiedRxListening() {
-  if (!state.passiveRxTracking.isListening) {
+  if (!state.rxTracking.isListening) {
     return;
   }
   
   debugLog(`[UNIFIED RX] Stopping unified RX listening`);
   
-  if (state.connection && state.passiveRxTracking.rxLogHandler) {
-    state.connection.off(Constants.PushCodes.LogRxData, state.passiveRxTracking.rxLogHandler);
+  if (state.connection && state.rxTracking.rxLogHandler) {
+    state.connection.off(Constants.PushCodes.LogRxData, state.rxTracking.rxLogHandler);
     debugLog(`[UNIFIED RX] Unregistered LogRxData event handler`);
   }
   
-  state.passiveRxTracking.isListening = false;
-  state.passiveRxTracking.rxLogHandler = null;
+  state.rxTracking.isListening = false;
+  state.rxTracking.isWardriving = false;  // Also disable wardriving
+  state.rxTracking.rxLogHandler = null;
   
   debugLog(`[UNIFIED RX] ✅ Unified listening stopped`);
 }
@@ -2223,7 +2609,7 @@ function stopUnifiedRxListening() {
  */
 async function postRxLogToMeshMapperAPI(entries) {
   if (!MESHMAPPER_RX_LOG_API_URL) {
-    debugLog('[PASSIVE RX] RX Log API posting not configured yet');
+    debugLog('[RX LOG] RX Log API posting not configured yet');
     return;
   }
   
@@ -2231,161 +2617,192 @@ async function postRxLogToMeshMapperAPI(entries) {
   // - Batch post accumulated RX log entries
   // - Include session_id from state.wardriveSessionId
   // - Format: { observations: [{ repeaterId, snr, lat, lon, timestamp }] }
-  debugLog(`[PASSIVE RX] Would post ${entries.length} RX log entries to API (not implemented yet)`);
+  debugLog(`[RX LOG] Would post ${entries.length} RX log entries to API (not implemented yet)`);
 }
 
 // ---- Passive RX Batch API Integration ----
 
 /**
  * Handle passive RX event for API batching
- * Each repeater is tracked independently with its own batch and timer
+ * Tracks best SNR observation per repeater with distance-based trigger
  * @param {string} repeaterId - Repeater ID (hex string)
  * @param {number} snr - Signal to noise ratio
+ * @param {number} rssi - Received signal strength indicator
+ * @param {number} pathLength - Number of hops in the path
+ * @param {number} header - Packet header byte
  * @param {Object} currentLocation - Current GPS location {lat, lon}
+ * @param {Object} metadata - Parsed metadata for debug mode
  */
-function handlePassiveRxForAPI(repeaterId, snr, currentLocation) {
-  debugLog(`[RX BATCH] Processing RX event: repeater=${repeaterId}, snr=${snr}`);
+function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLocation, metadata) {
+  // Get or create buffer entry for this repeater
+  let buffer = state.rxBatchBuffer.get(repeaterId);
   
-  // Get or create batch for this repeater
-  let batch = state.rxBatchBuffer.get(repeaterId);
-  
-  if (!batch) {
-    // First RX from this repeater - create new batch
-    debugLog(`[RX BATCH] Creating new batch for repeater ${repeaterId}`);
-    batch = {
+  if (!buffer) {
+    // First time hearing this repeater - create new entry
+    buffer = {
       firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
-      firstTimestamp: Date.now(),
-      samples: [],
-      timeoutId: null
+      bestObservation: {
+        snr,
+        rssi,
+        pathLength,
+        header,
+        lat: currentLocation.lat,
+        lon: currentLocation.lon,
+        timestamp: Date.now(),
+        metadata: metadata  // Store full metadata for debug mode
+      }
     };
-    state.rxBatchBuffer.set(repeaterId, batch);
-    
-    // Set timeout for this repeater (independent timer)
-    batch.timeoutId = setTimeout(() => {
-      debugLog(`[RX BATCH] Timeout triggered for repeater ${repeaterId} after ${RX_BATCH_TIMEOUT_MS}ms`);
-      flushBatch(repeaterId, 'timeout');
-    }, RX_BATCH_TIMEOUT_MS);
-    
-    debugLog(`[RX BATCH] Timeout set for repeater ${repeaterId}: ${RX_BATCH_TIMEOUT_MS}ms`);
+    state.rxBatchBuffer.set(repeaterId, buffer);
+    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}`);
+  } else {
+    // Already tracking this repeater - check if new SNR is better
+    if (snr > buffer.bestObservation.snr) {
+      debugLog(`[RX BATCH] Better SNR for repeater ${repeaterId}: ${buffer.bestObservation.snr} -> ${snr}`);
+      buffer.bestObservation = {
+        snr,
+        rssi,
+        pathLength,
+        header,
+        lat: currentLocation.lat,
+        lon: currentLocation.lon,
+        timestamp: Date.now(),
+        metadata: metadata  // Store full metadata for debug mode
+      };
+    } else {
+      debugLog(`[RX BATCH] Ignoring worse SNR for repeater ${repeaterId}: current=${buffer.bestObservation.snr}, new=${snr}`);
+    }
   }
   
-  // Add sample to batch
-  const sample = {
-    snr,
-    location: { lat: currentLocation.lat, lng: currentLocation.lon },
-    timestamp: Date.now()
-  };
-  batch.samples.push(sample);
-  
-  debugLog(`[RX BATCH] Sample added to batch for repeater ${repeaterId}: sample_count=${batch.samples.length}`);
-  
-  // Check distance trigger (has user moved >= RX_BATCH_DISTANCE_M from first location?)
+  // Check distance trigger (25m from firstLocation)
   const distance = calculateHaversineDistance(
     currentLocation.lat,
     currentLocation.lon,
-    batch.firstLocation.lat,
-    batch.firstLocation.lng
+    buffer.firstLocation.lat,
+    buffer.firstLocation.lng
   );
   
-  debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first location (threshold=${RX_BATCH_DISTANCE_M}m)`);
+  debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
   
   if (distance >= RX_BATCH_DISTANCE_M) {
-    debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing batch`);
-    flushBatch(repeaterId, 'distance');
+    debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, flushing`);
+    flushRepeater(repeaterId);
   }
 }
 
 /**
- * Flush a single repeater's batch - aggregate and post to API
- * @param {string} repeaterId - Repeater ID to flush
- * @param {string} trigger - What caused the flush: 'distance' | 'timeout' | 'session_end'
+ * Check all active RX batches for distance threshold on GPS position update
+ * Called from GPS watch callback when position changes
+ * @param {Object} currentLocation - Current GPS location {lat, lon}
  */
-function flushBatch(repeaterId, trigger) {
-  debugLog(`[RX BATCH] Flushing batch for repeater ${repeaterId}, trigger=${trigger}`);
+function checkAllRxBatchesForDistanceTrigger(currentLocation) {
+  if (state.rxBatchBuffer.size === 0) {
+    return; // No active batches to check
+  }
   
-  const batch = state.rxBatchBuffer.get(repeaterId);
-  if (!batch || batch.samples.length === 0) {
-    debugLog(`[RX BATCH] No batch to flush for repeater ${repeaterId}`);
+  debugLog(`[RX BATCH] GPS position updated, checking ${state.rxBatchBuffer. size} active batches for distance trigger`);
+  
+  const repeatersToFlush = [];
+  
+  // Check each active batch
+  for (const [repeaterId, buffer] of state.rxBatchBuffer. entries()) {
+    const distance = calculateHaversineDistance(
+      currentLocation.lat,
+      currentLocation.lon,
+      buffer.firstLocation.lat,
+      buffer.firstLocation.lng
+    );
+    
+    debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}:  ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
+    
+    if (distance >= RX_BATCH_DISTANCE_M) {
+      debugLog(`[RX BATCH] Distance threshold met for repeater ${repeaterId}, marking for flush`);
+      repeatersToFlush.push(repeaterId);
+    }
+  }
+  
+  // Flush all repeaters that met the distance threshold
+  for (const repeaterId of repeatersToFlush) {
+    flushRepeater(repeaterId);
+  }
+  
+  if (repeatersToFlush.length > 0) {
+    debugLog(`[RX BATCH] Flushed ${repeatersToFlush.length} repeater(s) due to GPS movement`);
+  }
+}
+
+/**
+ * Flush a single repeater's batch - post best observation to API
+ * @param {string} repeaterId - Repeater ID to flush
+ */
+function flushRepeater(repeaterId) {
+  debugLog(`[RX BATCH] Flushing repeater ${repeaterId}`);
+  
+  const buffer = state.rxBatchBuffer.get(repeaterId);
+  if (!buffer) {
+    debugLog(`[RX BATCH] No buffer to flush for repeater ${repeaterId}`);
     return;
   }
   
-  // Clear timeout if it exists
-  if (batch.timeoutId) {
-    clearTimeout(batch.timeoutId);
-    debugLog(`[RX BATCH] Cleared timeout for repeater ${repeaterId}`);
-  }
+  const best = buffer.bestObservation;
   
-  // Calculate aggregations
-  const snrValues = batch.samples.map(s => s.snr);
-  const snrAvg = snrValues.reduce((sum, val) => sum + val, 0) / snrValues.length;
-  const snrMax = Math.max(...snrValues);
-  const snrMin = Math.min(...snrValues);
-  const sampleCount = batch.samples.length;
-  const timestampStart = batch.firstTimestamp;
-  const timestampEnd = batch.samples[batch.samples.length - 1].timestamp;
-  
-  // Build API entry
+  // Build API entry using BEST observation's location
   const entry = {
     repeater_id: repeaterId,
-    location: batch.firstLocation,
-    snr_avg: parseFloat(snrAvg.toFixed(3)),
-    snr_max: parseFloat(snrMax.toFixed(3)),
-    snr_min: parseFloat(snrMin.toFixed(3)),
-    sample_count: sampleCount,
-    timestamp_start: timestampStart,
-    timestamp_end: timestampEnd,
-    trigger: trigger
+    location: { lat: best.lat, lng: best.lon },  // Location of BEST SNR packet
+    snr: best.snr,
+    rssi: best.rssi,
+    pathLength: best.pathLength,
+    header: best.header,
+    timestamp: best.timestamp,
+    metadata: best.metadata  // For debug mode
   };
   
-  debugLog(`[RX BATCH] Aggregated entry for repeater ${repeaterId}:`, entry);
-  debugLog(`[RX BATCH]   snr_avg=${snrAvg.toFixed(3)}, snr_max=${snrMax.toFixed(3)}, snr_min=${snrMin.toFixed(3)}`);
-  debugLog(`[RX BATCH]   sample_count=${sampleCount}, duration=${((timestampEnd - timestampStart) / 1000).toFixed(1)}s`);
+  debugLog(`[RX BATCH] Posting repeater ${repeaterId}: snr=${best.snr}, location=${best.lat.toFixed(5)},${best.lon.toFixed(5)}`);
   
   // Queue for API posting
-  queueApiPost(entry);
+  queueRxApiPost(entry);
   
-  // Remove batch from buffer (cleanup)
+  // Remove from buffer
   state.rxBatchBuffer.delete(repeaterId);
-  debugLog(`[RX BATCH] Batch removed from buffer for repeater ${repeaterId}`);
+  debugLog(`[RX BATCH] Repeater ${repeaterId} removed from buffer`);
 }
 
 /**
  * Flush all active batches (called on session end, disconnect, etc.)
  * @param {string} trigger - What caused the flush: 'session_end' | 'disconnect' | etc.
  */
-function flushAllBatches(trigger = 'session_end') {
-  debugLog(`[RX BATCH] Flushing all batches, trigger=${trigger}, active_batches=${state.rxBatchBuffer.size}`);
+function flushAllRxBatches(trigger = 'session_end') {
+  debugLog(`[RX BATCH] Flushing all repeaters, trigger=${trigger}, active_repeaters=${state.rxBatchBuffer.size}`);
   
   if (state.rxBatchBuffer.size === 0) {
-    debugLog(`[RX BATCH] No batches to flush`);
+    debugLog(`[RX BATCH] No repeaters to flush`);
     return;
   }
   
-  // Iterate all repeater batches and flush each one
+  // Iterate all repeaters and flush each one
   const repeaterIds = Array.from(state.rxBatchBuffer.keys());
   for (const repeaterId of repeaterIds) {
-    flushBatch(repeaterId, trigger);
+    flushRepeater(repeaterId);
   }
   
-  debugLog(`[RX BATCH] All batches flushed: ${repeaterIds.length} repeaters`);
+  debugLog(`[RX BATCH] All repeaters flushed: ${repeaterIds.length} total`);
 }
 
 /**
  * Queue an entry for API posting
  * Uses the batch queue system to aggregate RX messages
- * @param {Object} entry - The aggregated entry to post
+ * @param {Object} entry - The entry to post (with best observation data)
  */
-function queueApiPost(entry) {
+function queueRxApiPost(entry) {
   // Validate session_id exists
   if (!state.wardriveSessionId) {
     debugWarn(`[RX BATCH API] Cannot queue: no session_id available`);
     return;
   }
   
-  // Build unified API payload (without WARDRIVE_TYPE yet)
-  // Format heard_repeats as "repeater_id(snr_avg)" - e.g., "4e(12.0)"
+  // Format heard_repeats as "repeater_id(snr)" - e.g., "4e(12.0)"
   // Use absolute value and format with one decimal place
-  const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr_avg).toFixed(1)})`;
+  const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr).toFixed(1)})`;
   
   const payload = {
     key: MESHMAPPER_API_KEY,
@@ -2393,6 +2810,7 @@ function queueApiPost(entry) {
     lon: entry.location.lng,
     who: getDeviceIdentifier(),
     power: getCurrentPowerSetting(),
+    external_antenna: getExternalAntennaSetting(),
     heard_repeats: heardRepeats,
     ver: APP_VERSION,
     test: 0,
@@ -2400,9 +2818,23 @@ function queueApiPost(entry) {
     session_id: state.wardriveSessionId
   };
   
+  // Add debug data if debug mode is enabled
+  if (state.debugMode && entry.metadata) {
+    debugLog(`[RX BATCH API] 🐛 Debug mode active - adding debug_data for RX`);
+    
+    // For RX, parsed_heard is the LAST byte of path
+    const lastHopId = entry.metadata.lastHop;
+    const heardByte = lastHopId.toString(16).padStart(2, '0').toUpperCase();
+    
+    const debugData = buildDebugData(entry.metadata, heardByte, entry.repeater_id);
+    payload.debug_data = debugData;
+    
+    debugLog(`[RX BATCH API] 🐛 RX payload includes debug_data for repeater ${entry.repeater_id}`);
+  }
+  
   // Queue message instead of posting immediately
   queueApiMessage(payload, "RX");
-  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr_avg.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
+  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -2542,67 +2974,67 @@ function createLogEntryElement(entry) {
 /**
  * Update summary bar with latest log data
  */
-function updateLogSummary() {
-  if (!logCount || !logLastTime || !logLastSnr) return;
+function updateTxLogSummary() {
+  if (!txLogCount || !txLogLastTime || !txLogLastSnr) return;
   
-  const count = sessionLogState.entries.length;
-  logCount.textContent = count === 1 ? '1 ping' : `${count} pings`;
+  const count = txLogState.entries.length;
+  txLogCount.textContent = count === 1 ? '1 ping' : `${count} pings`;
   
   if (count === 0) {
-    logLastTime.textContent = 'No data';
-    logLastSnr.textContent = '—';
-    debugLog('[SESSION LOG] Session log summary updated: no entries');
+    txLogLastTime.textContent = 'No data';
+    txLogLastSnr.textContent = '—';
+    debugLog('[TX LOG] Session log summary updated: no entries');
     return;
   }
   
-  const lastEntry = sessionLogState.entries[count - 1];
+  const lastEntry = txLogState.entries[count - 1];
   const date = new Date(lastEntry.timestamp);
-  logLastTime.textContent = date.toLocaleTimeString();
+  txLogLastTime.textContent = date.toLocaleTimeString();
   
   // Count total heard repeats in the latest ping
   const heardCount = lastEntry.events.length;
-  debugLog(`[SESSION LOG] Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
+  debugLog(`[TX LOG] Session log summary updated: ${count} total pings, latest ping heard ${heardCount} repeats`);
   
   if (heardCount > 0) {
-    logLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
-    logLastSnr.className = 'text-xs font-mono text-slate-300';
+    txLogLastSnr.textContent = heardCount === 1 ? '1 Repeat' : `${heardCount} Repeats`;
+    txLogLastSnr.className = 'text-xs font-mono text-slate-300';
   } else {
-    logLastSnr.textContent = '0 Repeats';
-    logLastSnr.className = 'text-xs font-mono text-slate-500';
+    txLogLastSnr.textContent = '0 Repeats';
+    txLogLastSnr.className = 'text-xs font-mono text-slate-500';
   }
 }
 
 /**
  * Render all log entries to the session log
  */
-function renderLogEntries() {
-  if (!sessionPingsEl) return;
+function renderTxLogEntries() {
+  if (!txPingsEl) return;
   
-  debugLog(`[UI] Rendering ${sessionLogState.entries.length} log entries`);
-  sessionPingsEl.innerHTML = '';
+  debugLog(`[UI] Rendering ${txLogState.entries.length} log entries`);
+  txPingsEl.innerHTML = '';
   
-  if (sessionLogState.entries.length === 0) {
+  if (txLogState.entries.length === 0) {
     // Show placeholder when no entries
     const placeholder = document.createElement('div');
     placeholder.className = 'text-xs text-slate-500 italic text-center py-4';
     placeholder.textContent = 'No pings logged yet';
-    sessionPingsEl.appendChild(placeholder);
+    txPingsEl.appendChild(placeholder);
     debugLog(`[UI] Rendered placeholder (no entries)`);
     return;
   }
   
   // Render newest first
-  const entries = [...sessionLogState.entries].reverse();
+  const entries = [...txLogState.entries].reverse();
   
   entries.forEach((entry, index) => {
     const element = createLogEntryElement(entry);
-    sessionPingsEl.appendChild(element);
-    debugLog(`[UI] Appended log entry ${index + 1}/${entries.length} to sessionPingsEl`);
+    txPingsEl.appendChild(element);
+    debugLog(`[UI] Appended log entry ${index + 1}/${entries.length} to txPingsEl`);
   });
   
   // Auto-scroll to top (newest)
-  if (sessionLogState.autoScroll && logScrollContainer) {
-    logScrollContainer.scrollTop = 0;
+  if (txLogState.autoScroll && txLogScrollContainer) {
+    txLogScrollContainer.scrollTop = 0;
     debugLog(`[UI] Auto-scrolled to top of log container`);
   }
   
@@ -2612,23 +3044,23 @@ function renderLogEntries() {
 /**
  * Toggle session log expanded/collapsed
  */
-function toggleBottomSheet() {
-  sessionLogState.isExpanded = !sessionLogState.isExpanded;
+function toggleTxLogBottomSheet() {
+  txLogState.isExpanded = !txLogState.isExpanded;
   
-  if (logBottomSheet) {
-    if (sessionLogState.isExpanded) {
-      logBottomSheet.classList.add('open');
-      logBottomSheet.classList.remove('hidden');
+  if (txLogBottomSheet) {
+    if (txLogState.isExpanded) {
+      txLogBottomSheet.classList.add('open');
+      txLogBottomSheet.classList.remove('hidden');
     } else {
-      logBottomSheet.classList.remove('open');
-      logBottomSheet.classList.add('hidden');
+      txLogBottomSheet.classList.remove('open');
+      txLogBottomSheet.classList.add('hidden');
     }
   }
   
   // Toggle arrow rotation
-  const logExpandArrow = document.getElementById('logExpandArrow');
+  const logExpandArrow = document.getElementById('txLogExpandArrow');
   if (logExpandArrow) {
-    if (sessionLogState.isExpanded) {
+    if (txLogState.isExpanded) {
       logExpandArrow.classList.add('expanded');
     } else {
       logExpandArrow.classList.remove('expanded');
@@ -2636,16 +3068,16 @@ function toggleBottomSheet() {
   }
   
   // Toggle copy button and status visibility
-  if (sessionLogState.isExpanded) {
+  if (txLogState.isExpanded) {
     // Hide status elements, show copy button
-    if (logLastSnr) logLastSnr.classList.add('hidden');
-    if (sessionLogCopyBtn) sessionLogCopyBtn.classList.remove('hidden');
-    debugLog('[SESSION LOG] Expanded - showing copy button, hiding status');
+    if (txLogLastSnr) txLogLastSnr.classList.add('hidden');
+    if (txLogCopyBtn) txLogCopyBtn.classList.remove('hidden');
+    debugLog('[TX LOG] Expanded - showing copy button, hiding status');
   } else {
     // Show status elements, hide copy button
-    if (logLastSnr) logLastSnr.classList.remove('hidden');
-    if (sessionLogCopyBtn) sessionLogCopyBtn.classList.add('hidden');
-    debugLog('[SESSION LOG] Collapsed - hiding copy button, showing status');
+    if (txLogLastSnr) txLogLastSnr.classList.remove('hidden');
+    if (txLogCopyBtn) txLogCopyBtn.classList.add('hidden');
+    debugLog('[TX LOG] Collapsed - hiding copy button, showing status');
   }
 }
 
@@ -2656,14 +3088,14 @@ function toggleBottomSheet() {
  * @param {string} lon - Longitude
  * @param {string} eventsStr - Events string (e.g., "4e(12),b7(0)" or "None")
  */
-function addLogEntry(timestamp, lat, lon, eventsStr) {
+function addTxLogEntry(timestamp, lat, lon, eventsStr) {
   const logLine = `${timestamp} | ${lat},${lon} | ${eventsStr}`;
   const entry = parseLogEntry(logLine);
   
   if (entry) {
-    sessionLogState.entries.push(entry);
-    renderLogEntries();
-    updateLogSummary();
+    txLogState.entries.push(entry);
+    renderTxLogEntries();
+    updateTxLogSummary();
   }
 }
 
@@ -2735,7 +3167,9 @@ function updateRxLogSummary() {
   if (!rxLogCount || !rxLogLastTime || !rxLogLastRepeater) return;
   
   const count = rxLogState.entries.length;
-  rxLogCount.textContent = count === 1 ? '1 observation' : `${count} observations`;
+  const dropText = `${rxLogState.dropCount} dropped`;
+  const obsText = count === 1 ? '1 observation' : `${count} observations`;
+  rxLogCount.textContent = `${obsText}, ${dropText}`;
   
   if (count === 0) {
     rxLogLastTime.textContent = 'No data';
@@ -3119,11 +3553,11 @@ function addErrorLogEntry(message, source = null) {
  * Columns: Timestamp,Latitude,Longitude,Repeater1_ID,Repeater1_SNR,Repeater2_ID,Repeater2_SNR,...
  * @returns {string} CSV formatted string
  */
-function sessionLogToCSV() {
-  debugLog('[SESSION LOG] Converting session log to CSV format');
+function txLogToCSV() {
+  debugLog('[TX LOG] Converting session log to CSV format');
   
-  if (sessionLogState.entries.length === 0) {
-    debugWarn('[SESSION LOG] No session log entries to export');
+  if (txLogState.entries.length === 0) {
+    debugWarn('[TX LOG] No session log entries to export');
     return 'Timestamp,Latitude,Longitude,Repeats\n';
   }
   
@@ -3131,7 +3565,7 @@ function sessionLogToCSV() {
   const header = 'Timestamp,Latitude,Longitude,Repeats\n';
   
   // Build CSV rows
-  const rows = sessionLogState.entries.map(entry => {
+  const rows = txLogState.entries.map(entry => {
     let row = `${entry.timestamp},${entry.lat},${entry.lon}`;
     
     // Combine all repeater data into single Repeats column
@@ -3149,7 +3583,7 @@ function sessionLogToCSV() {
   });
   
   const csv = header + rows.join('\n');
-  debugLog(`[SESSION LOG] CSV export complete: ${sessionLogState.entries.length} entries`);
+  debugLog(`[TX LOG] CSV export complete: ${txLogState.entries.length} entries`);
   return csv;
 }
 
@@ -3222,12 +3656,12 @@ async function copyLogToCSV(logType, button) {
     
     switch (logType) {
       case 'session':
-        csv = sessionLogToCSV();
-        logTag = '[SESSION LOG]';
+        csv = txLogToCSV();
+        logTag = '[TX LOG]';
         break;
       case 'rx':
         csv = rxLogToCSV();
-        logTag = '[PASSIVE RX UI]';
+        logTag = '[RX LOG UI]';
         break;
       case 'error':
         csv = errorLogToCSV();
@@ -3300,7 +3734,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
   if (isAutoMode) {
     // Auto mode: validate GPS freshness before sending
     if (!state.lastFix) {
-      debugWarn("[AUTO] Auto ping skipped: no GPS fix available yet");
+      debugWarn("[TX/RX AUTO] Auto ping skipped: no GPS fix available yet");
       setDynamicStatus("Waiting for GPS fix", STATUS_COLORS.warning);
       return null;
     }
@@ -3387,7 +3821,7 @@ async function getGpsCoordinatesForPing(isAutoMode) {
  * @param {number} lon - Longitude
  * @returns {Object|null} The log entry object for later updates, or null
  */
-function logPingToUI(payload, lat, lon) {
+function logTxPingToUI(payload, lat, lon) {
   // Use ISO format for data storage but user-friendly format for display
   const now = new Date();
   const isoStr = now.toISOString();
@@ -3405,7 +3839,7 @@ function logPingToUI(payload, lat, lon) {
   };
   
   // Add to session log (this will handle both mobile and desktop)
-  addLogEntry(logData.timestamp, logData.lat, logData.lon, logData.eventsStr);
+  addTxLogEntry(logData.timestamp, logData.lat, logData.lon, logData.eventsStr);
   
   return logData;
 }
@@ -3415,13 +3849,13 @@ function logPingToUI(payload, lat, lon) {
  * @param {Object|null} logData - The log data object to update
  * @param {Array<{repeaterId: string, snr: number}>} repeaters - Array of repeater telemetry
  */
-function updatePingLogWithRepeaters(logData, repeaters) {
+function updateTxLogWithRepeaters(logData, repeaters) {
   if (!logData) return;
   
   const repeaterStr = formatRepeaterTelemetry(repeaters);
   
-  // Find and update the entry in sessionLogState
-  const entryIndex = sessionLogState.entries.findIndex(
+  // Find and update the entry in txLogState
+  const entryIndex = txLogState.entries.findIndex(
     e => e.timestamp === logData.timestamp && e.lat === logData.lat && e.lon === logData.lon
   );
   
@@ -3431,9 +3865,9 @@ function updatePingLogWithRepeaters(logData, repeaters) {
     const updatedEntry = parseLogEntry(logLine);
     
     if (updatedEntry) {
-      sessionLogState.entries[entryIndex] = updatedEntry;
-      renderLogEntries();
-      updateLogSummary();
+      txLogState.entries[entryIndex] = updatedEntry;
+      renderTxLogEntries();
+      updateTxLogSummary();
     }
   }
   
@@ -3444,16 +3878,16 @@ function updatePingLogWithRepeaters(logData, repeaters) {
  * Incrementally update the current ping log entry as repeaters are detected
  * This provides real-time updates during the RX listening window
  */
-function updateCurrentLogEntryWithLiveRepeaters() {
+function updateCurrentTxLogEntryWithLiveRepeaters() {
   // Only update if we're actively listening and have a current log entry
-  if (!state.repeaterTracking.isListening || !state.repeaterTracking.currentLogEntry) {
+  if (!state.txTracking.isListening || !state.txTracking.currentLogEntry) {
     return;
   }
   
-  const logData = state.repeaterTracking.currentLogEntry;
+  const logData = state.txTracking.currentLogEntry;
   
   // Convert current repeaters Map to array format
-  const repeaters = Array.from(state.repeaterTracking.repeaters.entries()).map(([id, data]) => ({
+  const repeaters = Array.from(state.txTracking.repeaters.entries()).map(([id, data]) => ({
     repeaterId: id,
     snr: data.snr
   }));
@@ -3461,8 +3895,8 @@ function updateCurrentLogEntryWithLiveRepeaters() {
   // Sort by repeater ID for deterministic output
   repeaters.sort((a, b) => a.repeaterId.localeCompare(b.repeaterId));
   
-  // Reuse the existing updatePingLogWithRepeaters function
-  updatePingLogWithRepeaters(logData, repeaters);
+  // Reuse the existing updateTxLogWithRepeaters function
+  updateTxLogWithRepeaters(logData, repeaters);
   
   debugLog(`[PING] Incrementally updated ping log entry: ${repeaters.length} repeater(s) detected so far`);
 }
@@ -3483,12 +3917,12 @@ async function sendPing(manual = false) {
     }
 
     // Handle countdown timers based on ping type
-    if (manual && state.running) {
+    if (manual && state.txRxAutoRunning) {
       // Manual ping during auto mode: pause the auto countdown
       debugLog("[PING] Manual ping during auto mode - pausing auto countdown");
       pauseAutoCountdown();
       setDynamicStatus("Sending manual ping", STATUS_COLORS.info);
-    } else if (!manual && state.running) {
+    } else if (!manual && state.txRxAutoRunning) {
       // Auto ping: stop the countdown timer to avoid status conflicts
       stopAutoCountdown();
       setDynamicStatus("Sending auto ping", STATUS_COLORS.info);
@@ -3498,11 +3932,11 @@ async function sendPing(manual = false) {
     }
 
     // Get GPS coordinates
-    const coords = await getGpsCoordinatesForPing(!manual && state.running);
+    const coords = await getGpsCoordinatesForPing(!manual && state.txRxAutoRunning);
     if (!coords) {
       // GPS not available, message already shown
       // For auto mode, schedule next attempt
-      if (!manual && state.running) {
+      if (!manual && state.txRxAutoRunning) {
         scheduleNextAutoPing();
       }
       // For manual ping during auto mode, resume the paused countdown
@@ -3527,7 +3961,7 @@ async function sendPing(manual = false) {
         setDynamicStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
         // If auto mode is running, resume the paused countdown
         handleManualPingBlockedDuringAutoMode();
-      } else if (state.running) {
+      } else if (state.txRxAutoRunning) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
       }
@@ -3549,7 +3983,7 @@ async function sendPing(manual = false) {
         setDynamicStatus("Ping skipped, too close to last ping", STATUS_COLORS.warning);
         // If auto mode is running, resume the paused countdown
         handleManualPingBlockedDuringAutoMode();
-      } else if (state.running) {
+      } else if (state.txRxAutoRunning) {
         // Auto ping: schedule next ping and show countdown with skip message
         scheduleNextAutoPing();
       }
@@ -3577,7 +4011,7 @@ async function sendPing(manual = false) {
     
     // Start repeater echo tracking BEFORE sending the ping
     debugLog(`[PING] Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
-    startRepeaterTracking(payload, ch.channelIdx);
+    startTxTracking(payload, ch.channelIdx);
     
     await state.connection.sendChannelTextMessage(ch.channelIdx, payload);
     debugLog(`[PING] Ping sent successfully to channel ${ch.channelIdx}`);
@@ -3597,10 +4031,10 @@ async function sendPing(manual = false) {
     setDynamicStatus("Ping sent", STATUS_COLORS.success);
     
     // Create UI log entry with placeholder for repeater data
-    const logEntry = logPingToUI(payload, lat, lon);
+    const logEntry = logTxPingToUI(payload, lat, lon);
     
     // Store log entry in repeater tracking state for incremental updates
-    state.repeaterTracking.currentLogEntry = logEntry;
+    state.txTracking.currentLogEntry = logEntry;
     
     // Start RX listening countdown
     // The minimum 500ms visibility of "Ping sent" is enforced by setStatus()
@@ -3620,28 +4054,34 @@ async function sendPing(manual = false) {
       stopRxListeningCountdown();
       
       // Stop repeater tracking and get final results
-      const repeaters = stopRepeaterTracking();
+      const repeaters = stopTxTracking();
       debugLog(`[PING] Finalized heard repeats: ${repeaters.length} unique paths detected`);
       
       // Update UI log with repeater data
-      updatePingLogWithRepeaters(logEntry, repeaters);
+      updateTxLogWithRepeaters(logEntry, repeaters);
       
       // Format repeater data for API
       const heardRepeatsStr = formatRepeaterTelemetry(repeaters);
       debugLog(`[PING] Formatted heard_repeats for API: "${heardRepeatsStr}"`);
       
+      // Store repeater data temporarily for debug mode
+      if (state.debugMode) {
+        state.tempTxRepeaterData = repeaters;
+        debugLog(`[PING] 🐛 Stored ${repeaters.length} repeater(s) data for debug mode`);
+      }
+      
       // Update status and start next timer IMMEDIATELY (before API post)
       // This is the key change: we don't wait for API to complete
       if (state.connection) {
-        if (state.running) {
+        if (state.txRxAutoRunning) {
           // Check if we should resume a paused auto countdown (manual ping during auto mode)
           const resumed = resumeAutoCountdown();
           if (!resumed) {
             // No paused timer to resume, schedule new auto ping (this was an auto ping)
-            debugLog("[AUTO] Scheduling next auto ping immediately after RX window");
+            debugLog("[TX/RX AUTO] Scheduling next auto ping immediately after RX window");
             scheduleNextAutoPing();
           } else {
-            debugLog("[AUTO] Resumed auto countdown after manual ping");
+            debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
           }
         } else {
           debugLog("[UI] Setting dynamic status to Idle (manual mode)");
@@ -3658,12 +4098,21 @@ async function sendPing(manual = false) {
         const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = capturedCoords;
         debugLog(`[API QUEUE] Backgrounding API post for coordinates: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
         
-        // Post to API in background (async, fire-and-forget with error handling)
-        postApiInBackground(apiLat, apiLon, apiAccuracy, heardRepeatsStr).catch(error => {
+        // Post to API in background and track the promise
+        const apiPromise = postApiInBackground(apiLat, apiLon, apiAccuracy, heardRepeatsStr).catch(error => {
           debugError(`[API QUEUE] Background API post failed: ${error.message}`, error);
           // Show error to user only if API fails
           setDynamicStatus("Error: API post failed", STATUS_COLORS.error);
+        }).finally(() => {
+          // Remove from pending list when complete
+          const index = state.pendingApiPosts.indexOf(apiPromise);
+          if (index > -1) {
+            state.pendingApiPosts.splice(index, 1);
+          }
         });
+        
+        // Track this promise so disconnect can wait for it
+        state.pendingApiPosts.push(apiPromise);
       } else {
         // This should never happen as coordinates are always captured before ping
         debugError(`[API QUEUE] CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
@@ -3687,17 +4136,17 @@ async function sendPing(manual = false) {
 
 // ---- Auto mode ----
 function stopAutoPing(stopGps = false) {
-  debugLog(`[AUTO] stopAutoPing called (stopGps=${stopGps})`);
+  debugLog(`[TX/RX AUTO] stopAutoPing called (stopGps=${stopGps})`);
   // Check if we're in cooldown before stopping (unless stopGps is true for disconnect)
   if (!stopGps && isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
-    debugLog(`[AUTO] Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
-    setDynamicStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
+    debugLog(`[TX/RX AUTO] Auto ping stop blocked by cooldown (${remainingSec}s remaining)`);
+    setDynamicStatus(`Wait ${remainingSec}s before toggling TX/RX Auto`, STATUS_COLORS.warning);
     return;
   }
   
   if (state.autoTimerId) {
-    debugLog("[AUTO] Clearing auto ping timer");
+    debugLog("[TX/RX AUTO] Clearing auto ping timer");
     clearTimeout(state.autoTimerId);
     state.autoTimerId = null;
   }
@@ -3707,43 +4156,115 @@ function stopAutoPing(stopGps = false) {
   state.skipReason = null;
   state.pausedAutoTimerRemainingMs = null;
   
+  // DISABLE RX wardriving
+  state.rxTracking.isWardriving = false;
+  debugLog("[TX/RX AUTO] RX wardriving disabled");
+  
+  // DO NOT stop unified listener (stays on)
+  // REMOVED: stopUnifiedRxListening();
+  
   // Only stop GPS watch when disconnecting or page hidden, not during normal stop
   if (stopGps) {
     stopGeoWatch();
   }
   
-  state.running = false;
+  state.txRxAutoRunning = false;
   updateAutoButton();
+  updateControlsForCooldown();  // Re-enable RX Auto button
   releaseWakeLock();
-  debugLog("[AUTO] Auto ping stopped");
+  debugLog("[TX/RX AUTO] TX/RX Auto stopped");
 }
+
+/**
+ * Start RX Auto mode (passive-only wardriving)
+ */
+function startRxAuto() {
+  debugLog("[RX AUTO] Starting RX Auto mode");
+  
+  if (!state.connection) {
+    debugError("[RX AUTO] Cannot start - not connected");
+    alert("Connect to a MeshCore device first.");
+    return;
+  }
+  
+  // Defensive check: ensure unified listener is running
+  if (state.connection && !state.rxTracking.isListening) {
+    debugWarn("[RX AUTO] Unified listener not active - restarting");
+    startUnifiedRxListening();
+  }
+  
+  // ENABLE RX wardriving
+  state.rxTracking.isWardriving = true;
+  debugLog("[RX AUTO] RX wardriving enabled");
+  
+  // Set RX Auto mode flag
+  state.rxAutoRunning = true;
+  updateAutoButton();
+  updateControlsForCooldown();  // Disable TX/RX Auto button
+  
+  // Acquire wake lock
+  debugLog("[RX AUTO] Acquiring wake lock");
+  acquireWakeLock().catch(console.error);
+  
+  setDynamicStatus("RX Auto started", STATUS_COLORS.success);
+  debugLog("[RX AUTO] RX Auto mode started successfully");
+}
+
+/**
+ * Stop RX Auto mode
+ */
+function stopRxAuto() {
+  debugLog("[RX AUTO] Stopping RX Auto mode");
+  
+  if (!state.rxAutoRunning) {
+    debugLog("[RX AUTO] RX Auto not running, nothing to stop");
+    return;
+  }
+  
+  // DISABLE RX wardriving
+  state.rxTracking.isWardriving = false;
+  debugLog("[RX AUTO] RX wardriving disabled");
+  
+  // DO NOT stop unified listener (stays on)
+  // REMOVED: stopUnifiedRxListening();
+  
+  // Clear RX Auto mode flag
+  state.rxAutoRunning = false;
+  updateAutoButton();
+  updateControlsForCooldown();  // Re-enable TX/RX Auto button
+  releaseWakeLock();
+  
+  setDynamicStatus("RX Auto stopped", STATUS_COLORS.idle);
+  debugLog("[RX AUTO] RX Auto mode stopped");
+}
+
 function scheduleNextAutoPing() {
-  if (!state.running) {
-    debugLog("[AUTO] Not scheduling next auto ping - auto mode not running");
+  if (!state.txRxAutoRunning) {
+    debugLog("[TX/RX AUTO] Not scheduling next auto ping - auto mode not running");
     return;
   }
   
   const intervalMs = getSelectedIntervalMs();
-  debugLog(`[AUTO] Scheduling next auto ping in ${intervalMs}ms`);
+  debugLog(`[TX/RX AUTO] Scheduling next auto ping in ${intervalMs}ms`);
   
   // Start countdown immediately (skipReason may be set if ping was skipped)
   startAutoCountdown(intervalMs);
   
   // Schedule the next ping
   state.autoTimerId = setTimeout(() => {
-    if (state.running) {
+    if (state.txRxAutoRunning) {
       // Clear skip reason before next attempt
       state.skipReason = null;
-      debugLog("[AUTO] Auto ping timer fired, sending ping");
+      debugLog("[TX/RX AUTO] Auto ping timer fired, sending ping");
       sendPing(false).catch(console.error);
     }
   }, intervalMs);
 }
 
 function startAutoPing() {
-  debugLog("[AUTO] startAutoPing called");
+  debugLog("[TX/RX AUTO] startAutoPing called");
   if (!state.connection) {
-    debugError("[AUTO] Cannot start auto ping - not connected");
+    debugError("[TX/RX AUTO] Cannot start auto ping - not connected");
     alert("Connect to a MeshCore device first.");
     return;
   }
@@ -3751,14 +4272,14 @@ function startAutoPing() {
   // Check if we're in cooldown
   if (isInCooldown()) {
     const remainingSec = getRemainingCooldownSeconds();
-    debugLog(`[AUTO] Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
+    debugLog(`[TX/RX AUTO] Auto ping start blocked by cooldown (${remainingSec}s remaining)`);
     setDynamicStatus(`Wait ${remainingSec}s before toggling auto mode`, STATUS_COLORS.warning);
     return;
   }
   
   // Clean up any existing auto-ping timer (but keep GPS watch running)
   if (state.autoTimerId) {
-    debugLog("[AUTO] Clearing existing auto ping timer");
+    debugLog("[TX/RX AUTO] Clearing existing auto ping timer");
     clearTimeout(state.autoTimerId);
     state.autoTimerId = null;
   }
@@ -3767,19 +4288,30 @@ function startAutoPing() {
   // Clear any previous skip reason
   state.skipReason = null;
   
+  // Defensive check: ensure unified listener is running
+  if (state.connection && !state.rxTracking.isListening) {
+    debugWarn("[TX/RX AUTO] Unified listener not active - restarting");
+    startUnifiedRxListening();
+  }
+  
+  // ENABLE RX wardriving
+  state.rxTracking.isWardriving = true;
+  debugLog("[TX/RX AUTO] RX wardriving enabled");
+  
   // Start GPS watch for continuous updates
-  debugLog("[AUTO] Starting GPS watch for auto mode");
+  debugLog("[TX/RX AUTO] Starting GPS watch for auto mode");
   startGeoWatch();
   
-  state.running = true;
+  state.txRxAutoRunning = true;
   updateAutoButton();
+  updateControlsForCooldown();  // Disable RX Auto button
 
   // Acquire wake lock for auto mode
-  debugLog("[AUTO] Acquiring wake lock for auto mode");
+  debugLog("[TX/RX AUTO] Acquiring wake lock for auto mode");
   acquireWakeLock().catch(console.error);
 
   // Send first ping immediately
-  debugLog("[AUTO] Sending initial auto ping");
+  debugLog("[TX/RX AUTO] Sending initial auto ping");
   sendPing(false).catch(console.error);
 }
 
@@ -3860,6 +4392,23 @@ async function connect() {
         
         // Start unified RX listening after channel setup
         startUnifiedRxListening();
+        debugLog("[BLE] Unified RX listener started on connect");
+        
+        // CLEAR all logs on connect (new session)
+        txLogState.entries = [];
+        renderTxLogEntries(true);
+        updateTxLogSummary();
+        
+        rxLogState.entries = [];
+        rxLogState.dropCount = 0;
+        renderRxLogEntries(true);
+        updateRxLogSummary();
+        
+        errorLogState.entries = [];
+        renderErrorLogEntries(true);
+        updateErrorLogSummary();
+        
+        debugLog("[BLE] All logs cleared on connect (new session)");
         
         // GPS initialization
         setDynamicStatus("Priming GPS", STATUS_COLORS.info);
@@ -3869,6 +4418,10 @@ async function connect() {
         // Connection complete, show Connected status in connection bar
         setConnStatus("Connected", STATUS_COLORS.success);
         setDynamicStatus("Idle"); // Clear dynamic status to em dash
+        
+        // Lock wardrive settings after successful connection
+        lockWardriveSettings();
+        
         debugLog("[BLE] Full connection process completed successfully");
       } catch (e) {
         debugError(`[CHANNEL] Channel setup failed: ${e.message}`, e);
@@ -3939,19 +4492,31 @@ async function connect() {
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
       state.wardriveSessionId = null; // Clear wardrive session ID
+      state.debugMode = false; // Clear debug mode
+      state.tempTxRepeaterData = null; // Clear temp TX data
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
-      stopAutoPing(true); // Ignore cooldown check on disconnect
+      
+      // Unlock wardrive settings after disconnect
+      unlockWardriveSettings();
+      
+      // Stop auto modes
+      stopAutoPing(true); // Ignore cooldown check on disconnect, stop GPS
+      stopRxAuto();  // Stop RX Auto mode
+      
       enableControls(false);
       updateAutoButton();
       stopGeoWatch();
       stopGpsAgeUpdater(); // Ensure age updater stops
-      stopRepeaterTracking(); // Stop repeater echo tracking
-      stopUnifiedRxListening(); // Stop unified RX listening
+      stopTxTracking(); // Stop TX echo tracking
+      
+      // Stop unified RX listening on disconnect
+      stopUnifiedRxListening();
+      debugLog("[BLE] Unified RX listener stopped on disconnect");
       
       // Flush all pending RX batch data before cleanup
-      flushAllBatches('disconnect');
+      flushAllRxBatches('disconnect');
       
       // Clear API queue messages (timers already stopped in cleanupAllTimers)
       apiQueue.messages = [];
@@ -3999,14 +4564,22 @@ async function disconnect() {
   setConnStatus("Disconnecting", STATUS_COLORS.info);
   setDynamicStatus("Idle"); // Clear dynamic status
 
-  // 1. CRITICAL: Flush API queue FIRST (session_id still valid)
+  // 1. CRITICAL: Wait for pending background API posts (session_id still valid)
+  if (state.pendingApiPosts.length > 0) {
+    debugLog(`[BLE] Waiting for ${state.pendingApiPosts.length} pending background API posts to complete`);
+    await Promise.allSettled(state.pendingApiPosts);
+    state.pendingApiPosts = [];
+    debugLog(`[BLE] All pending background API posts completed`);
+  }
+
+  // 2. Flush API queue (session_id still valid)
   if (apiQueue.messages.length > 0) {
     debugLog(`[BLE] Flushing ${apiQueue.messages.length} queued messages before disconnect`);
     await flushApiQueue();
   }
   stopFlushTimers();
 
-  // 2. THEN release capacity slot if we have a public key
+  // 3. THEN release capacity slot if we have a public key
   if (state.devicePublicKey) {
     try {
       debugLog("[BLE] Releasing capacity slot");
@@ -4017,7 +4590,7 @@ async function disconnect() {
     }
   }
 
-  // 3. Delete the wardriving channel before disconnecting
+  // 4. Delete the wardriving channel before disconnecting
   try {
     if (state.channel && typeof state.connection.deleteChannel === "function") {
       debugLog(`[BLE] Deleting channel ${CHANNEL_NAME} at index ${state.channel.channelIdx}`);
@@ -4058,40 +4631,127 @@ async function disconnect() {
 document.addEventListener("visibilitychange", async () => {
   if (document.hidden) {
     debugLog("[UI] Page visibility changed to hidden");
-    if (state.running) {
-      debugLog("[UI] Stopping auto ping due to page hidden");
-      stopAutoPing(true); // Ignore cooldown check when page is hidden
-      setDynamicStatus("Lost focus, auto mode stopped", STATUS_COLORS.warning);
-    } else {
+    
+    // Stop TX/RX Auto if running
+    if (state.txRxAutoRunning) {
+      debugLog("[UI] Stopping TX/RX Auto due to page hidden");
+      stopAutoPing(true); // Ignore cooldown, stop GPS
+      setDynamicStatus("Lost focus, TX/RX Auto stopped", STATUS_COLORS.warning);
+    }
+    
+    // Stop RX Auto if running
+    if (state.rxAutoRunning) {
+      debugLog("[UI] Stopping RX Auto due to page hidden");
+      stopRxAuto();
+      setDynamicStatus("Lost focus, RX Auto stopped", STATUS_COLORS.warning);
+    }
+    
+    // Release wake lock if neither mode running
+    if (!state.txRxAutoRunning && !state.rxAutoRunning) {
       debugLog("[UI] Releasing wake lock due to page hidden");
       releaseWakeLock();
     }
+    
+    // DO NOT stop unified listener
+    
   } else {
     debugLog("[UI] Page visibility changed to visible");
-    // On visible again, user can manually re-start Auto.
+    
+    // Defensive check: ensure unified listener is running if connected
+    if (state.connection && !state.rxTracking.isListening) {
+      debugWarn("[UI] Page visible but unified listener inactive - restarting");
+      startUnifiedRxListening();
+    }
+    
+    // User must manually restart auto modes
   }
 });
 
 /**
- * Update Connect button state based on radio power selection
+ * Update Connect button state based on radio power and external antenna selection
  */
 function updateConnectButtonState() {
   const radioPowerSelected = getCurrentPowerSetting() !== "";
+  const externalAntennaSelected = getExternalAntennaSetting() !== "";
   const isConnected = !!state.connection;
   
   if (!isConnected) {
-    // Only enable Connect if radio power is selected
-    connectBtn.disabled = !radioPowerSelected;
+    // Only enable Connect if both settings are selected
+    connectBtn.disabled = !radioPowerSelected || !externalAntennaSelected;
     
-    // Update dynamic status based on power selection
-    if (!radioPowerSelected) {
+    // Update dynamic status based on selections
+    if (!radioPowerSelected && !externalAntennaSelected) {
+      debugLog("[UI] Radio power and external antenna not selected - showing message in status bar");
+      setDynamicStatus("Select radio power and external antenna to connect", STATUS_COLORS.warning);
+    } else if (!radioPowerSelected) {
       debugLog("[UI] Radio power not selected - showing message in status bar");
       setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
+    } else if (!externalAntennaSelected) {
+      debugLog("[UI] External antenna not selected - showing message in status bar");
+      setDynamicStatus("Select external antenna to connect", STATUS_COLORS.warning);
     } else {
-      debugLog("[UI] Radio power selected - clearing message from status bar");
+      debugLog("[UI] Radio power and external antenna selected - clearing message from status bar");
       setDynamicStatus("Idle");
     }
   }
+}
+
+/**
+ * Lock wardrive settings (Radio Power and External Antenna) after connection
+ */
+function lockWardriveSettings() {
+  debugLog("[UI] Locking wardrive settings (power and external antenna)");
+  
+  // Lock all radio power inputs and labels
+  const powerInputs = document.querySelectorAll('input[name="power"]');
+  powerInputs.forEach(input => {
+    input.disabled = true;
+    const label = input.closest("label");
+    if (label) {
+      label.classList.add("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "0.5";
+    }
+  });
+  
+  // Lock all external antenna inputs and labels
+  const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaInputs.forEach(input => {
+    input.disabled = true;
+    const label = input.closest("label");
+    if (label) {
+      label.classList.add("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "0.5";
+    }
+  });
+}
+
+/**
+ * Unlock wardrive settings (Radio Power and External Antenna) after disconnect
+ */
+function unlockWardriveSettings() {
+  debugLog("[UI] Unlocking wardrive settings (power and external antenna)");
+  
+  // Unlock all radio power inputs and labels
+  const powerInputs = document.querySelectorAll('input[name="power"]');
+  powerInputs.forEach(input => {
+    input.disabled = false;
+    const label = input.closest("label");
+    if (label) {
+      label.classList.remove("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "";
+    }
+  });
+  
+  // Unlock all external antenna inputs and labels
+  const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaInputs.forEach(input => {
+    input.disabled = false;
+    const label = input.closest("label");
+    if (label) {
+      label.classList.remove("cursor-not-allowed", "pointer-events-none");
+      label.style.opacity = "";
+    }
+  });
 }
 
 // ---- Bind UI & init ----
@@ -4100,6 +4760,11 @@ export async function onLoad() {
   setConnStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  
+  // Disable RX Auto button (backend API not ready)
+  rxAutoBtn.disabled = true;
+  rxAutoBtn.title = "RX Auto temporarily disabled - backend API not ready";
+  debugLog("[INIT] RX Auto button disabled - backend API not ready");
   
   // Initialize Connect button state based on radio power
   updateConnectButtonState();
@@ -4116,17 +4781,27 @@ export async function onLoad() {
       setDynamicStatus(e.message || "Connection failed", STATUS_COLORS.error);
     }
   });
-  sendPingBtn.addEventListener("click", () => {
+  txPingBtn.addEventListener("click", () => {
     debugLog("[UI] Manual ping button clicked");
     sendPing(true).catch(console.error);
   });
-  autoToggleBtn.addEventListener("click", () => {
+  txRxAutoBtn.addEventListener("click", () => {
     debugLog("[UI] Auto toggle button clicked");
-    if (state.running) {
+    if (state.txRxAutoRunning) {
       stopAutoPing();
       setDynamicStatus("Auto mode stopped", STATUS_COLORS.idle);
     } else {
       startAutoPing();
+    }
+  });
+  
+  // NEW: RX Auto button listener
+  rxAutoBtn.addEventListener("click", () => {
+    debugLog("[UI] RX Auto button clicked");
+    if (state.rxAutoRunning) {
+      stopRxAuto();
+    } else {
+      startRxAuto();
     }
   });
 
@@ -4174,11 +4849,20 @@ export async function onLoad() {
     });
   });
 
+  // Add event listeners to external antenna options to update Connect button state
+  const antennaRadios = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaRadios.forEach(radio => {
+    radio.addEventListener("change", () => {
+      debugLog(`[UI] External antenna changed to: ${getExternalAntennaSetting()}`);
+      updateConnectButtonState();
+    });
+  });
+
   // Session Log event listener
-  if (logSummaryBar) {
-    logSummaryBar.addEventListener("click", () => {
+  if (txLogSummaryBar) {
+    txLogSummaryBar.addEventListener("click", () => {
       debugLog("[UI] Log summary bar clicked - toggling session log");
-      toggleBottomSheet();
+      toggleTxLogBottomSheet();
     });
   }
 
@@ -4199,11 +4883,11 @@ export async function onLoad() {
   }
 
   // Copy button event listeners
-  if (sessionLogCopyBtn) {
-    sessionLogCopyBtn.addEventListener("click", (e) => {
+  if (txLogCopyBtn) {
+    txLogCopyBtn.addEventListener("click", (e) => {
       e.stopPropagation(); // Prevent triggering the summary bar toggle
-      debugLog("[SESSION LOG] Copy button clicked");
-      copyLogToCSV('session', sessionLogCopyBtn);
+      debugLog("[TX LOG] Copy button clicked");
+      copyLogToCSV('session', txLogCopyBtn);
     });
   }
 

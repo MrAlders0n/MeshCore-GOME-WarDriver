@@ -303,7 +303,7 @@ See `content/wardrive.js` for the main `disconnect()` function.
      - Stops GPS watch
      - Stops GPS age updater
      - Stops distance updater
-     - Stops repeater tracking
+     - Stops TX tracking
      - **Stops passive RX listening** (unregisters LogRxData handler)
      - **Clears API queue messages** (timers already stopped)
      - Clears all timers (see `cleanupAllTimers()`)
@@ -530,7 +530,7 @@ stateDiagram-v2
 - **Timer cleanup**: `wardrive.js:cleanupAllTimers()` (lines 427-460)
 - **Auto-ping stop**: `wardrive.js:stopAutoPing()` (lines 1904-1934)
 - **GPS watch stop**: `wardrive.js:stopGeoWatch()` (lines 793-803)
-- **Repeater stop**: `wardrive.js:stopRepeaterTracking()` (lines 1506-1544)
+- **Repeater stop**: `wardrive.js:stopTxTracking()` (lines 1506-1544)
 - **Channel delete**: `connection.js:deleteChannel()` (lines 1909-1911)
 
 ### State Management
@@ -653,7 +653,7 @@ The ping/repeat listener flow manages the complete lifecycle of a wardrive ping 
 │    - Listen for repeater echoes                                     │
 │    - Show "Listening for heard repeats (Xs)" countdown              │
 │    - Track all repeaters that forward the ping                      │
-│    - Update session log in real-time                                │
+│    - Update TX log in real-time                                │
 └──────────────────────────────┬──────────────────────────────────────┘
                                │
                                ▼
@@ -756,7 +756,7 @@ The passive RX log listening feature monitors all incoming packets on the wardri
 - Extracts **first hop** (first repeater in the path)
 - Tracks repeaters that first forwarded our message into the mesh
 - Runs for 7 seconds after each ping
-- Results shown in Session Log
+- Results shown in TX Log
 
 **Passive RX Listening (New):**
 - Runs continuously in background once connected
@@ -801,7 +801,7 @@ The last hop is more relevant for coverage mapping because it represents the rep
 
 ### UI Components
 
-**RX Log Section** (below Session Log):
+**RX Log Section** (below TX Log):
 - Header bar showing observation count and last repeater
 - Expandable/collapsible panel
 - Scrollable list of observations (newest first)

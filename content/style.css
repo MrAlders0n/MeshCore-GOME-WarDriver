@@ -179,12 +179,12 @@ body,
   white-space: nowrap;
 }
 
-/* Session Log - Static Expandable Section */
-#logBottomSheet.open {
+/* TX Log - Static Expandable Section */
+#txLogBottomSheet.open {
     display: block !important;
 }
 
-#logExpandArrow.expanded {
+#txLogExpandArrow.expanded {
     transform: rotate(180deg);
 }
 

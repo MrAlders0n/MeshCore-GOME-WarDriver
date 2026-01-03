@@ -4,6 +4,10 @@ content/config.js
 # Node modules (if added in the future)
 node_modules/
 
+# Package files
+package.json
+package-lock.json
+
 # Build artifacts
 dist/
 build/
@@ -22,3 +26,8 @@ Thumbs.db
 # Temporary files
 tmp/
 test-log-ui.html
+
+# Test data files (local testing only)
+test_single_packet.js
+packet.json
+*_packet.json

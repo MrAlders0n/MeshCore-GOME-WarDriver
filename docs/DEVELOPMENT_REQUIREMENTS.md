@@ -31,9 +31,10 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[PING]` | Ping sending and validation |
 | `[API QUEUE]` | API batch queue operations |
 | `[RX BATCH]` | RX batch buffer operations |
-| `[PASSIVE RX]` | Passive RX logging logic |
-| `[PASSIVE RX UI]` | Passive RX UI rendering |
-| `[SESSION LOG]` | Session log tracking |
+| `[RX LOG]` | RX logging logic |
+| `[RX LOG UI]` | RX UI rendering |
+| `[TX LOG]` | TX log tracking |
+| `[RX PARSE]` | RX packet metadata parsing |
 | `[UNIFIED RX]` | Unified RX handler |
 | `[DECRYPT]` | Message decryption |
 | `[UI]` | General UI updates (status bar, buttons, etc.) |
@@ -42,7 +43,8 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[WAKE LOCK]` | Wake lock acquisition/release |
 | `[GEOFENCE]` | Geofence and distance validation |
 | `[CAPACITY]` | Capacity check API calls |
-| `[AUTO]` | Auto ping mode operations |
+| `[TX/RX AUTO]` | TX/RX Auto mode operations |
+| `[RX AUTO]` | RX Auto mode operations |
 | `[INIT]` | Initialization and setup |
 | `[ERROR LOG]` | Error log UI operations |
 

@@ -59,7 +59,7 @@
 ║   │             │               │            │                            │   ║
 ║   │             ▼               ▼            │                            │   ║
 ║   │       ┌─────────┐    ┌──────────────────────────────────────┐         │   ║
-║   │       │ RETURN  │    │  PASSIVE RX HANDLER (ALL PACKETS)    |         |   ║
+║   │       │ RETURN  │    │  RX LOG HANDLER (ALL PACKETS)    |         |   ║
 ║   │       │ (done)  │    │  *** NO HEADER OR CHANNEL FILTER *** │         │   ║
 ║   │       └─────────┘    └──────────────────────────────────────┘         │   ║
 ║   │                                                                       │   ║

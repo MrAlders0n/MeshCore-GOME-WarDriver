@@ -3,9 +3,9 @@
 ## Table of Contents
 - [Overview](#overview)
   - [Ping Overview](#ping-overview)
-  - [Auto Ping Overview](#auto-ping-overview)
+  - [TX/RX Auto Overview](#auto-ping-overview)
 - [Manual Ping Workflow](#manual-ping-workflow)
-- [Auto Ping Workflow](#auto-ping-workflow)
+- [TX/RX Auto Workflow](#auto-ping-workflow)
 - [Ping Lifecycle](#ping-lifecycle)
 - [Workflow Diagrams](#workflow-diagrams)
 - [Code References](#code-references)
@@ -20,7 +20,7 @@
 - Payload format: `@[MapperBot] <LAT>, <LON>[ [power] ]`
 - Triggers a 7-second RX listening window for repeater echo detection
 - Posts ping data to MeshMapper API after the listening window completes
-- Logs the ping in the session log with timestamp, coordinates, and repeater data
+- Logs the ping in the TX log with timestamp, coordinates, and repeater data
 
 **Ping Requirements:**
 - Active BLE connection to a MeshCore device
@@ -30,19 +30,19 @@
 - Not in cooldown period (7 seconds after previous ping)
 - No ping currently in progress
 
-### Auto Ping Overview
+### TX/RX Auto Overview
 
-**What "Auto Ping" Does:**
+**What "TX/RX Auto" Does:**
 - Automatically sends pings at configurable intervals (15s/30s/60s)
 - Acquires a wake lock to keep the screen awake
 - Displays countdown timer between pings
 - Skips pings that fail validation (GPS, geofence, distance) without stopping
-- Pauses countdown when manual ping is triggered during auto mode
+- Pauses countdown when manual ping is triggered during TX/RX TX/RX Auto mode
 
-**Auto Ping State:**
-- `state.running`: Boolean indicating if auto mode is active
+**TX/RX Auto State:**
+- `state.txRxAutoRunning`: Boolean indicating if TX/RX TX/RX Auto mode is active
 - `state.autoTimerId`: Timer ID for next scheduled ping
-- `state.nextAutoPingTime`: Timestamp when next auto ping will fire
+- `state.nextAutoPingTime`: Timestamp when next TX/RX Auto will fire
 - `state.skipReason`: Reason if last ping was skipped (for countdown display)
 
 ## Manual Ping Workflow
@@ -84,7 +84,7 @@ sendPingBtn.addEventListener("click", () => {
    - If not in cooldown:  proceeds
 
 2. **Handle Auto Mode Interaction**
-   - If auto mode is running (`state.running === true`):
+   - If TX/RX TX/RX Auto mode is running (`state.txRxAutoRunning === true`):
      - Calls `pauseAutoCountdown()` to pause the auto timer
      - Stores remaining time in `state.pausedAutoTimerRemainingMs`
      - **Dynamic Status**: `"Sending manual ping"` (blue)
@@ -141,9 +141,9 @@ sendPingBtn.addEventListener("click", () => {
     - **Dynamic Status**: `"Ping sent"` (green)
 
 11. **Start Repeater Tracking**
-    - Calls `startRepeaterTracking(payload, channelIdx)`
+    - Calls `startTxTracking(payload, channelIdx)`
     - Registers `LogRxData` event handler for rx_log entries
-    - Initializes `state.repeaterTracking` with sent payload and timestamp
+    - Initializes `state.txTracking` with sent payload and timestamp
     - **Dynamic Status**: `"Listening (Xs)"` (blue) - countdown display
 
 12. **7-Second Listening Window**
@@ -151,10 +151,10 @@ sendPingBtn.addEventListener("click", () => {
     - Listens for repeater echoes via rx_log events
     - Each echo validated:  header check, channel hash check, payload match
     - Deduplicates by path, keeps highest SNR value
-    - Updates session log with live repeater data
+    - Updates TX log with live repeater data
 
 13. **Finalize Repeaters**
-    - Calls `stopRepeaterTracking()` after 7s
+    - Calls `stopTxTracking()` after 7s
     - Returns array of `{ repeaterId, snr }` objects
     - Formats as:  `"4e(11. 5),77(9.75)"` or `"None"`
 
@@ -177,27 +177,27 @@ sendPingBtn.addEventListener("click", () => {
     - Calls `unlockPingControls()`
     - Sets `state.pingInProgress = false`
     - Updates button disabled states
-    - **Dynamic Status**: `"—"` (em dash) or countdown if auto mode running
+    - **Dynamic Status**: `"—"` (em dash) or countdown if TX/RX TX/RX Auto mode running
 
 18. **Resume Auto Countdown (if applicable)**
-    - If manual ping during auto mode:  calls `resumeAutoCountdown()`
+    - If manual ping during TX/RX TX/RX Auto mode:  calls `resumeAutoCountdown()`
     - Resumes countdown from `state.pausedAutoTimerRemainingMs`
 
-## Auto Ping Workflow
+## TX/RX Auto Workflow
 
-### Auto Ping Start Sequence
+### TX/RX Auto Start Sequence
 
-1. **User Initiates** → User clicks "Start Auto Ping" button
+1. **User Initiates** → User clicks "Start TX/RX Auto" button
 2. **Connection Check** → Verify BLE connection exists
 3. **Cooldown Check** → Verify not in cooldown period
 4. **Timer Cleanup** → Clear any existing auto-ping timer
 5. **GPS Watch Start** → Start continuous GPS watching
-6. **State Update** → Set `state.running = true`
-7. **Button Update** → Change button to "Stop Auto Ping" (amber)
+6. **State Update** → Set `state.txRxAutoRunning = true`
+7. **Button Update** → Change button to "Stop TX/RX Auto" (amber)
 8. **Wake Lock** → Acquire screen wake lock
 9. **Initial Ping** → Send first ping immediately
 
-### Detailed Auto Ping Start
+### Detailed TX/RX Auto Start
 
 See `content/wardrive.js` lines 2462-2501 for `startAutoPing()`.
 
@@ -205,9 +205,9 @@ See `content/wardrive.js` lines 2462-2501 for `startAutoPing()`.
 ```javascript
 autoToggleBtn.addEventListener("click", () => {
   debugLog("Auto toggle button clicked");
-  if (state.running) {
+  if (state.txRxAutoRunning) {
     stopAutoPing();
-    setDynamicStatus("Auto mode stopped", STATUS_COLORS.idle);
+    setDynamicStatus("TX/RX Auto mode stopped", STATUS_COLORS.idle);
   } else {
     startAutoPing();
   }
@@ -223,7 +223,7 @@ autoToggleBtn.addEventListener("click", () => {
 2. **Cooldown Check**
    - Checks `isInCooldown()`
    - If in cooldown: 
-     - **Dynamic Status**: `"Wait Xs before toggling auto mode"` (yellow)
+     - **Dynamic Status**: `"Wait Xs before toggling TX/RX TX/RX Auto mode"` (yellow)
      - Returns early
 
 3. **Cleanup Existing Timer**
@@ -237,7 +237,7 @@ autoToggleBtn.addEventListener("click", () => {
    - Calls `startGeoWatch()` for continuous GPS updates
 
 6. **Update State**
-   - Sets `state.running = true`
+   - Sets `state.txRxAutoRunning = true`
    - Calls `updateAutoButton()` to change button appearance
 
 7. **Acquire Wake Lock**
@@ -247,7 +247,7 @@ autoToggleBtn.addEventListener("click", () => {
    - Calls `sendPing(false)` immediately
    - First ping does not wait for interval
 
-### Auto Ping Stop Sequence
+### TX/RX Auto Stop Sequence
 
 See `content/wardrive. js` lines 2408-2436 for `stopAutoPing()`.
 
@@ -269,20 +269,20 @@ See `content/wardrive. js` lines 2408-2436 for `stopAutoPing()`.
    - Normal stop keeps GPS watch running
 
 5. **Update State**
-   - Sets `state.running = false`
+   - Sets `state.txRxAutoRunning = false`
    - Calls `updateAutoButton()` to change button appearance
 
 6. **Release Wake Lock**
    - Calls `releaseWakeLock()`
 
-### Auto Ping Scheduling
+### TX/RX Auto Scheduling
 
 See `content/wardrive.js` lines 2438-2459 for `scheduleNextAutoPing()`.
 
 **After each ping (successful or skipped):**
 
 1. **Check Running State**
-   - If `state.running === false`: returns early
+   - If `state.txRxAutoRunning === false`: returns early
 
 2. **Get Interval**
    - Calls `getSelectedIntervalMs()` (15000, 30000, or 60000)
@@ -296,9 +296,9 @@ See `content/wardrive.js` lines 2438-2459 for `scheduleNextAutoPing()`.
    - Sets `state.autoTimerId = setTimeout(... )`
    - On timer fire: clears skip reason, calls `sendPing(false)`
 
-### Auto Ping During Manual Ping Interaction
+### TX/RX Auto During Manual Ping Interaction
 
-When user sends a manual ping while auto mode is running: 
+When user sends a manual ping while TX/RX TX/RX Auto mode is running: 
 
 1. **Pause Auto Countdown**
    - `pauseAutoCountdown()` saves remaining time
@@ -329,13 +329,13 @@ Locked at: sendPing() validation pass
 **State Variables:**
 - `state.pingInProgress`: Boolean flag for active ping operation
 - `state.cooldownEndTime`: Timestamp when cooldown ends
-- Controls: "Send Ping" and "Start/Stop Auto Ping" buttons
+- Controls: "Send Ping" and "Start/Stop TX/RX Auto" buttons
 
 ### Cooldown Period
 
 - **Duration**: 7 seconds (`COOLDOWN_MS = 7000`)
 - **Starts**: After ping sent to mesh (not after API post)
-- **Blocks**: Manual pings and auto mode toggle
+- **Blocks**: Manual pings and TX/RX TX/RX Auto mode toggle
 - **Does NOT block**: Scheduled auto pings (they bypass cooldown)
 
 ### Repeater Tracking
@@ -415,11 +415,11 @@ sequenceDiagram
             Device-->>App:  Sent
             App->>UI: "Ping sent"
             
-            App->>App: startRepeaterTracking()
+            App->>App: startTxTracking()
             Note over App:  7s listening window
             App->>App: Collect rx_log echoes
             
-            App->>App: stopRepeaterTracking()
+            App->>App: stopTxTracking()
             App->>API: postToMeshMapperAPI()
             API-->>App: { allowed: true }
             
@@ -431,13 +431,13 @@ sequenceDiagram
     end
 ```
 
-### Auto Ping State Machine
+### TX/RX Auto State Machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
     
-    Idle --> Starting:  Click "Start Auto Ping"
+    Idle --> Starting:  Click "Start TX/RX Auto"
     Starting --> Idle: In cooldown
     Starting --> Idle: Not connected
     
@@ -452,18 +452,18 @@ stateDiagram-v2
     Countdown --> Paused: Manual ping clicked
     Paused --> Countdown: Manual ping complete/blocked
     
-    Countdown --> Idle: Click "Stop Auto Ping"
+    Countdown --> Idle: Click "Stop TX/RX Auto"
     Countdown --> Idle: Page hidden
     Listening --> Idle:  Disconnect
     
     Idle --> [*]
 ```
 
-### Auto Ping Countdown Flow
+### TX/RX Auto Countdown Flow
 
 ```mermaid
 flowchart TD
-    A[Ping Complete/Skipped] --> B{Auto mode running?}
+    A[Ping Complete/Skipped] --> B{TX/RX Auto mode running?}
     B -->|No| C[End]
     B -->|Yes| D[scheduleNextAutoPing]
     D --> E[Start countdown display]
@@ -490,7 +490,7 @@ flowchart TD
 - **Manual button listener**: `wardrive.js` line 2808
 - **Auto button listener**: `wardrive.js` line 2812
 
-### Auto Ping Functions
+### TX/RX Auto Functions
 - **Start function**: `wardrive.js:startAutoPing()` (lines 2462-2501)
 - **Stop function**: `wardrive.js:stopAutoPing()` (lines 2408-2436)
 - **Schedule next**: `wardrive.js:scheduleNextAutoPing()` (lines 2438-2459)
@@ -503,8 +503,8 @@ flowchart TD
 - **Cooldown check**: `wardrive.js:isInCooldown()` (lines 445-447)
 
 ### Repeater Tracking
-- **Start tracking**: `wardrive.js:startRepeaterTracking()` (lines 1508-1567)
-- **Stop tracking**: `wardrive.js:stopRepeaterTracking()` (lines 1697-1737)
+- **Start tracking**: `wardrive.js:startTxTracking()` (lines 1508-1567)
+- **Stop tracking**: `wardrive.js:stopTxTracking()` (lines 1697-1737)
 - **Handle rx_log**: `wardrive.js:handleRxLogEvent()` (lines 1569-1695)
 - **Format telemetry**: `wardrive.js:formatRepeaterTelemetry()` (lines 1739-1750)
 
@@ -557,25 +557,25 @@ flowchart TD
 - Both must be false for controls to be enabled
 - Cooldown starts at ping send, control lock ends at API complete
 
-### Auto Ping Skipping
+### TX/RX Auto Skipping
 - Auto pings that fail validation are **skipped**, not stopped
 - Skip reasons:  "gps too old", "outside geofence", "too close"
 - Countdown continues to next interval with skip message displayed
-- Auto mode only stops on:  user action, page hidden, disconnect
+- TX/RX Auto mode only stops on:  user action, page hidden, disconnect
 
 ### GPS Data Freshness
 - **Auto pings**: require GPS data within `interval + 5000ms`
 - **Manual pings**: allow GPS data up to 60 seconds old
 - If GPS too old during auto:  attempts refresh, skips if fails
-- GPS watch continues during auto mode, provides fresh data
+- GPS watch continues during TX/RX TX/RX Auto mode, provides fresh data
 
 ### Page Visibility
-- When page becomes hidden during auto mode: 
-  - Auto mode stops immediately
+- When page becomes hidden during TX/RX TX/RX Auto mode: 
+  - TX/RX Auto mode stops immediately
   - GPS watch stops
   - Wake lock released
-  - **Dynamic Status**: `"Lost focus, auto mode stopped"` (yellow)
-- User must manually restart auto mode when returning
+  - **Dynamic Status**: `"Lost focus, TX/RX TX/RX Auto mode stopped"` (yellow)
+- User must manually restart TX/RX TX/RX Auto mode when returning
 
 ### Repeater Tracking Edge Cases
 - **No repeaters heard**: `heard_repeats = "None"` in API post
@@ -603,12 +603,12 @@ MeshCore-GOME-WarDriver implements a comprehensive ping system with both manual 
 1. **Validation First**:  Geofence and distance checks before any mesh operations
 2. **Control Locking**:  Buttons locked for entire ping lifecycle
 3. **Fail-Open on API**:  Ping considered sent even if API fails
-4. **Graceful Skipping**: Auto mode skips failed pings without stopping
+4. **Graceful Skipping**: TX/RX Auto mode skips failed pings without stopping
 5. **User Transparency**: Status messages at every step
 
 **Manual Ping:** Cooldown Check → GPS → Validations → Lock → Mesh Send → 7s Listen → API Post → Unlock
 
-**Auto Ping:** Start → GPS Watch → Initial Ping → Schedule Next → Countdown → Repeat
+**TX/RX Auto:** Start → GPS Watch → Initial Ping → Schedule Next → Countdown → Repeat
 
 **Interactions:**
 - Manual during auto: pause countdown → execute → resume/reschedule
@@ -618,3 +618,103 @@ MeshCore-GOME-WarDriver implements a comprehensive ping system with both manual 
 **Debug Mode:** Add `? debug=true` to URL for detailed logging
 
 The workflow prioritizes reliability, validation-first design, and comprehensive user feedback throughout the ping operation. 
+---
+
+## RX Auto Mode
+
+### Overview
+RX Auto mode provides passive-only wardriving without transmitting on the mesh network. It listens for all mesh traffic and logs received packets to the RX Log, which are then batched and posted to MeshMapper API.
+
+### RX Auto Start Sequence
+1. User clicks "RX Auto" button
+2. Verify BLE connection active
+3. Defensive check: ensure unified listener running
+4. Set `state.rxTracking.isWardriving = true`
+5. Set `state.rxAutoRunning = true`
+6. Update button to "Stop RX" (amber)
+7. Disable TX/RX Auto button (mutual exclusivity)
+8. Acquire wake lock
+9. Show "RX Auto started" status (green)
+
+### RX Auto Stop Sequence
+1. User clicks "Stop RX" button
+2. Set `state.rxTracking.isWardriving = false`
+3. Set `state.rxAutoRunning = false`
+4. Update button to "RX Auto" (indigo)
+5. Re-enable TX/RX Auto button
+6. Release wake lock
+7. Show "RX Auto stopped" status (idle)
+
+### RX Auto Characteristics
+- **Zero mesh TX** (no network impact)
+- **No GPS requirement** to start
+- **No cooldown restrictions**
+- **Mutually exclusive** with TX/RX Auto mode
+- **Unified listener stays on** (does not stop when mode stops)
+
+### Behavior Comparison
+
+| Feature | TX Ping | TX/RX Auto | RX Auto |
+|---------|---------|------------|---------|
+| Transmits | Yes (once) | Yes (auto) | No |
+| TX Echo Tracking | Yes (7s) | Yes (per ping) | No |
+| RX Wardriving | No | Yes | Yes |
+| Mesh Load | Low | High | None |
+| Cooldown | Yes (7s) | Yes (7s) | No |
+| GPS Required | Yes | Yes | No |
+| Wake Lock | No | Yes | Yes |
+| Unified Listener | Always on | Always on | Always on |
+| TX Tracking Flag | True (7s) | True (per ping) | False |
+| RX Wardriving Flag | False | True | True |
+
+### Always-On Unified Listener Architecture
+
+The unified RX listener operates independently of wardriving modes:
+
+**Lifecycle:**
+- **Starts**: Immediately on connect (after channel setup)
+- **Stops**: Only on disconnect
+- **Never stops**: During mode changes or page visibility changes
+
+**Routing Logic:**
+1. Listener receives all rx_log events from device
+2. Parse packet metadata once with `parseRxPacketMetadata()`
+3. If `state.txTracking.isListening` → check for TX echo
+4. If `state.rxTracking.isWardriving` → log RX observation
+5. If neither → packet ignored (but listener stays active)
+
+**Defensive Checks:**
+- `startUnifiedRxListening()` is idempotent (safe to call multiple times)
+- Handler checks `isListening` and reactivates if needed
+- Page visibility handler verifies listener active when page visible
+- Auto mode start functions ensure listener running
+
+### Page Visibility
+- When page becomes hidden during RX Auto:
+  - RX Auto mode stops immediately
+  - Wake lock released
+  - Unified listener stays active
+  - **Dynamic Status**: `"Lost focus, RX Auto stopped"` (yellow)
+- When page becomes hidden during TX/RX Auto:
+  - TX/RX Auto mode stops immediately  
+  - GPS watch stops
+  - Wake lock released
+  - Unified listener stays active
+  - **Dynamic Status**: `"Lost focus, TX/RX Auto stopped"` (yellow)
+- User must manually restart auto modes when returning
+
+### Edge Cases
+- **Start RX Auto while TX/RX Auto running**: Button disabled (mutual exclusivity)
+- **Start TX/RX Auto while RX Auto running**: Button disabled (mutual exclusivity)
+- **Disconnect during RX Auto**: Mode stops, listener stops, logs preserved
+- **Page hidden during RX Auto**: Mode stops, listener stays on
+- **Listener fails**: Defensive checks reactivate listener
+
+### Validation Requirements
+- Unified listener must start on connect and stay on entire connection
+- Unified listener only stops on disconnect
+- RX wardriving flag controls whether packets are logged
+- TX/RX Auto and RX Auto are mutually exclusive
+- All logs cleared on connect, preserved on disconnect
+- Defensive checks ensure listener stays active
+- `startUnifiedRxListening()` is idempotent (safe to call multiple times)
