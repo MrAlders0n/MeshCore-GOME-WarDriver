@@ -18,5 +18,8 @@
     "pwa"
   ],
   "author": "MrAlders0n",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "aes-js": "^3.1.2"
+  }
 }
