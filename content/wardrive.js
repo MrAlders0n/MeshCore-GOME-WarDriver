@@ -4678,18 +4678,20 @@ function updateConnectButtonState() {
 function lockWardriveSettings() {
   debugLog("[UI] Locking wardrive settings (power and external antenna)");
   
-  // Lock all radio power labels
-  const powerLabels = document.querySelectorAll('input[name="power"]');
-  powerLabels.forEach(input => {
+  // Lock all radio power inputs and labels
+  const powerInputs = document.querySelectorAll('input[name="power"]');
+  powerInputs.forEach(input => {
+    input.disabled = true;
     const label = input.closest("label");
     if (label) {
       label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
     }
   });
   
-  // Lock all external antenna labels
-  const antennaLabels = document.querySelectorAll('input[name="externalAntenna"]');
-  antennaLabels.forEach(input => {
+  // Lock all external antenna inputs and labels
+  const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaInputs.forEach(input => {
+    input.disabled = true;
     const label = input.closest("label");
     if (label) {
       label.classList.add("opacity-50", "cursor-not-allowed", "pointer-events-none");
@@ -4703,18 +4705,20 @@ function lockWardriveSettings() {
 function unlockWardriveSettings() {
   debugLog("[UI] Unlocking wardrive settings (power and external antenna)");
   
-  // Unlock all radio power labels
-  const powerLabels = document.querySelectorAll('input[name="power"]');
-  powerLabels.forEach(input => {
+  // Unlock all radio power inputs and labels
+  const powerInputs = document.querySelectorAll('input[name="power"]');
+  powerInputs.forEach(input => {
+    input.disabled = false;
     const label = input.closest("label");
     if (label) {
       label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
     }
   });
   
-  // Unlock all external antenna labels
-  const antennaLabels = document.querySelectorAll('input[name="externalAntenna"]');
-  antennaLabels.forEach(input => {
+  // Unlock all external antenna inputs and labels
+  const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
+  antennaInputs.forEach(input => {
+    input.disabled = false;
     const label = input.closest("label");
     if (label) {
       label.classList.remove("opacity-50", "cursor-not-allowed", "pointer-events-none");
