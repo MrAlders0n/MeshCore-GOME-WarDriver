@@ -64,19 +64,39 @@ const MIN_PAUSE_THRESHOLD_MS = 1000;           // Minimum timer value (1 second)
 const MAX_REASONABLE_TIMER_MS = 5 * 60 * 1000; // Maximum reasonable timer value (5 minutes) to handle clock skew
 const RX_LOG_LISTEN_WINDOW_MS = 6000;         // Listen window for repeater echoes (6 seconds)
 const CHANNEL_GROUP_TEXT_HEADER = 0x15;       // Header byte for Meshtastic GroupText packets (0x15) - used exclusively for Session Log echo detection
+const ADVERT_HEADER = 0x11;                   // Header byte for ADVERT packets (0x11)
+
+// RX Packet Filter Configuration
+const MAX_RX_PATH_LENGTH = 9;                 // Maximum path length for RX packets (drop if exceeded to filter corrupted packets)
+const RX_ALLOWED_CHANNELS = ['#wardriving', '#public', '#testing', '#ottawa']; // Allowed channels for RX wardriving
+const RX_PRINTABLE_THRESHOLD = 0.80;          // Minimum printable character ratio for GRP_TXT (80%)
 
 // Pre-computed channel hash and key for the wardriving channel
 // These will be computed once at startup and used for message correlation and decryption
 let WARDRIVING_CHANNEL_HASH = null;
 let WARDRIVING_CHANNEL_KEY = null;
 
-// Initialize the wardriving channel hash and key at startup
+// Pre-computed channel hashes and keys for all allowed RX channels
+const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
+
+// Initialize channel hashes and keys at startup
 (async function initializeChannelHash() {
   try {
+    // Initialize wardriving channel (for TX tracking)
     WARDRIVING_CHANNEL_KEY = await deriveChannelKey(CHANNEL_NAME);
     WARDRIVING_CHANNEL_HASH = await computeChannelHash(WARDRIVING_CHANNEL_KEY);
     debugLog(`[INIT] Wardriving channel hash pre-computed at startup: 0x${WARDRIVING_CHANNEL_HASH.toString(16).padStart(2, '0')}`);
     debugLog(`[INIT] Wardriving channel key cached for message decryption (${WARDRIVING_CHANNEL_KEY.length} bytes)`);
+    
+    // Initialize all allowed RX channels
+    debugLog(`[INIT] Pre-computing hashes/keys for ${RX_ALLOWED_CHANNELS.length} allowed RX channels...`);
+    for (const channelName of RX_ALLOWED_CHANNELS) {
+      const key = await deriveChannelKey(channelName);
+      const hash = await computeChannelHash(key);
+      RX_CHANNEL_MAP.set(hash, { name: channelName, key: key });
+      debugLog(`[INIT] ${channelName} -> hash=0x${hash.toString(16).padStart(2, '0')}`);
+    }
+    debugLog(`[INIT] ✅ All RX channel hashes/keys initialized successfully`);
   } catch (error) {
     debugError(`[INIT] CRITICAL: Failed to pre-compute channel hash/key: ${error.message}`);
     debugError(`[INIT] Repeater echo tracking will be disabled. Please reload the page.`);
@@ -199,6 +219,7 @@ const txLogState = {
 // RX log state (passive observations)
 const rxLogState = {
   entries: [],  // Array of parsed RX log entries
+  dropCount: 0, // Count of dropped/filtered packets
   isExpanded: false,
   autoScroll: true,
   maxEntries: 100  // Limit to prevent memory issues
@@ -2005,6 +2026,177 @@ async function decryptGroupTextPayload(payload, channelKey) {
 }
 
 /**
+ * Check if a string is printable ASCII (basic ASCII only, no extended chars)
+ * @param {string} str - String to check
+ * @returns {boolean} True if all characters are printable ASCII (32-126)
+ */
+function isStrictAscii(str) {
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    if (code < 32 || code > 126) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Calculate ratio of printable characters in a string
+ * @param {string} str - String to analyze
+ * @returns {number} Ratio of printable chars (0.0 to 1.0)
+ */
+function getPrintableRatio(str) {
+  if (str.length === 0) return 0;
+  let printableCount = 0;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    // Printable: ASCII 32-126 or common whitespace (9=tab, 10=newline, 13=CR)
+    if ((code >= 32 && code <= 126) || code === 9 || code === 10 || code === 13) {
+      printableCount++;
+    }
+  }
+  return printableCount / str.length;
+}
+
+/**
+ * Parse and validate ADVERT packet name field
+ * @param {Uint8Array} payload - Encrypted payload from metadata
+ * @returns {Object} {valid: boolean, name: string, reason: string}
+ */
+function parseAdvertName(payload) {
+  try {
+    // ADVERT structure: [32 bytes pubkey][4 bytes timestamp][64 bytes signature][1 byte flags][name...]
+    const PUBKEY_SIZE = 32;
+    const TIMESTAMP_SIZE = 4;
+    const SIGNATURE_SIZE = 64;
+    const FLAGS_SIZE = 1;
+    const NAME_OFFSET = PUBKEY_SIZE + TIMESTAMP_SIZE + SIGNATURE_SIZE + FLAGS_SIZE;
+    
+    if (payload.length <= NAME_OFFSET) {
+      return { valid: false, name: '', reason: 'payload too short for name' };
+    }
+    
+    const nameBytes = payload.slice(NAME_OFFSET);
+    const decoder = new TextDecoder('utf-8', { fatal: false });
+    const name = decoder.decode(nameBytes).replace(/\0+$/, '').trim();
+    
+    debugLog(`[RX FILTER] ADVERT name extracted: "${name}" (${name.length} chars)`);
+    
+    if (name.length === 0) {
+      return { valid: false, name: '', reason: 'name empty' };
+    }
+    
+    // Check if name is printable
+    const printableRatio = getPrintableRatio(name);
+    debugLog(`[RX FILTER] ADVERT name printable ratio: ${(printableRatio * 100).toFixed(1)}%`);
+    
+    if (printableRatio < 0.9) {
+      return { valid: false, name: name, reason: 'name not printable' };
+    }
+    
+    // Check strict ASCII (no extended characters)
+    if (!isStrictAscii(name)) {
+      return { valid: false, name: name, reason: 'name contains non-ASCII chars' };
+    }
+    
+    return { valid: true, name: name, reason: 'kept' };
+    
+  } catch (error) {
+    debugError(`[RX FILTER] Error parsing ADVERT name: ${error.message}`);
+    return { valid: false, name: '', reason: 'parse error' };
+  }
+}
+
+/**
+ * Validate RX packet for wardriving logging
+ * @param {Object} metadata - Parsed metadata from parseRxPacketMetadata()
+ * @returns {Promise<Object>} {valid: boolean, reason: string, channelName?: string, plaintext?: string}
+ */
+async function validateRxPacket(metadata) {
+  try {
+    // Log raw packet for debugging
+    const rawHex = Array.from(metadata.raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+    debugLog(`[RX FILTER] ========== VALIDATING PACKET ==========`);
+    debugLog(`[RX FILTER] Raw packet (${metadata.raw.length} bytes): ${rawHex}`);
+    debugLog(`[RX FILTER] Header: 0x${metadata.header.toString(16).padStart(2, '0')} | PathLength: ${metadata.pathLength} | SNR: ${metadata.snr}`);
+    
+    // VALIDATION 1: Check path length
+    if (metadata.pathLength > MAX_RX_PATH_LENGTH) {
+      debugLog(`[RX FILTER] ❌ DROPPED: pathLen>${MAX_RX_PATH_LENGTH} (${metadata.pathLength} hops)`);
+      return { valid: false, reason: `pathLen>${MAX_RX_PATH_LENGTH}` };
+    }
+    debugLog(`[RX FILTER] ✓ Path length OK (${metadata.pathLength} ≤ ${MAX_RX_PATH_LENGTH})`);
+    
+    // VALIDATION 2: Check packet type (only ADVERT and GRP_TXT)
+    if (metadata.header === CHANNEL_GROUP_TEXT_HEADER) {
+      debugLog(`[RX FILTER] Packet type: GRP_TXT (0x15)`);
+      
+      // GRP_TXT validation
+      if (metadata.encryptedPayload.length < 3) {
+        debugLog(`[RX FILTER] ❌ DROPPED: GRP_TXT payload too short (${metadata.encryptedPayload.length} bytes)`);
+        return { valid: false, reason: 'payload too short' };
+      }
+      
+      const channelHash = metadata.encryptedPayload[0];
+      debugLog(`[RX FILTER] Channel hash: 0x${channelHash.toString(16).padStart(2, '0')}`);
+      
+      // Check if channel is in allowed list
+      const channelInfo = RX_CHANNEL_MAP.get(channelHash);
+      if (!channelInfo) {
+        debugLog(`[RX FILTER] ❌ DROPPED: Unknown channel hash 0x${channelHash.toString(16).padStart(2, '0')}`);
+        return { valid: false, reason: 'unknown channel hash' };
+      }
+      
+      debugLog(`[RX FILTER] ✓ Channel matched: ${channelInfo.name}`);
+      
+      // Decrypt message
+      const plaintext = await decryptGroupTextPayload(metadata.encryptedPayload, channelInfo.key);
+      if (!plaintext) {
+        debugLog(`[RX FILTER] ❌ DROPPED: Decryption failed`);
+        return { valid: false, reason: 'decrypt failed' };
+      }
+      
+      debugLog(`[RX FILTER] Decrypted message (${plaintext.length} chars): "${plaintext.substring(0, 60)}${plaintext.length > 60 ? '...' : ''}"}`);
+      
+      // Check printable ratio
+      const printableRatio = getPrintableRatio(plaintext);
+      debugLog(`[RX FILTER] Printable ratio: ${(printableRatio * 100).toFixed(1)}% (threshold: ${(RX_PRINTABLE_THRESHOLD * 100).toFixed(1)}%)`);
+      
+      if (printableRatio < RX_PRINTABLE_THRESHOLD) {
+        debugLog(`[RX FILTER] ❌ DROPPED: plaintext not printable`);
+        return { valid: false, reason: 'plaintext not printable' };
+      }
+      
+      debugLog(`[RX FILTER] ✅ KEPT: GRP_TXT passed all validations`);
+      return { valid: true, reason: 'kept', channelName: channelInfo.name, plaintext: plaintext };
+      
+    } else if (metadata.header === ADVERT_HEADER) {
+      debugLog(`[RX FILTER] Packet type: ADVERT (0x11)`);
+      
+      // ADVERT validation
+      const nameResult = parseAdvertName(metadata.encryptedPayload);
+      
+      if (!nameResult.valid) {
+        debugLog(`[RX FILTER] ❌ DROPPED: ${nameResult.reason}`);
+        return { valid: false, reason: nameResult.reason };
+      }
+      
+      debugLog(`[RX FILTER] ✅ KEPT: ADVERT passed all validations (name="${nameResult.name}")`);
+      return { valid: true, reason: 'kept' };
+      
+    } else {
+      // Unsupported packet type
+      debugLog(`[RX FILTER] ❌ DROPPED: unsupported ptype (header=0x${metadata.header.toString(16).padStart(2, '0')})`);
+      return { valid: false, reason: 'unsupported ptype' };
+    }
+    
+  } catch (error) {
+    debugError(`[RX FILTER] ❌ Validation error: ${error.message}`);
+    return { valid: false, reason: 'validation error' };
+  }
+}
+
+/**
  * Start listening for repeater echoes via rx_log
  * Uses the pre-computed WARDRIVING_CHANNEL_HASH for message correlation
  * @param {string} payload - The ping payload that was sent
@@ -2289,7 +2481,28 @@ async function handleRxLogging(metadata, data) {
     // Packets with no path are direct transmissions (node-to-node) and don't provide
     // information about repeater coverage, so we skip them for RX wardriving purposes.
     if (metadata.pathLength === 0) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
       debugLog(`[RX LOG] Ignoring: no path (direct transmission, not via repeater)`);
+      return;
+    }
+    
+    // Get current GPS location (must have GPS before further validation)
+    if (!state.lastFix) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
+      debugLog(`[RX LOG] No GPS fix available, skipping entry`);
+      return;
+    }
+    
+    // PACKET FILTER: Validate packet before logging
+    const validation = await validateRxPacket(metadata);
+    if (!validation.valid) {
+      rxLogState.dropCount++;
+      updateRxLogSummary();
+      const rawHex = Array.from(metadata.raw).map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+      debugLog(`[RX LOG] ❌ Packet dropped: ${validation.reason}`);
+      debugLog(`[RX LOG] Dropped packet hex: ${rawHex}`);
       return;
     }
     
@@ -2298,12 +2511,7 @@ async function handleRxLogging(metadata, data) {
     const repeaterId = lastHopId.toString(16).padStart(2, '0');
     
     debugLog(`[RX LOG] Packet heard via last hop: ${repeaterId}, SNR=${metadata.snr}, path_length=${metadata.pathLength}`);
-    
-    // Get current GPS location
-    if (!state.lastFix) {
-      debugLog(`[RX LOG] No GPS fix available, skipping entry`);
-      return;
-    }
+    debugLog(`[RX LOG] ✅ Packet validated and passed filter`);
     
     const lat = state.lastFix.lat;
     const lon = state.lastFix.lon;
@@ -2945,7 +3153,9 @@ function updateRxLogSummary() {
   if (!rxLogCount || !rxLogLastTime || !rxLogLastRepeater) return;
   
   const count = rxLogState.entries.length;
-  rxLogCount.textContent = count === 1 ? '1 observation' : `${count} observations`;
+  const dropText = `${rxLogState.dropCount} dropped`;
+  const obsText = count === 1 ? '1 observation' : `${count} observations`;
+  rxLogCount.textContent = `${obsText}, ${dropText}`;
   
   if (count === 0) {
     rxLogLastTime.textContent = 'No data';
@@ -4167,6 +4377,7 @@ async function connect() {
         updateTxLogSummary();
         
         rxLogState.entries = [];
+        rxLogState.dropCount = 0;
         renderRxLogEntries(true);
         updateRxLogSummary();
         
