@@ -50,6 +50,9 @@ class Constants {
         // todo set device pin command
         SetOtherParams: 38,
         SendTelemetryReq: 39,
+        
+        // Request various statistics from companion (CMD_GET_STATS)
+        GetStats: 56, // 0x38
 
         SendBinaryReq: 50,
     }
@@ -74,6 +77,8 @@ class Constants {
         ChannelInfo: 18,
         SignStart: 19,
         Signature: 20,
+        // Stats response (RESP_CODE_STATS = 0x18 = 24)
+        Stats: 24,
     }
 
     static PushCodes = {
@@ -124,6 +129,13 @@ class Constants {
         GetAvgMinMax: 0x04, // #define REQ_TYPE_GET_AVG_MIN_MAX 0x04
         GetAccessList: 0x05, // #define REQ_TYPE_GET_ACCESS_LIST 0x05
         GetNeighbours: 0x06, // #define REQ_TYPE_GET_NEIGHBOURS 0x06
+    }
+
+    // Types of statistics that can be requested with GetStats
+    static StatsTypes = {
+        Core: 0,
+        Radio: 1,
+        Packets: 2,
     }
 
 }

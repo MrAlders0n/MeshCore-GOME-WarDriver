@@ -159,6 +159,7 @@ const STATUS_COLORS = {
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
 const deviceInfoEl   = $("deviceInfo");
+const deviceNameEl   = $("deviceName");
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const txPingBtn      = $("txPingBtn");
@@ -176,6 +177,7 @@ setConnStatus("Disconnected", STATUS_COLORS.error);
 // NEW: selectors
 const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
 const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
+const deviceModelEl  = $("deviceModel");
 
 // TX Log selectors
 const txLogSummaryBar = $("txLogSummaryBar");
@@ -258,6 +260,9 @@ const state = {
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
+  deviceModel: null, // Manufacturer/model string exposed by companion
+  lastNoiseFloor: null, // Most recent noise floor read from companion (dBm) or 'ERR'
+  deviceName: null,
   wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
   debugMode: false, // Whether debug mode is enabled by MeshMapper API
   tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
@@ -946,6 +951,30 @@ function updateDistanceUi() {
   }
 }
 
+/**
+ * Update the device display in the connection bar to include noise floor
+ * @param {string} name - Device name to show
+ */
+function updateDeviceInfoDisplay(name) {
+  if (!deviceInfoEl) return;
+  const displayName = name || state.deviceName || deviceNameEl?.textContent || "[No device]";
+  // Update device name element
+  if (deviceNameEl) deviceNameEl.textContent = displayName;
+
+  // Determine noise display value
+  let noiseText = "-";
+  if (state.lastNoiseFloor === null) {
+    noiseText = "--";
+  } else if (state.lastNoiseFloor === 'ERR') {
+    noiseText = "ERR";
+  } else {
+    noiseText = String(state.lastNoiseFloor);
+  }
+
+  // Show only Noise in the connection bar's info span
+  deviceInfoEl.textContent = `Noise: ${noiseText}`;
+}
+
 
 
 // ---- Geolocation ----
@@ -1283,8 +1312,9 @@ function buildPayload(lat, lon) {
  * @returns {string} Device name or default identifier
  */
 function getDeviceIdentifier() {
-  const deviceText = deviceInfoEl?.textContent;
-  return (deviceText && deviceText !== "—") ? deviceText : MESHMAPPER_DEFAULT_WHO;
+  const nameText = deviceNameEl?.textContent;
+  if (!nameText || nameText === "—") return MESHMAPPER_DEFAULT_WHO;
+  return nameText || MESHMAPPER_DEFAULT_WHO;
 }
 
 /**
@@ -3930,6 +3960,21 @@ async function sendPing(manual = false) {
       // Manual ping when auto is not running
       setDynamicStatus("Sending manual ping", STATUS_COLORS.info);
     }
+    // Refresh radio stats (noise floor) before attempting ping so UI shows fresh value
+    if (state.connection) {
+      try {
+        const stats = await state.connection.getRadioStats(3000);
+        if (stats && typeof stats.noiseFloor !== 'undefined') {
+          state.lastNoiseFloor = stats.noiseFloor;
+        } else {
+          state.lastNoiseFloor = null;
+        }
+      } catch (e) {
+        debugError(`[BLE] getRadioStats failed before ping: ${e && e.message ? e.message : e}`);
+        state.lastNoiseFloor = 'ERR';
+      }
+      updateDeviceInfoDisplay(deviceNameEl?.textContent);
+    }
 
     // Get GPS coordinates
     const coords = await getGpsCoordinatesForPing(!manual && state.txRxAutoRunning);
@@ -4361,7 +4406,26 @@ async function connect() {
       state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
       debugLog(`[BLE] Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
       
-      deviceInfoEl.textContent = selfInfo?.name || "[No device]";
+      // Store device model for Settings and show device name
+      state.deviceModel = selfInfo?.manufacturerModel || "-";
+      if (deviceModelEl) deviceModelEl.textContent = state.deviceModel;
+      state.deviceName = selfInfo?.name || "[No device]";
+      if (deviceNameEl) deviceNameEl.textContent = state.deviceName;
+      // Immediately attempt to read radio stats (noise floor) on connect
+      try {
+        const stats = await conn.getRadioStats(5000).catch(e => { throw e; });
+        if (stats && typeof stats.noiseFloor !== 'undefined') {
+          state.lastNoiseFloor = stats.noiseFloor;
+        } else {
+          state.lastNoiseFloor = null;
+        }
+      } catch (e) {
+        debugError(`[BLE] getRadioStats failed on connect: ${e && e.message ? e.message : e}`);
+        state.lastNoiseFloor = 'ERR';
+      }
+      // Update connection bar display (deviceNameEl already set)
+      updateDeviceInfoDisplay();
+      updateDeviceInfoDisplay(selfInfo?.name);
       updateAutoButton();
       try { 
         await conn.syncDeviceTime?.(); 
@@ -4487,7 +4551,13 @@ async function connect() {
       }
       
       setConnectButton(false);
-      deviceInfoEl.textContent = "—";
+      if (deviceNameEl) deviceNameEl.textContent = "—";
+      if (deviceModelEl) deviceModelEl.textContent = "-";
+      // Reset noise display to placeholder
+      if (deviceInfoEl) deviceInfoEl.textContent = "Noise: -";
+      state.deviceModel = null;
+      state.deviceName = null;
+      state.lastNoiseFloor = null;
       state.connection = null;
       state.channel = null;
       state.devicePublicKey = null; // Clear public key

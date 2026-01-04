@@ -260,6 +260,13 @@ class Connection extends EventEmitter {
         await this.sendToRadioFrame(data.toBytes());
     }
 
+    async sendCommandGetStats(statsType) {
+        const data = new BufferWriter();
+        data.writeByte(Constants.CommandCodes.GetStats);
+        data.writeByte(statsType);
+        await this.sendToRadioFrame(data.toBytes());
+    }
+
     async sendCommandGetChannel(channelIdx) {
         const data = new BufferWriter();
         data.writeByte(Constants.CommandCodes.GetChannel);
@@ -348,6 +355,8 @@ class Connection extends EventEmitter {
             this.onBatteryVoltageResponse(bufferReader);
         } else if(responseCode === Constants.ResponseCodes.DeviceInfo){
             this.onDeviceInfoResponse(bufferReader);
+        } else if(responseCode === Constants.ResponseCodes.Stats){
+            this.onStatsResponse(bufferReader);
         } else if(responseCode === Constants.ResponseCodes.PrivateKey){
             this.onPrivateKeyResponse(bufferReader);
         } else if(responseCode === Constants.ResponseCodes.Disabled){
@@ -560,6 +569,32 @@ class Connection extends EventEmitter {
         });
     }
 
+    onStatsResponse(bufferReader) {
+        // stats response format: <stats_type:1> ... payload depends on type
+        const statsType = bufferReader.readByte();
+        if (statsType === Constants.StatsTypes.Radio) {
+            const noiseFloor = bufferReader.readInt16LE();
+            const lastRssi = bufferReader.readInt8();
+            const lastSnr = bufferReader.readInt8() / 4; // scaled by 4 in firmware
+            const txAirSecs = bufferReader.readUInt32LE();
+            const rxAirSecs = bufferReader.readUInt32LE();
+            this.emit(Constants.ResponseCodes.Stats, {
+                statsType: statsType,
+                noiseFloor: noiseFloor,
+                lastRssi: lastRssi,
+                lastSnr: lastSnr,
+                txAirSecs: txAirSecs,
+                rxAirSecs: rxAirSecs
+            });
+        } else {
+            // Unknown stats type - forward raw remaining bytes
+            this.emit(Constants.ResponseCodes.Stats, {
+                statsType: statsType,
+                raw: bufferReader.readRemainingBytes()
+            });
+        }
+    }
+
     onPrivateKeyResponse(bufferReader) {
         this.emit(Constants.ResponseCodes.PrivateKey, {
             privateKey: bufferReader.readBytes(64),
@@ -630,6 +665,33 @@ class Connection extends EventEmitter {
 
     onNoMoreMessagesResponse(bufferReader) {
         this.emit(Constants.ResponseCodes.NoMoreMessages, {
+
+        });
+    }
+
+    getRadioStats(timeoutMillis = null) {
+        return new Promise(async (resolve, reject) => {
+
+            // listen for stats response
+            this.once(Constants.ResponseCodes.Stats, (stats) => {
+                // Only resolve radio stats if type matches, otherwise pass through
+                if (stats && stats.statsType === Constants.StatsTypes.Radio) {
+                    resolve(stats);
+                } else {
+                    // Not radio stats - resolve with whatever arrived
+                    resolve(stats);
+                }
+            });
+
+            if (timeoutMillis != null) {
+                setTimeout(() => reject(new Error('getRadioStats timeout')), timeoutMillis);
+            }
+
+            try {
+                await this.sendCommandGetStats(Constants.StatsTypes.Radio);
+            } catch (e) {
+                reject(e);
+            }
 
         });
     }
