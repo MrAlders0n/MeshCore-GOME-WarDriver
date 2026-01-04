@@ -957,6 +957,7 @@ function updateDistanceUi() {
  */
 function updateDeviceInfoDisplay(name) {
   if (!deviceInfoEl) return;
+  debugLog(`[UI] updateDeviceInfoDisplay called with name="${name}"`);
   const displayName = name || state.deviceName || deviceNameEl?.textContent || "[No device]";
   // Update device name element
   if (deviceNameEl) deviceNameEl.textContent = displayName;
@@ -972,6 +973,7 @@ function updateDeviceInfoDisplay(name) {
   }
 
   // Show only Noise in the connection bar's info span
+  debugLog(`[UI] Setting noise display: ${noiseText}`);
   deviceInfoEl.textContent = `Noise: ${noiseText}`;
 }
 
@@ -3962,6 +3964,7 @@ async function sendPing(manual = false) {
     }
     // Refresh radio stats (noise floor) before attempting ping so UI shows fresh value
     if (state.connection) {
+      debugLog("[PING] Refreshing radio stats before ping");
       try {
         const stats = await state.connection.getRadioStats(3000);
         if (stats && typeof stats.noiseFloor !== 'undefined') {
@@ -3969,10 +3972,12 @@ async function sendPing(manual = false) {
         } else {
           state.lastNoiseFloor = null;
         }
+        debugLog(`[PING] Radio stats refreshed before ping: noiseFloor=${state.lastNoiseFloor}`);
       } catch (e) {
         debugError(`[BLE] getRadioStats failed before ping: ${e && e.message ? e.message : e}`);
         state.lastNoiseFloor = 'ERR';
       }
+      debugLog("[UI] Updating device info display after pre-ping stats refresh");
       updateDeviceInfoDisplay(deviceNameEl?.textContent);
     }
 
@@ -4408,10 +4413,13 @@ async function connect() {
       
       // Store device model for Settings and show device name
       state.deviceModel = selfInfo?.manufacturerModel || "-";
+      debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
       if (deviceModelEl) deviceModelEl.textContent = state.deviceModel;
       state.deviceName = selfInfo?.name || "[No device]";
+      debugLog(`[BLE] Device name stored: ${state.deviceName}`);
       if (deviceNameEl) deviceNameEl.textContent = state.deviceName;
       // Immediately attempt to read radio stats (noise floor) on connect
+      debugLog("[BLE] Requesting radio stats on connect");
       try {
         const stats = await conn.getRadioStats(5000).catch(e => { throw e; });
         if (stats && typeof stats.noiseFloor !== 'undefined') {
@@ -4419,11 +4427,13 @@ async function connect() {
         } else {
           state.lastNoiseFloor = null;
         }
+        debugLog(`[BLE] Radio stats acquired on connect: noiseFloor=${state.lastNoiseFloor}`);
       } catch (e) {
         debugError(`[BLE] getRadioStats failed on connect: ${e && e.message ? e.message : e}`);
         state.lastNoiseFloor = 'ERR';
       }
       // Update connection bar display (deviceNameEl already set)
+      debugLog("[UI] Updating device info display after stats fetch on connect");
       updateDeviceInfoDisplay();
       updateDeviceInfoDisplay(selfInfo?.name);
       updateAutoButton();
@@ -4555,6 +4565,7 @@ async function connect() {
       if (deviceModelEl) deviceModelEl.textContent = "-";
       // Reset noise display to placeholder
       if (deviceInfoEl) deviceInfoEl.textContent = "Noise: -";
+      debugLog("[BLE] Clearing device model, name, and noise floor on disconnect");
       state.deviceModel = null;
       state.deviceName = null;
       state.lastNoiseFloor = null;
