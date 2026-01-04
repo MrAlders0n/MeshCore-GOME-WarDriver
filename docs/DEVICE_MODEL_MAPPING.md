@@ -102,13 +102,10 @@ The MeshCore GOME WarDriver implements automatic power level selection based on 
 
 | Wardrive Setting | Firmware dBm | Use Case |
 |------------------|--------------|----------|
-| 0.05 | 9 dBm | 2W PA modules (E22-900M33S) - avoid hardware damage |
-| 0.1 | 12 dBm | Low power |
-| 0.2 | 15 dBm | Medium-low power |
-| 0.5 | 18 dBm | Medium power |
-| 1.0 | 19-20 dBm | 1W PA modules (E22-900M30S) or high power |
-| 2.0 | 22 dBm | Maximum power (no PA or standard modules) |
-
+| 0.3 | ≤24 dBm | Standard devices without PA |
+| 0.6 | 27 dBm | Heltek V4 |
+| 1.0 | 30 dBm | 1W PA modules (E22-900M30S): 20dBm input → 30dBm output |
+| 2.0 | 33 dBm | 2W PA modules (E22-900M33S): 9dBm input → 33dBm output |
 ## Critical Power Amplifier Cases
 
 ### Ikoka 33dBm Models (2W PA)
