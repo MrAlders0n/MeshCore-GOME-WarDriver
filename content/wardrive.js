@@ -3966,7 +3966,7 @@ async function sendPing(manual = false) {
     if (state.connection) {
       debugLog("[PING] Refreshing radio stats before ping");
       try {
-        const stats = await state.connection.getRadioStats(3000);
+        const stats = await state.connection.getRadioStats(10000);
         if (stats && typeof stats.noiseFloor !== 'undefined') {
           state.lastNoiseFloor = stats.noiseFloor;
         } else {
@@ -4411,17 +4411,28 @@ async function connect() {
       state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
       debugLog(`[BLE] Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
       
-      // Store device model for Settings and show device name
-      state.deviceModel = selfInfo?.manufacturerModel || "-";
-      debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
-      if (deviceModelEl) deviceModelEl.textContent = state.deviceModel;
+      // Store device name from selfInfo
       state.deviceName = selfInfo?.name || "[No device]";
       debugLog(`[BLE] Device name stored: ${state.deviceName}`);
       if (deviceNameEl) deviceNameEl.textContent = state.deviceName;
+      
+      // Get device model from deviceQuery (contains manufacturerModel)
+      debugLog("[BLE] Requesting device info via deviceQuery");
+      try {
+        const deviceInfo = await conn.deviceQuery(1);
+        debugLog(`[BLE] deviceQuery response received: firmwareVer=${deviceInfo?.firmwareVer}, model=${deviceInfo?.manufacturerModel}`);
+        state.deviceModel = deviceInfo?.manufacturerModel || "-";
+        debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
+        if (deviceModelEl) deviceModelEl.textContent = state.deviceModel;
+      } catch (e) {
+        debugError(`[BLE] deviceQuery failed: ${e && e.message ? e.message : e}`);
+        state.deviceModel = "-";
+        if (deviceModelEl) deviceModelEl.textContent = "-";
+      }
       // Immediately attempt to read radio stats (noise floor) on connect
       debugLog("[BLE] Requesting radio stats on connect");
       try {
-        const stats = await conn.getRadioStats(5000).catch(e => { throw e; });
+        const stats = await conn.getRadioStats(10000).catch(e => { throw e; });
         if (stats && typeof stats.noiseFloor !== 'undefined') {
           state.lastNoiseFloor = stats.noiseFloor;
         } else {
