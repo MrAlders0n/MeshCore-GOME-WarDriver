@@ -260,10 +260,21 @@ class Connection extends EventEmitter {
         await this.sendToRadioFrame(data.toBytes());
     }
 
+    /**
+     * Send companion GetStats command
+     * @param {number} statsType - One of Constants.StatsTypes (Core=0, Radio=1, Packets=2)
+     * @returns {Promise<void>}
+     */
     async sendCommandGetStats(statsType) {
         const data = new BufferWriter();
         data.writeByte(Constants.CommandCodes.GetStats);
         data.writeByte(statsType);
+        // Debug: indicate stats request being sent
+        try {
+            console.debug(`[DEBUG] [BLE] sendCommandGetStats: requesting statsType=${statsType}`);
+        } catch (e) {
+            // ignore
+        }
         await this.sendToRadioFrame(data.toBytes());
     }
 
@@ -569,6 +580,12 @@ class Connection extends EventEmitter {
         });
     }
 
+    /**
+     * Handle incoming Stats response frames and emit a parsed object
+     * Radio stats payload format (firmware): <resp_code><stats_type><noise:int16><last_rssi:int8><last_snr:int8><tx_air_secs:uint32><rx_air_secs:uint32>
+     * Emits: Constants.ResponseCodes.Stats with an object { statsType, noiseFloor, lastRssi, lastSnr, txAirSecs, rxAirSecs }
+     * @param {BufferReader} bufferReader
+     */
     onStatsResponse(bufferReader) {
         // stats response format: <stats_type:1> ... payload depends on type
         const statsType = bufferReader.readByte();
@@ -578,6 +595,8 @@ class Connection extends EventEmitter {
             const lastSnr = bufferReader.readInt8() / 4; // scaled by 4 in firmware
             const txAirSecs = bufferReader.readUInt32LE();
             const rxAirSecs = bufferReader.readUInt32LE();
+            // Debug: parsed radio stats
+            try { console.debug(`[DEBUG] [BLE] onStatsResponse: radio stats parsed noise=${noiseFloor} rssi=${lastRssi} snr=${lastSnr}`); } catch(e){}
             this.emit(Constants.ResponseCodes.Stats, {
                 statsType: statsType,
                 noiseFloor: noiseFloor,
@@ -588,6 +607,7 @@ class Connection extends EventEmitter {
             });
         } else {
             // Unknown stats type - forward raw remaining bytes
+            try { console.debug(`[DEBUG] [BLE] onStatsResponse: unknown statsType=${statsType}`); } catch(e){}
             this.emit(Constants.ResponseCodes.Stats, {
                 statsType: statsType,
                 raw: bufferReader.readRemainingBytes()
@@ -669,6 +689,11 @@ class Connection extends EventEmitter {
         });
     }
 
+    /**
+     * Request radio stats (stats type = Radio) and return parsed object via Promise
+     * @param {number|null} timeoutMillis - optional timeout in ms
+     * @returns {Promise<Object>} Resolves with stats object or rejects on timeout/error
+     */
     getRadioStats(timeoutMillis = null) {
         return new Promise(async (resolve, reject) => {
 
@@ -684,12 +709,16 @@ class Connection extends EventEmitter {
             });
 
             if (timeoutMillis != null) {
-                setTimeout(() => reject(new Error('getRadioStats timeout')), timeoutMillis);
+                setTimeout(() => {
+                    try { console.error('[DEBUG] [BLE] getRadioStats timeout'); } catch(e){}
+                    reject(new Error('getRadioStats timeout'))
+                }, timeoutMillis);
             }
 
             try {
                 await this.sendCommandGetStats(Constants.StatsTypes.Radio);
             } catch (e) {
+                try { console.error(`[DEBUG] [BLE] sendCommandGetStats failed: ${e && e.message ? e.message : e}`); } catch(err){}
                 reject(e);
             }
 

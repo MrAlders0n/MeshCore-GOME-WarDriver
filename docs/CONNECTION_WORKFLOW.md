@@ -119,6 +119,7 @@ connectBtn.addEventListener("click", async () => {
    - Converts to hex string
    - Stores in `state.devicePublicKey`
    - Updates UI with device name
+   - Requests radio statistics from the companion (noise floor, last RSSI, SNR) and stores the result in application state. The connection bar displays `Noise: <value>`. If stats fetch fails, an error marker is shown (`Noise: ERR`) but connection proceeds.
    - Changes button to "Disconnect" (red)
    - **Connection Status**: `"Connecting"` (blue, maintained)
    - **Dynamic Status**: `"—"` (em dash)

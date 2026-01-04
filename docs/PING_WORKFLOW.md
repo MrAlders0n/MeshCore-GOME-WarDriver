@@ -51,15 +51,16 @@
 
 1. **User Initiates** → User clicks "Send Ping" button
 2. **Cooldown Check** → Verify not in 7-second cooldown period
-3. **GPS Acquisition** → Get current GPS coordinates
-4. **Geofence Validation** → Verify location is within Ottawa 150km
-5. **Distance Validation** → Verify ≥25m from last successful ping
-6. **Control Lock** → Lock ping controls for entire ping lifecycle
-7. **Payload Build** → Format ping message with coordinates and power
-8. **Channel Send** → Send payload to `#wardriving` channel
-9. **Repeater Tracking** → Start 7-second RX listening window
-10. **API Post** → Post to MeshMapper API after listening window
-11. **Control Unlock** → Unlock ping controls
+3. **Refresh Radio Stats** → Request radio statistics (noise floor) from companion to provide fresh noise reading for UI and decision telemetry
+4. **GPS Acquisition** → Get current GPS coordinates
+5. **Geofence Validation** → Verify location is within Ottawa 150km
+6. **Distance Validation** → Verify ≥25m from last successful ping
+7. **Control Lock** → Lock ping controls for entire ping lifecycle
+8. **Payload Build** → Format ping message with coordinates and power
+9. **Channel Send** → Send payload to `#wardriving` channel
+10. **Repeater Tracking** → Start 7-second RX listening window
+11. **API Post** → Post to MeshMapper API after listening window
+12. **Control Unlock** → Unlock ping controls
 
 ### Detailed Manual Ping Steps
 
