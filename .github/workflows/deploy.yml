@@ -35,7 +35,7 @@ jobs:
       - name: Get latest release version
         id: get_release
         run: |
-          RELEASE_TAG=$(curl -s https://api.github.com/repos/MrAlders0n/MeshCore-GOME-WarDriver/releases/latest | jq -r '.tag_name')
+          RELEASE_TAG=$(curl -s https://api.github.com/repos/MeshMapper/MeshMapper_WebClient/releases/latest | jq -r '.tag_name')
           echo "version=$RELEASE_TAG" >> $GITHUB_OUTPUT
 
       - name:  Setup Pages
