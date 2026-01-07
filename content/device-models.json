@@ -5,7 +5,7 @@
   "devices": [
     {
       "manufacturer": "Ikoka Stick-E22-22dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Stick-E22-22dBm",
+      "shortName": "Ikoka Stick 300mw",
       "power": 0.3,
       "platform": "nrf52",
       "txPower": 22,
@@ -13,7 +13,7 @@
     },
     {
       "manufacturer": "Ikoka Stick-E22-30dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Stick-E22-30dBm",
+      "shortName": "Ikoka Stick 1w",
       "power": 1.0,
       "platform": "nrf52",
       "txPower": 20,
@@ -21,7 +21,7 @@
     },
     {
       "manufacturer": "Ikoka Stick-E22-33dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Stick-E22-33dBm",
+      "shortName": "Ikoka Stick 2w",
       "power": 2.0,
       "platform": "nrf52",
       "txPower": 9,
@@ -29,7 +29,7 @@
     },
     {
       "manufacturer": "Ikoka Nano-E22-22dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Nano-E22-22dBm",
+      "shortName": "Ikoka Nano 300mw",
       "power": 0.3,
       "platform": "nrf52",
       "txPower": 22,
@@ -37,7 +37,7 @@
     },
     {
       "manufacturer": "Ikoka Nano-E22-30dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Nano-E22-30dBm",
+      "shortName": "Ikoka Nano 1w",
       "power": 1.0,
       "platform": "nrf52",
       "txPower": 20,
@@ -45,7 +45,7 @@
     },
     {
       "manufacturer": "Ikoka Nano-E22-33dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Nano-E22-33dBm",
+      "shortName": "Ikoka Nano 2w",
       "power": 2.0,
       "platform": "nrf52",
       "txPower": 9,
@@ -53,7 +53,7 @@
     },
     {
       "manufacturer": "Ikoka Handheld E22 30dBm (Xiao_nrf52)",
-      "shortName": "Ikoka Handheld E22 30dBm",
+      "shortName": "Ikoka Handheld 1w",
       "power": 1.0,
       "platform": "nrf52",
       "txPower": 20,

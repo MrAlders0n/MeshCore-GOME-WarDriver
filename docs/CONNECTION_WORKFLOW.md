@@ -113,16 +113,37 @@ connectBtn.addEventListener("click", async () => {
    - **Connection Status**: `"Connecting"` (blue, maintained)
    - **Dynamic Status**: `"—"` (em dash)
 
-5. **Get Device Info**
+5. **Get Device Info & Auto-Power Configuration**
    - Retrieves device name, public key (32 bytes), settings
    - **CRITICAL**: Validates public key length
    - Converts to hex string
    - Stores in `state.devicePublicKey`
    - Updates UI with device name
+   - **NEW: Device Model Query & Auto-Power**:
+     - Calls `deviceQuery(1)` to get manufacturer model string
+     - Example: `"Ikoka Stick-E22-30dBm (Xiao_nrf52)nightly-e31c46f"`
+     - Stores full string in `state.deviceModel`
+     - Calls `autoSetPowerLevel()`:
+       - Parses model (strips build suffix like "nightly-e31c46f")
+       - Looks up in `DEVICE_MODELS` database (loaded from `device-models.json` at startup)
+       - **If known device found**:
+         - Automatically selects matching power radio button (0.3w/0.6w/1.0w/2.0w)
+         - Updates power label: "Radio Power ⚡ Auto" (emerald text)
+         - Displays shortName in connection bar (e.g., "Ikoka Stick 1w")
+         - Shows status: "Auto-configured: [shortName] at X.Xw" (green, 500ms min)
+         - Enables ping controls (calls `updateControlsForCooldown()`)
+         - Sets `state.autoPowerSet = true`
+       - **If unknown device**:
+         - Leaves power unselected
+         - Displays "Unknown" in connection bar
+         - Logs error: `"[DEVICE MODEL] Unknown device: [full model string]"`
+         - Shows status: "Unknown device - select power manually" (yellow, persistent until power selected)
+         - Ping controls remain disabled
+         - Sets `state.autoPowerSet = false`
    - Requests radio statistics from the companion (noise floor, last RSSI, SNR) and stores the result in application state. The connection bar displays `Noise: <value>`. If stats fetch fails, an error marker is shown (`Noise: ERR`) but connection proceeds.
    - Changes button to "Disconnect" (red)
    - **Connection Status**: `"Connecting"` (blue, maintained)
-   - **Dynamic Status**: `"—"` (em dash)
+   - **Dynamic Status**: Auto-power status message (green) or unknown device warning (yellow)
 
 6. **Sync Device Time**
    - Sends current Unix timestamp

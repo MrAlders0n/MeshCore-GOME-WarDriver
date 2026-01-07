@@ -79,6 +79,10 @@ let WARDRIVING_CHANNEL_KEY = null;
 // Pre-computed channel hashes and keys for all allowed RX channels
 const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
 
+// ---- Device Models Database ----
+// Loaded from device-models.json at startup
+let DEVICE_MODELS = [];
+
 // Initialize channel hashes and keys at startup
 (async function initializeChannelHash() {
   try {
@@ -261,6 +265,7 @@ const state = {
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
   devicePublicKey: null, // Hex string of device's public key (used for capacity check)
   deviceModel: null, // Manufacturer/model string exposed by companion
+  autoPowerSet: false, // Whether power was automatically set based on device model
   lastNoiseFloor: null, // Most recent noise floor read from companion (dBm) or 'ERR'
   noiseFloorUpdateTimer: null, // Timer for periodic noise floor updates (5s interval)
   deviceName: null,
@@ -593,13 +598,14 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}`);
+  const powerSelected = getCurrentPowerSetting() !== "";
+  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}, powerSelected=${powerSelected}`);
   
-  // TX Ping button - disabled during cooldown or ping in progress
-  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  // TX Ping button - disabled during cooldown, ping in progress, OR when no power selected
+  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress || !powerSelected;
   
-  // TX/RX Auto button - disabled during cooldown, ping in progress, OR when RX Auto running
-  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
+  // TX/RX Auto button - disabled during cooldown, ping in progress, when RX Auto running, OR when no power selected
+  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning || !powerSelected;
   
   // RX Auto button - permanently disabled (backend API not ready)
   rxAutoBtn.disabled = true;
@@ -1334,6 +1340,55 @@ function getSelectedIntervalMs() {
 function getGpsMaximumAge(minAge = 1000) {
   const intervalMs = getSelectedIntervalMs();
   return Math.max(minAge, intervalMs - GPS_FRESHNESS_BUFFER_MS);
+}
+
+// ---- Device Model Parsing Functions ----
+
+/**
+ * Parse device model string by removing build suffix (e.g., "nightly-e31c46f")
+ * @param {string} rawModel - Raw manufacturer model string from deviceQuery
+ * @returns {string} Cleaned model string without build suffix
+ */
+function parseDeviceModel(rawModel) {
+  if (!rawModel || rawModel === "-") return "";
+  
+  // Strip build suffix like "nightly-e31c46f", "stable-a1b2c3d", etc.
+  // Match pattern: word-hexstring at end of string
+  const cleanedModel = rawModel.replace(/(nightly|stable|beta|alpha|dev)-[a-f0-9]{7,}$/i, '').trim();
+  
+  debugLog(`[DEVICE MODEL] Parsed model: "${rawModel}" -> "${cleanedModel}"`);
+  return cleanedModel;
+}
+
+/**
+ * Find device configuration in DEVICE_MODELS database
+ * @param {string} modelString - Cleaned model string (without build suffix)
+ * @returns {Object|null} Device config object with {manufacturer, shortName, power, txPower} or null if not found
+ */
+function findDeviceConfig(modelString) {
+  if (!modelString || !DEVICE_MODELS || DEVICE_MODELS.length === 0) {
+    return null;
+  }
+  
+  // Try exact match first
+  let device = DEVICE_MODELS.find(d => d.manufacturer === modelString);
+  if (device) {
+    debugLog(`[DEVICE MODEL] Exact match found: "${device.manufacturer}"`);
+    return device;
+  }
+  
+  // Try partial match (model string contains manufacturer string or vice versa)
+  device = DEVICE_MODELS.find(d => 
+    modelString.includes(d.manufacturer) || d.manufacturer.includes(modelString)
+  );
+  
+  if (device) {
+    debugLog(`[DEVICE MODEL] Partial match found: "${device.manufacturer}"`);
+    return device;
+  }
+  
+  debugLog(`[DEVICE MODEL] No match found for: "${modelString}"`);
+  return null;
 }
 
 function getCurrentPowerSetting() {
@@ -4269,6 +4324,11 @@ function stopAutoPing(stopGps = false) {
   updateAutoButton();
   updateControlsForCooldown();  // Re-enable RX Auto button
   releaseWakeLock();
+  
+  // Unlock wardrive settings after auto mode stops
+  unlockWardriveSettings();
+  debugLog("[TX/RX AUTO] Wardrive settings unlocked after auto mode stop");
+  
   debugLog("[TX/RX AUTO] TX/RX Auto stopped");
 }
 
@@ -4391,6 +4451,10 @@ function startAutoPing() {
     startUnifiedRxListening();
   }
   
+  // Lock wardrive settings during auto mode
+  lockWardriveSettings();
+  debugLog("[TX/RX AUTO] Wardrive settings locked during auto mode");
+  
   // ENABLE RX wardriving
   state.rxTracking.isWardriving = true;
   debugLog("[TX/RX AUTO] RX wardriving enabled");
@@ -4410,6 +4474,83 @@ function startAutoPing() {
   // Send first ping immediately
   debugLog("[TX/RX AUTO] Sending initial auto ping");
   sendPing(false).catch(console.error);
+}
+
+// ---- Device Auto-Power Configuration ----
+
+/**
+ * Automatically configure radio power based on detected device model
+ * Called after deviceQuery() in connect() flow
+ * Updates power radio selection and label based on device database lookup
+ */
+async function autoSetPowerLevel() {
+  debugLog("[DEVICE MODEL] Starting auto-power configuration");
+  
+  // Get power label status element for updating
+  const powerLabelStatus = document.getElementById("powerLabelStatus");
+  
+  if (!state.deviceModel || state.deviceModel === "-") {
+    debugLog("[DEVICE MODEL] No device model available, skipping auto-power");
+    return;
+  }
+  
+  // Parse device model (strip build suffix)
+  const cleanedModel = parseDeviceModel(state.deviceModel);
+  
+  // Look up device in database
+  const deviceConfig = findDeviceConfig(cleanedModel);
+  
+  if (deviceConfig) {
+    // Known device - auto-configure power
+    debugLog(`[DEVICE MODEL] Known device found: ${deviceConfig.shortName}`);
+    debugLog(`[DEVICE MODEL] Auto-configuring power to ${deviceConfig.power}w`);
+    
+    // Select the matching power radio button
+    const powerValue = `${deviceConfig.power}w`;
+    const powerRadio = document.querySelector(`input[name="power"][value="${powerValue}"]`);
+    
+    if (powerRadio) {
+      powerRadio.checked = true;
+      state.autoPowerSet = true;
+      
+      // Update label to show "⚡ Auto"
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "⚡ Auto";
+        powerLabelStatus.className = "text-emerald-400";
+      }
+      
+      // Show status message
+      setDynamicStatus(`Auto-configured: ${deviceConfig.shortName} at ${deviceConfig.power}w`, STATUS_COLORS.success);
+      
+      // Update controls to enable ping buttons now that power is selected
+      updateControlsForCooldown();
+      
+      debugLog(`[DEVICE MODEL] ✅ Auto-power configuration complete: ${powerValue}`);
+    } else {
+      debugError(`[DEVICE MODEL] Power radio button not found for value: ${powerValue}`);
+      state.autoPowerSet = false;
+    }
+    
+    // Update device model display to show short name
+    if (deviceModelEl) {
+      deviceModelEl.textContent = deviceConfig.shortName;
+    }
+    
+  } else {
+    // Unknown device - log error and require manual selection
+    debugError(`[DEVICE MODEL] Unknown device: ${state.deviceModel}`);
+    state.autoPowerSet = false;
+    
+    // Update device model display to show "Unknown"
+    if (deviceModelEl) {
+      deviceModelEl.textContent = "Unknown";
+    }
+    
+    // Set persistent status message until user selects power
+    setDynamicStatus("Unknown device - select power manually", STATUS_COLORS.warning, true);
+    
+    debugLog("[DEVICE MODEL] Auto-power skipped, user must select power manually");
+  }
 }
 
 // ---- BLE connect / disconnect ----
@@ -4470,12 +4611,16 @@ async function connect() {
         debugLog(`[BLE] deviceQuery response received: firmwareVer=${deviceInfo?.firmwareVer}, model=${deviceInfo?.manufacturerModel}`);
         state.deviceModel = deviceInfo?.manufacturerModel || "-";
         debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
-        if (deviceModelEl) deviceModelEl.textContent = state.deviceModel;
+        // Don't update deviceModelEl here - autoSetPowerLevel() will set it to shortName or "Unknown"
       } catch (e) {
         debugError(`[BLE] deviceQuery failed: ${e && e.message ? e.message : e}`);
         state.deviceModel = "-";
         if (deviceModelEl) deviceModelEl.textContent = "-";
       }
+      
+      // Auto-configure radio power based on device model
+      await autoSetPowerLevel();
+      
       // Immediately attempt to read radio stats (noise floor) on connect
       debugLog("[BLE] Requesting radio stats on connect");
       try {
@@ -4567,8 +4712,8 @@ async function connect() {
         setConnStatus("Connected", STATUS_COLORS.success);
         setDynamicStatus("Idle"); // Clear dynamic status to em dash
         
-        // Lock wardrive settings after successful connection
-        lockWardriveSettings();
+        // Note: Settings are NOT locked on connect - only when auto mode starts
+        // This allows users to change power after connection if device was unknown
         
         debugLog("[BLE] Full connection process completed successfully");
       } catch (e) {
@@ -4656,6 +4801,14 @@ async function connect() {
       state.disconnectReason = null; // Reset disconnect reason
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
+      state.autoPowerSet = false; // Reset auto-power flag
+      
+      // Reset power label to "Required" state
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "⚠️ Required";
+        powerLabelStatus.className = "text-amber-400";
+      }
       
       // Unlock wardrive settings after disconnect
       unlockWardriveSettings();
@@ -4827,29 +4980,22 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 /**
- * Update Connect button state based on radio power and external antenna selection
+ * Update Connect button state based on external antenna selection (power now auto-configured)
  */
 function updateConnectButtonState() {
-  const radioPowerSelected = getCurrentPowerSetting() !== "";
   const externalAntennaSelected = getExternalAntennaSetting() !== "";
   const isConnected = !!state.connection;
   
   if (!isConnected) {
-    // Only enable Connect if both settings are selected
-    connectBtn.disabled = !radioPowerSelected || !externalAntennaSelected;
+    // Only enable Connect if external antenna is selected
+    connectBtn.disabled = !externalAntennaSelected;
     
-    // Update dynamic status based on selections
-    if (!radioPowerSelected && !externalAntennaSelected) {
-      debugLog("[UI] Radio power and external antenna not selected - showing message in status bar");
-      setDynamicStatus("Select radio power and external antenna to connect", STATUS_COLORS.warning);
-    } else if (!radioPowerSelected) {
-      debugLog("[UI] Radio power not selected - showing message in status bar");
-      setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
-    } else if (!externalAntennaSelected) {
+    // Update dynamic status based on selection
+    if (!externalAntennaSelected) {
       debugLog("[UI] External antenna not selected - showing message in status bar");
       setDynamicStatus("Select external antenna to connect", STATUS_COLORS.warning);
     } else {
-      debugLog("[UI] Radio power and external antenna selected - clearing message from status bar");
+      debugLog("[UI] External antenna selected - clearing message from status bar");
       setDynamicStatus("Idle");
     }
   }
@@ -4919,6 +5065,21 @@ export async function onLoad() {
   setConnStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  
+  // Load device models database
+  try {
+    debugLog("[INIT] Loading device models database from device-models.json");
+    const response = await fetch('content/device-models.json');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    const data = await response.json();
+    DEVICE_MODELS = data.devices || [];
+    debugLog(`[INIT] ✅ Loaded ${DEVICE_MODELS.length} device models from database`);
+  } catch (e) {
+    debugError(`[INIT] Failed to load device-models.json: ${e.message}`);
+    DEVICE_MODELS = []; // Ensure it's an empty array on failure
+  }
   
   // Disable RX Auto button (backend API not ready)
   rxAutoBtn.disabled = true;
@@ -4999,11 +5160,64 @@ export async function onLoad() {
     });
   }
 
-  // Add event listeners to radio power options to update Connect button state
+  // Add event listeners to radio power options
   const powerRadios = document.querySelectorAll('input[name="power"]');
+  let previousPowerValue = null; // Track previous selection for revert on cancel
+  
   powerRadios.forEach(radio => {
-    radio.addEventListener("change", () => {
-      debugLog(`[UI] Radio power changed to: ${getCurrentPowerSetting()}`);
+    radio.addEventListener("change", (e) => {
+      const newValue = getCurrentPowerSetting();
+      debugLog(`[UI] Radio power changed to: ${newValue}`);
+      
+      // Check if this is an override of auto-configured power
+      if (state.autoPowerSet && state.connection) {
+        // Check if settings are NOT locked (auto mode not running)
+        const powerInputs = document.querySelectorAll('input[name="power"]');
+        const isLocked = powerInputs[0]?.disabled;
+        
+        if (!isLocked) {
+          // Show confirmation dialog
+          const confirmed = confirm("Are you sure you want to override the auto-configured power setting?");
+          
+          if (!confirmed) {
+            // User canceled - revert to previous selection
+            e.target.checked = false;
+            if (previousPowerValue) {
+              const previousRadio = document.querySelector(`input[name="power"][value="${previousPowerValue}"]`);
+              if (previousRadio) {
+                previousRadio.checked = true;
+              }
+            }
+            debugLog("[UI] Power override canceled by user");
+            return;
+          } else {
+            // User confirmed override
+            state.autoPowerSet = false;
+            
+            // Update label back to normal (no Auto indicator)
+            const powerLabelStatus = document.getElementById("powerLabelStatus");
+            if (powerLabelStatus) {
+              powerLabelStatus.textContent = "";
+              powerLabelStatus.className = "";
+            }
+            
+            debugLog("[UI] Power override confirmed, auto-power flag cleared");
+          }
+        }
+      }
+      
+      // If unknown device (autoPowerSet is false and we have a connection)
+      // Clear the "Unknown device" status message once user selects power
+      if (!state.autoPowerSet && state.connection && state.deviceModel && state.deviceModel !== "-") {
+        setDynamicStatus("Idle");
+        debugLog("[UI] Cleared unknown device status after manual power selection");
+      }
+      
+      // Store current value as previous for next change
+      previousPowerValue = newValue;
+      
+      // Update controls to enable/disable ping buttons based on power selection
+      updateControlsForCooldown();
       updateConnectButtonState();
     });
   });

@@ -2,15 +2,21 @@
 
 ## Overview
 
-The MeshCore GOME WarDriver implements automatic power level selection based on detected device models. This feature ensures that users transmit at the correct power level for their specific hardware variant, particularly important for devices with Power Amplifiers (PAs) that require lower input power.
+The MeshCore GOME WarDriver implements automatic power level selection based on detected device models. This feature ensures that users transmit at the correct power level for their specific hardware variant, particularly important for devices with Power Amplifiers (PAs) that require specific input power to avoid hardware damage.
+
+**Key Changes (2026-01-06)**:
+- Connection no longer requires pre-selecting power (auto-configured after deviceQuery)
+- Settings lock moved from connection time to auto mode start
+- Unknown devices require manual power selection (no default value)
+- 2.0w power option added for 2W PA devices (33dBm output)
 
 ## Architecture
 
 ### Components
 
 1. **Device Model Database** (`content/device-models.json`)
-   - JSON file containing all supported MeshCore device variants
-   - Includes manufacturer strings, short names, recommended power settings, and hardware notes
+   - JSON file containing 32+ supported MeshCore device variants
+   - Includes manufacturer strings, short names, recommended power settings (0.3w, 0.6w, 1.0w, 2.0w), and hardware notes
    - Generated from MeshCore firmware repository platformio.ini and Board.h files
 
 2. **Device Model Parser** (`wardrive.js:parseDeviceModel()`)
@@ -19,34 +25,87 @@ The MeshCore GOME WarDriver implements automatic power level selection based on 
 
 3. **Device Lookup** (`wardrive.js:findDeviceConfig()`)
    - Searches database for exact or partial manufacturer string match
-   - Returns device configuration with recommended power level
+   - Returns device configuration with recommended power level or null if not found
 
-4. **Auto-Power Setter** (`wardrive.js:autoSetPowerLevel()`)
+4. **Auto-Power Configurator** (`wardrive.js:autoSetPowerLevel()`)
    - Called during connection flow after deviceQuery() succeeds
-   - Automatically sets radio power to recommended value for detected device
-   - Tracks auto-set state to prevent overriding manual user selections
+   - **If device found**: Automatically selects matching power radio button, shows "⚡ Auto" label, enables ping controls
+   - **If device unknown**: Logs error, displays "Unknown device - select power manually" status, leaves ping controls disabled
+   - Tracks auto-set state for override confirmation
 
-5. **Model Display** (`wardrive.js:updateDeviceModelDisplay()`)
-   - Updates Settings panel with clean short name (e.g., "Ikoka Stick-E22-30dBm")
-   - Strips build suffix for cleaner UI presentation
+5. **Model Display** 
+   - Updates connection bar with `shortName` from database (e.g., "Ikoka Stick 1w")
+   - Shows "Unknown" for unrecognized devices
 
 ## Data Flow
 
 ### Connection Workflow Integration
 
 ```
-1. User clicks "Connect"
+1. User clicks "Connect" (no power pre-selection required)
 2. BLE GATT connection established
 3. Protocol handshake complete
 4. deviceQuery() called → Full manufacturer string retrieved
    Example: "Ikoka Stick-E22-30dBm (Xiao_nrf52)nightly-e31c46f"
 
-5. **Device Model Processing** (NEW):
+5. **Device Model Auto-Power** (occurs after deviceQuery, before capacity check):
    a. Store full model in state.deviceModel
-   b. updateDeviceModelDisplay() → Parse & show short name in Settings
-   c. autoSetPowerLevel() → Look up device & auto-set radio power
+   b. Call autoSetPowerLevel():
+      - Parse model string (strip build suffix)
+      - Lookup in DEVICE_MODELS database
+      
+      **Known Device Path**:
+      - Select power radio button (0.3w/0.6w/1.0w/2.0w)
+      - Update label: "Radio Power ⚡ Auto"
+      - Display shortName in connection bar
+      - Show status: "Auto-configured: [shortName] at X.Xw"
+      - Enable ping controls (updateControlsForCooldown)
+      - Set state.autoPowerSet = true
+      
+      **Unknown Device Path**:
+      - Leave power unselected
+      - Display "Unknown" in connection bar
+      - Log error: "Unknown device: [full model string]"
+      - Show status: "Unknown device - select power manually" (persistent)
+      - Ping controls remain disabled
+      - Set state.autoPowerSet = false
    
-6. Continue normal connection flow (time sync, capacity check, etc.)
+6. Continue normal connection flow (capacity check, channel setup, GPS init)
+7. Connection complete - settings remain UNLOCKED until auto mode starts
+```
+
+### Settings Lock Behavior (NEW)
+
+**Previous Behavior**: Settings locked on connection completion
+**New Behavior**: Settings lock only during auto mode
+
+| State | Power Changeable? | Override Confirmation? |
+|-------|-------------------|------------------------|
+| Disconnected | ✅ Yes | No |
+| Connected (idle) | ✅ Yes | ✅ Yes (if auto-set) |
+| Auto Mode Running | ❌ No (locked) | N/A (disabled) |
+| After Auto Stop | ✅ Yes | ✅ Yes (if auto-set) |
+
+**Lock Timing**:
+- `lockWardriveSettings()` called in `startAutoPing()` before enabling RX wardriving
+- `unlockWardriveSettings()` called in `stopAutoPing()` after releasing wake lock
+- `unlockWardriveSettings()` called in `disconnect()` cleanup
+
+### Override Confirmation Flow
+
+When user changes power after auto-configuration (while connected but NOT in auto mode):
+
+```
+1. User clicks different power radio button
+2. Event listener checks: state.autoPowerSet === true && !settingsLocked
+3. Show confirm() dialog: "Are you sure you want to override the auto-configured power setting?"
+4a. If CANCELED: Revert to previous radio selection
+4b. If CONFIRMED: 
+    - Set state.autoPowerSet = false
+    - Clear "⚡ Auto" label (remove text and class)
+    - Allow change to proceed
+5. If unknown device (autoPowerSet === false): Clear "Unknown device" status → "Idle"
+6. updateControlsForCooldown() to re-enable ping buttons
 ```
 
 ### Build Suffix Handling
@@ -100,24 +159,25 @@ The MeshCore GOME WarDriver implements automatic power level selection based on 
 
 ### Power Level Mapping
 
-| Wardrive Setting | Firmware dBm | Use Case |
-|------------------|--------------|----------|
-| 0.3 | ≤24 dBm | Standard devices without PA |
-| 0.6 | 27 dBm | Heltek V4 |
-| 1.0 | 30 dBm | 1W PA modules (E22-900M30S): 20dBm input → 30dBm output |
-| 2.0 | 33 dBm | 2W PA modules (E22-900M33S): 9dBm input → 33dBm output |
-## Critical Power Amplifier Cases
+| Wardrive Setting | Firmware dBm | Output Power | Use Case |
+|------------------|--------------|--------------|----------|
+| 0.3w | ≤24 dBm | Standard | Standard devices without PA |
+| 0.6w | 10 dBm | 28 dBm | Heltec V4, Heltec Tracker V2 (firmware 10dBm, PA amplifies to 22dBm actual) |
+| 1.0w | 20 dBm | 30 dBm | 1W PA modules (E22-900M30S): 20dBm input → 30dBm output |
+| 2.0w | 9 dBm | 33 dBm | 2W PA modules (E22-900M33S): 9dBm input → 33dBm output |
 
-### Ikoka 33dBm Models (2W PA)
+### Critical Power Amplifier Cases
+
+### Ikoka 33dBm Models (2W PA) - CRITICAL SAFETY
 
 **Devices**: 
-- Ikoka Stick-E22-33dBm
-- Ikoka Nano-E22-33dBm
+- Ikoka Stick-E22-33dBm (Ikoka Stick 2w)
+- Ikoka Nano-E22-33dBm (Ikoka Nano 2w)
 
-**Critical**: MUST use power 0.05 (9dBm firmware input)
+**Auto-configured**: Power 2.0w (9dBm firmware input)
 - Radio module: EBYTE E22-900M33S
 - PA amplification: 9dBm → 33dBm (2W output)
-- **Higher input power causes hardware damage**
+- **CRITICAL**: Higher input power causes hardware damage to PA amplifier
 - Firmware safety limit enforced in platformio.ini
 
 ### Ikoka 30dBm Models (1W PA)
