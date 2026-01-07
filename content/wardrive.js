@@ -1082,10 +1082,10 @@ async function performAppLaunchZoneCheck() {
       debugWarn(`[GEO AUTH] [INIT] Failed to center map: ${mapErr.message}`);
     }
     
-    // Enable Connect button only if in valid zone
+    // Enable Connect button only if in valid zone AND external antenna selected
     if (result.success && result.in_zone) {
-      setConnectButtonDisabled(false);
-      debugLog("[GEO AUTH] [INIT] ✅ Connect button enabled (in valid zone)");
+      updateConnectButtonState();  // Checks both zone and antenna
+      debugLog("[GEO AUTH] [INIT] ✅ Zone check passed, updateConnectButtonState() called");
       
       // Start 30s slot refresh timer (disconnected mode)
       if (state.slotRefreshTimerId) {
@@ -5432,7 +5432,7 @@ async function connect() {
     debugError(`[BLE] BLE connection failed: ${e.message}`, e);
     setConnStatus("Disconnected", STATUS_COLORS.error);
     setDynamicStatus("Connection failed", STATUS_COLORS.error);
-    setConnectButtonDisabled(false);
+    updateConnectButtonState();  // Re-check zone and antenna requirements
   }
 }
 async function disconnect() {
