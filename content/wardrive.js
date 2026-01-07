@@ -1748,7 +1748,7 @@ function getDeviceIdentifier() {
  * Get valid GPS coordinates for zone checking with retry logic
  * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
  * @param {number} retryDelayMs - Delay between retries in milliseconds (default: 5000)
- * @returns {Promise<Object|null>} GPS object {lat, lng, accuracy_m, timestamp} or null if failed
+ * @returns {Promise<Object|null>} GPS object {lat, lon, accuracy_m, timestamp} or null if failed
  */
 async function getValidGpsForZoneCheck(maxRetries = 3, retryDelayMs = 5000) {
   debugLog(`[GPS] [GEO AUTH] Getting valid GPS for zone check (max retries: ${maxRetries})`);
@@ -1786,8 +1786,8 @@ async function getValidGpsForZoneCheck(maxRetries = 3, retryDelayMs = 5000) {
         return null;
       }
       
-      debugLog(`[GPS] [GEO AUTH] Valid GPS acquired: lat=${lat.toFixed(6)}, lng=${lng.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, age=${ageMs}ms`);
-      return { lat, lng, accuracy_m, timestamp };
+      debugLog(`[GPS] [GEO AUTH] Valid GPS acquired: lat=${lat.toFixed(6)}, lon=${lng.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, age=${ageMs}ms`);
+      return { lat, lon: lng, accuracy_m, timestamp };
       
     } catch (error) {
       debugError(`[GPS] [GEO AUTH] GPS acquisition failed (attempt ${attempt}/${maxRetries}): ${error.message}`);
@@ -1804,17 +1804,20 @@ async function getValidGpsForZoneCheck(maxRetries = 3, retryDelayMs = 5000) {
 
 /**
  * Check zone status via geo-auth API
- * @param {number} lat - Latitude
- * @param {number} lng - Longitude
- * @param {number} accuracy_m - GPS accuracy in meters
- * @param {number} timestamp - Unix timestamp in seconds
+ * @param {Object} coords - GPS coordinates object from getValidGpsForZoneCheck()
+ * @param {number} coords.lat - Latitude
+ * @param {number} coords.lon - Longitude
+ * @param {number} coords.accuracy_m - GPS accuracy in meters
+ * @param {number} coords.timestamp - Unix timestamp in seconds
  * @returns {Promise<Object|null>} Zone status response or null on error
  */
-async function checkZoneStatus(lat, lng, accuracy_m, timestamp) {
-  debugLog(`[GEO AUTH] Checking zone status: lat=${lat.toFixed(6)}, lng=${lng.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, timestamp=${timestamp}`);
+async function checkZoneStatus(coords) {
+  const { lat, lon, accuracy_m, timestamp } = coords;
+  debugLog(`[GEO AUTH] Checking zone status: lat=${lat.toFixed(6)}, lon=${lon.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, timestamp=${timestamp}`);
   
   try {
-    const payload = { lat, lng, accuracy_m, timestamp };
+    // API expects lng, so convert lon to lng for the payload
+    const payload = { lat, lng: lon, accuracy_m, timestamp };
     
     debugLog(`[GEO AUTH] Sending POST to ${GEO_AUTH_STATUS_URL}`);
     
@@ -3202,7 +3205,7 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
   if (!buffer) {
     // First time hearing this repeater - create new entry
     buffer = {
-      firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
+      firstLocation: { lat: currentLocation.lat, lon: currentLocation.lon },
       bestObservation: {
         snr,
         rssi,
@@ -3240,7 +3243,7 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
     currentLocation.lat,
     currentLocation.lon,
     buffer.firstLocation.lat,
-    buffer.firstLocation.lng
+    buffer.firstLocation.lon
   );
   
   debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
@@ -3271,7 +3274,7 @@ function checkAllRxBatchesForDistanceTrigger(currentLocation) {
       currentLocation.lat,
       currentLocation.lon,
       buffer.firstLocation.lat,
-      buffer.firstLocation.lng
+      buffer.firstLocation.lon
     );
     
     debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}:  ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
@@ -3310,7 +3313,7 @@ function flushRepeater(repeaterId) {
   // Build API entry using BEST observation's location
   const entry = {
     repeater_id: repeaterId,
-    location: { lat: best.lat, lng: best.lon },  // Location of BEST SNR packet
+    location: { lat: best.lat, lon: best.lon },  // Location of BEST SNR packet
     snr: best.snr,
     rssi: best.rssi,
     pathLength: best.pathLength,
@@ -3369,7 +3372,7 @@ function queueRxApiPost(entry) {
   const payload = {
     key: MESHMAPPER_API_KEY,
     lat: entry.location.lat,
-    lon: entry.location.lng,
+    lon: entry.location.lon,
     who: getDeviceIdentifier(),
     power: getCurrentPowerSetting(),
     external_antenna: getExternalAntennaSetting(),
@@ -3396,7 +3399,7 @@ function queueRxApiPost(entry) {
   
   // Queue message instead of posting immediately
   queueApiMessage(payload, "RX");
-  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
+  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lon.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
