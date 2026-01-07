@@ -1025,8 +1025,8 @@ function startNoiseFloorUpdates() {
     }
     
     try {
-      // Use longer timeout to avoid race conditions with BLE round-trip time
-      const stats = await state.connection.getRadioStats(8000);
+      // Don't pass timeout - let the interval handle cadence, avoids library timeout bug
+      const stats = await state.connection.getRadioStats(null);
       if (stats && typeof stats.noiseFloor !== 'undefined') {
         state.lastNoiseFloor = stats.noiseFloor;
         debugLog(`[BLE] Noise floor updated: ${state.lastNoiseFloor}`);
@@ -4091,7 +4091,8 @@ async function sendPing(manual = false) {
       // Only attempt refresh if firmware supports it (detected on connect)
       debugLog("[PING] Refreshing radio stats before ping");
       try {
-        const stats = await state.connection.getRadioStats(8000);
+        // Don't pass timeout - avoids library timeout bug
+        const stats = await state.connection.getRadioStats(null);
         debugLog(`[PING] getRadioStats returned: ${JSON.stringify(stats)}`);
         if (stats && typeof stats.noiseFloor !== 'undefined') {
           state.lastNoiseFloor = stats.noiseFloor;
@@ -4715,7 +4716,8 @@ async function connect() {
       // Immediately attempt to read radio stats (noise floor) on connect
       debugLog("[BLE] Requesting radio stats on connect");
       try {
-        const stats = await conn.getRadioStats(8000);
+        // Don't pass timeout - avoids library timeout bug
+        const stats = await conn.getRadioStats(null);
         debugLog(`[BLE] getRadioStats returned: ${JSON.stringify(stats)}`);
         if (stats && typeof stats.noiseFloor !== 'undefined') {
           state.lastNoiseFloor = stats.noiseFloor;
