@@ -769,7 +769,7 @@ function setConnStatus(text, color) {
   
   // Format based on connection state
   if (text === "Connected") {
-    // Show: 🟢 DeviceName 🔊 NoiseFloor
+    // Show: 🟢 DeviceName 🔊 NoiseFloor (device/noise in slate, indicator green)
     const deviceName = state.deviceName || "[No device]";
     let noiseText = "-";
     if (state.lastNoiseFloor === null) {
@@ -780,15 +780,16 @@ function setConnStatus(text, color) {
       noiseText = `${state.lastNoiseFloor}dBm`;
     }
     connectionStatusEl.textContent = `${deviceName} 🔊 ${noiseText}`;
+    connectionStatusEl.className = 'font-medium text-slate-300';
   } else if (text === "Disconnected") {
     // Show: 🔴 Disconnected
     connectionStatusEl.textContent = text;
+    connectionStatusEl.className = `font-medium ${color}`;
   } else {
     // Connecting, Disconnecting - show as-is
     connectionStatusEl.textContent = text;
+    connectionStatusEl.className = `font-medium ${color}`;
   }
-  
-  connectionStatusEl.className = `font-medium ${color}`;
   
   // Update status indicator dot color to match
   if (statusIndicatorEl) {
