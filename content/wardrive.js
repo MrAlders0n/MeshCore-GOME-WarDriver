@@ -948,23 +948,40 @@ function updateZoneStatusUI(zoneData) {
   if (!zoneData.success) {
     const reason = zoneData.reason || "unknown";
     let statusText = "Zone check failed";
-    let statusColor = "text-red-400";
+    let dynamicStatusText = null;  // For persistent errors in dynamic status bar
     
     if (reason === "gps_stale") {
       statusText = "GPS: stale";
     } else if (reason === "gps_inaccurate") {
       statusText = "GPS: inaccurate";
+    } else if (reason === "outofdate") {
+      // App version outdated - show persistent error in dynamic status bar
+      statusText = "";  // Clear zone status in connection bar
+      dynamicStatusText = zoneData.message || "App version outdated, please update";
+      
+      // Set persistent error - blocks all other dynamic status messages
+      statusMessageState.outsideZoneError = dynamicStatusText;
+      debugLog(`[GEO AUTH] [UI] Set persistent outofdate error: "${dynamicStatusText}"`);
+      
+      // Show error in dynamic status bar (red)
+      setDynamicStatus(dynamicStatusText, STATUS_COLORS.error);
+      
+      // Log as error
+      debugError(`[GEO AUTH] [UI] ${dynamicStatusText}`);
     }
     
     zoneStatus.textContent = statusText;
-    zoneStatus.className = `text-xs ${statusColor}`;
+    zoneStatus.className = "text-xs text-red-400";
     
     locationDisplay.textContent = "Unknown";
     locationDisplay.className = "font-medium text-red-400";
     
     updateSlotsDisplay(null);
     
-    debugError(`[GEO AUTH] [UI] Zone check error: reason=${reason}, message=${zoneData.message}`);
+    // Only log if not already logged above (outofdate case)
+    if (reason !== "outofdate") {
+      debugError(`[GEO AUTH] [UI] Zone check error: reason=${reason}, message=${zoneData.message}`);
+    }
     return;
   }
 }
@@ -1851,7 +1868,8 @@ async function checkZoneStatus(coords) {
   
   try {
     // API expects lng, so convert lon to lng for the payload
-    const payload = { lat, lng: lon, accuracy_m, timestamp };
+    // Include app version for version checking
+    const payload = { lat, lng: lon, accuracy_m, ver: APP_VERSION, timestamp };
     
     debugLog(`[GEO AUTH] Sending POST to ${GEO_AUTH_STATUS_URL}`);
     
