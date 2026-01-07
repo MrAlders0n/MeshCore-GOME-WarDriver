@@ -998,7 +998,7 @@ function updateSlotsDisplay(zone) {
     slotsDisplay.className = "font-medium text-red-400";
     
     // Show persistent error in dynamic status bar
-    const errorMsg = `No wardriving slots for ${code}. RX only.`;
+    const errorMsg = `No TX wardriving slots for ${code}. RX only.`;
     statusMessageState.outsideZoneError = errorMsg;
     setDynamicStatus(errorMsg, STATUS_COLORS.error);
     debugError(`[GEO AUTH] ${errorMsg}`);
@@ -1009,7 +1009,7 @@ function updateSlotsDisplay(zone) {
     debugLog(`[UI] Slots display: Full (0/${slots_max})`);
   } else {
     // Clear any slots-full error if we now have slots available
-    if (statusMessageState.outsideZoneError && statusMessageState.outsideZoneError.includes("No wardriving slots")) {
+    if (statusMessageState.outsideZoneError && statusMessageState.outsideZoneError.includes("No TX wardriving slots")) {
       statusMessageState.outsideZoneError = null;
       debugLog(`[UI] Cleared slots-full error - slots now available`);
     }
