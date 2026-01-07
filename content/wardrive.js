@@ -1965,7 +1965,7 @@ async function requestAuth(reason) {
 
   // Set status for connect requests
   if (reason === "connect") {
-    setDynamicStatus("Acquiring wardriving slot", STATUS_COLORS.info);
+    setDynamicStatus("Authenticating to MeshMapper", STATUS_COLORS.info);
   }
 
   try {
