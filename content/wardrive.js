@@ -1025,13 +1025,14 @@ function startNoiseFloorUpdates() {
     }
     
     try {
-      const stats = await state.connection.getRadioStats(5000);
+      // Use shorter timeout for periodic updates to reduce console noise
+      const stats = await state.connection.getRadioStats(3000);
       if (stats && typeof stats.noiseFloor !== 'undefined') {
         state.lastNoiseFloor = stats.noiseFloor;
-        debugLog(`[BLE] Noise floor updated: ${state.lastNoiseFloor}`);
-        updateDeviceInfoDisplay();
-      } else {
-        debugWarn(`[BLE] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
+        // Update connection bar without logging to reduce console spam
+        if (state.connection) {
+          setConnStatus("Connected", STATUS_COLORS.success);
+        }
       }
     } catch (e) {
       // Silently ignore periodic update failures - keep showing last known value
