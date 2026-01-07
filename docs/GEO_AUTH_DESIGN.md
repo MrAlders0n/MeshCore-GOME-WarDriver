@@ -192,14 +192,14 @@ This section captures sample requests and responses for the major endpoints desc
 > - `400 Bad Request` — Missing/invalid parameters (`invalid_request`)
 > - `401 Unauthorized` — Invalid session or API key (`bad_session`, `bad_key`)
 > - `403 Forbidden` — Valid request but fully denied (`outside_zone`, `zone_disabled`, `gps_stale`, `gps_inaccurate`, `unknown_device`)
-> - `429 Too Many Requests` — Rate limit exceeded (applies to `/zones/status`)
+> - `429 Too Many Requests` — Rate limit exceeded (applies to `/status`)
 
 ---
 
 ### Preflight — Zone Status Check
 
 **Endpoint:**  
-`POST /zones/status`  
+`POST /status`  
 Content-Type: `application/json`
 
 > **Note:** POST is used (instead of GET) to allow structured JSON coordinates in the request body.
@@ -238,7 +238,7 @@ on app launch:
     disable buttons:  [Connect], [TX Ping], [TX/RX Auto], [RX Auto]
     get current GPS coordinates
     store lastZoneCheckCoords = current coords
-    POST /zones/status with current coords
+    POST /status with current coords
     
     if success == true AND in_zone == true:
         show zone info to user
@@ -255,7 +255,7 @@ on app launch:
 on location change (while not connected):
     calculate distance from lastZoneCheckCoords
     if distance >= ZONE_CHECK_DISTANCE_M:
-        POST /zones/status with new coords
+        POST /status with new coords
         store lastZoneCheckCoords = new coords
         update UI based on response (same logic as app launch)
 ```
@@ -339,17 +339,19 @@ Device metadata (`who`, `ver`, `power`, `iata`) is captured at authentication ti
   "key": "<api_key>",
   "public_key": "<device_public_key>",
   "who": "Alice's Pixel 8",
-  "ver": "2.1. 0",
-  "power": "22",
+  "ver": "2.1.0",
+  "power": "1.0",
   "iata": "YOW",
+  "model": "Ikoka Stick-E22-30dBm (Xiao_nrf52)",
   "reason": "connect",
   "coords": {
     "lat": 45.4216,
     "lng": -75.6970,
-    "accuracy_m":  12.0,
+    "accuracy_m": 12.0,
     "timestamp": 1703980842
   }
 }
+
 ```
 
 #### Server Logic
@@ -384,7 +386,7 @@ check TX slot availability:
     else:
         create session with tx_allowed: false, rx_allowed: true, reason: zone_full
 
-store session metadata (who, ver, power, iata)
+store session metadata (who, ver, power, iata, model)
 set session expiration to now + 30 minutes
 return success: true, session_id, and expires_at
 ```
@@ -551,6 +553,7 @@ Both modes refresh the session expiration.
 | `lat` | float | Latitude |
 | `lon` | float | Longitude |
 | `heard_repeats` | string | Repeaters heard with SNR, e.g.  `"4e(11. 5)"` or `"None"` |
+| `noisefloor` | float | Radio noise floor in dBm at time of capture |
 | `timestamp` | number | Unix epoch (seconds) when this data was captured |
 
 #### Heartbeat Coords Fields
@@ -679,6 +682,7 @@ The heartbeat flag is a **safety net** for quiet RX wardriving sessions when no 
       "lat":  45.4217,
       "lon": -75.6975,
       "heard_repeats": "4e(11.5),b7(9.75)",
+      "noisefloor": -95.5,
       "timestamp": 1703980860
     },
     {
@@ -686,6 +690,7 @@ The heartbeat flag is a **safety net** for quiet RX wardriving sessions when no 
       "lat": 45.4218,
       "lon": -75.6973,
       "heard_repeats": "22(8.2)",
+      "noisefloor": -92.3,
       "timestamp": 1703980875
     }
   ]
@@ -886,3 +891,164 @@ _Add further endpoint examples as APIs expand._
 - [ ] **Zone CRUD** — Create, read, update, disable zones via admin API
 - [ ] **Manual Device Registration** — Admin endpoint to add companion public keys manually
 - [ ] **Metrics Dashboard** — Admin dashboard for monitoring (active sessions, zone capacity, auth rates, etc.) — Maybe? 
+
+
+---
+
+## Implementation Plan
+
+This section outlines the step-by-step implementation tasks for the Geo-Auth system.
+
+### Phase 1: Backend Infrastructure
+
+#### 1.1 Database Schema
+- [ ] Create `zones` table with fields: `zone_id`, `name`, `code`, `lat`, `lng`, `radius_km`, `max_tx_slots`, `enabled`
+
+#### 1.2 Zone Management Service
+- [ ] Implement zone definition storage and retrieval
+- [ ] Implement point-in-circle zone detection algorithm
+- [ ] Implement nearest zone calculation (haversine distance)
+- [ ] Implement TX slot tracking per zone (acquire/release)
+- [ ] Add zone enable/disable flag handling
+
+#### 1.3 Device Registration System
+- [ ] Implement automatic device registration on first advert
+- [ ] Implement 60-day expiry cleanup job (cron/scheduled task)
+- [ ] Implement expiry reset on `last_heard` and `last_wardrive` updates
+- [ ] Create admin panel UI for manual device registration
+
+### Phase 2: Authentication Endpoints
+
+#### 2.1 Preflight — `/status`
+- [ ] Implement POST endpoint handler
+- [ ] Implement GPS validation (staleness, accuracy, bounds)
+- [ ] Implement zone detection logic (in zone vs. nearest zone)
+- [ ] Implement capacity status response (slots_available, at_capacity)
+- [ ] Add rate limiting (429 Too Many Requests)
+- [ ] Write API tests for all response scenarios
+
+#### 2.2 Auth — `/auth` (Connect)
+- [ ] Implement POST endpoint handler
+- [ ] Implement API key validation
+- [ ] Implement `known_devices` lookup and `unknown_device` error
+- [ ] Implement GPS validation
+- [ ] Implement zone detection and assignment
+- [ ] Implement TX slot acquisition logic (full vs. RX-only)
+- [ ] Implement session creation with metadata storage (`who`, `ver`, `power`, `iata`, `model`)
+- [ ] Implement 30-minute session expiration
+- [ ] Write API tests for all response scenarios (full access, RX-only, denied)
+
+#### 2.3 Auth — `/auth` (Disconnect)
+- [ ] Implement disconnect handler (same endpoint, `reason: "disconnect"`)
+- [ ] Implement session lookup and validation
+- [ ] Implement TX slot release logic
+- [ ] Implement session deletion
+- [ ] Write API tests for disconnect scenarios
+
+### Phase 3: Wardrive Data Endpoints
+
+#### 3.1 Wardrive Post — `/wardrive`
+- [ ] Implement POST endpoint handler
+- [ ] Implement API key and session_id validation
+- [ ] Implement session expiration check
+- [ ] Implement heartbeat-only mode (validate coords in zone, refresh expiration)
+- [ ] Implement data submission mode (validate coords, store entries, refresh expiration)
+- [ ] Implement zone boundary validation (reject if moved outside zone)
+- [ ] Write API tests for data submission, heartbeat, and error scenarios
+
+### Phase 4: Client Integration
+
+#### 4.1 Preflight UI & Logic
+- [ ] Add zone status check on app launch
+- [ ] Add 100m movement trigger for re-checking zone status
+- [ ] Update UI to show zone info (name, code, capacity)
+- [ ] Update UI to show nearest zone when outside (name, distance)
+- [ ] Disable/enable Connect button based on zone status
+- [ ] Handle GPS errors (stale, inaccurate)
+
+#### 4.2 Connect/Disconnect Workflow
+- [ ] Update connect flow to call `/auth` with device metadata (`who`, `ver`, `power`, `iata`, `model`)
+- [ ] Store `session_id` locally on successful auth
+- [ ] Handle full access vs. RX-only response (enable/disable TX buttons)
+- [ ] Implement disconnect flow (flush data, call `/auth` disconnect, clean up state)
+- [ ] Handle `unknown_device` error (show instruction to advertise on mesh)
+- [ ] Handle connection lost scenario (clean up local state, show reconnect message)
+
+#### 4.3 Heartbeat System
+- [ ] Implement heartbeat timer (fires at `expires_at - 5 min`)
+- [ ] Implement heartbeat POST to `/wardrive` with fresh GPS coords
+- [ ] Handle heartbeat errors (outside_zone, session_expired)
+- [ ] Cancel and reschedule heartbeat on data submission
+- [ ] Handle visibility changes (pause/resume heartbeat when app hidden/shown)
+
+#### 4.4 Wardrive Data Submission
+- [ ] Update data queue to include `noisefloor` field for both TX and RX entries
+- [ ] Update POST payload to match `/wardrive` contract (no `who`, `ver`, `power`, `iata` in data)
+- [ ] Handle session validation errors (bad_session, session_expired, outside_zone)
+- [ ] Update UI on errors (stop wardriving, disconnect session, show message)
+
+#### 4.5 Error Handling & UX
+- [ ] Add user-facing error messages for all error codes
+- [ ] Add zone boundary crossing detection and graceful handling
+- [ ] Add network error handling (timeout, DNS failure, offline mode)
+- [ ] Add retry logic for transient failures
+
+### Phase 5: Admin Tools
+
+#### 5.1 Manual Device Registration
+- [ ] Create admin UI for adding public keys manually
+- [ ] Add validation for public key format
+- [ ] Add notes field for admin context (why manually added)
+
+#### 5.2 Zone Management UI
+- [ ] Create admin UI for creating/editing zones
+- [ ] Add map picker for zone center coordinates
+- [ ] Add controls for radius, max TX slots, enable/disable
+- [ ] Add zone deletion with safety confirmation
+
+#### 5.3 Monitoring Dashboard (Optional)
+- [ ] Display active sessions count per zone
+- [ ] Display TX slot utilization per zone
+- [ ] Display auth request rate and error rate
+- [ ] Display wardrive data submission rate
+- [ ] Add alerts for unusual activity (too many errors, too many unknowns)
+
+### Phase 6: Testing & Deployment
+
+#### 6.1 Integration Testing
+- [ ] Test full client workflow (preflight → auth → wardrive → disconnect)
+- [ ] Test heartbeat keepalive during quiet RX mode
+- [ ] Test zone boundary crossing scenarios
+- [ ] Test TX slot capacity limits (RX-only fallback)
+- [ ] Test session expiration and re-auth flow
+- [ ] Test unknown device rejection and mesh registration flow
+
+#### 6.2 Load Testing
+- [ ] Simulate 10+ concurrent TX sessions per zone
+- [ ] Simulate 50+ concurrent RX sessions per zone
+- [ ] Test slot acquisition race conditions
+- [ ] Test database performance under load
+
+#### 6.3 Documentation
+- [ ] Update client-facing documentation (connection workflow, error codes)
+- [ ] Update backend API documentation (endpoint contracts)
+- [ ] Create troubleshooting guide (common errors and fixes)
+- [ ] Document admin tools usage (zone management, device registration)
+
+#### 6.4 Deployment
+- [ ] Deploy backend to staging environment
+- [ ] Deploy client to staging (feature flag or separate domain)
+- [ ] Run end-to-end tests in staging
+- [ ] Deploy backend to production
+- [ ] Deploy client to production
+- [ ] Monitor error logs and metrics for first 24 hours
+
+### Phase 7: Future Enhancements
+
+- [ ] API versioning (`/v1/auth`, `/v1/wardrive`)
+- [ ] Session signing with public key to prevent hijacking
+- [ ] Zone boundary hysteresis to prevent GPS jitter issues
+- [ ] TX slot queue/notification system for RX-only users
+- [ ] Auto-upgrade RX session to TX when slot becomes available
+- [ ] Offline mode with local data queueing and sync on reconnect
+- [ ] Multi-zone support (allow session to span multiple adjacent zones)
