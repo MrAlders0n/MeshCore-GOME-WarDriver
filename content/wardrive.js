@@ -766,7 +766,28 @@ function setConnStatus(text, color) {
   if (!connectionStatusEl) return;
   
   debugLog(`[UI] Connection status: "${text}"`);
-  connectionStatusEl.textContent = text;
+  
+  // Format based on connection state
+  if (text === "Connected") {
+    // Show: 🟢 DeviceName 🔊 NoiseFloor
+    const deviceName = state.deviceName || "[No device]";
+    let noiseText = "-";
+    if (state.lastNoiseFloor === null) {
+      noiseText = "Firmware 1.11+";
+    } else if (state.lastNoiseFloor === 'ERR') {
+      noiseText = "ERR";
+    } else {
+      noiseText = `${state.lastNoiseFloor}dBm`;
+    }
+    connectionStatusEl.textContent = `${deviceName} 🔊 ${noiseText}`;
+  } else if (text === "Disconnected") {
+    // Show: 🔴 Disconnected
+    connectionStatusEl.textContent = text;
+  } else {
+    // Connecting, Disconnecting - show as-is
+    connectionStatusEl.textContent = text;
+  }
+  
   connectionStatusEl.className = `font-medium ${color}`;
   
   // Update status indicator dot color to match
@@ -969,19 +990,10 @@ function updateDeviceInfoDisplay(name) {
   // Update device name element
   if (deviceNameEl) deviceNameEl.textContent = displayName;
 
-  // Determine noise display value
-  let noiseText = "-";
-  if (state.lastNoiseFloor === null) {
-    noiseText = "Firmware 1.11+";
-  } else if (state.lastNoiseFloor === 'ERR') {
-    noiseText = "ERR";
-  } else {
-    noiseText = String(state.lastNoiseFloor);
+  // Update connection bar if connected
+  if (state.connection) {
+    setConnStatus("Connected", STATUS_COLORS.success);
   }
-
-  // Show only noise value (label is in HTML)
-  debugLog(`[UI] Setting noise display: ${noiseText}`);
-  deviceInfoEl.textContent = noiseText;
 }
 
 /**
