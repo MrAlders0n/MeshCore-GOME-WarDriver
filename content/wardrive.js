@@ -759,6 +759,9 @@ function setConnectButton(connected) {
  * @param {string} text - Connection status text (one of the four states above)
  * @param {string} color - Status color class from STATUS_COLORS
  */
+// Track last connection status to avoid logging spam
+let lastConnStatusText = null;
+
 function setConnStatus(text, color) {
   const connectionStatusEl = document.getElementById("connectionStatus");
   const statusIndicatorEl = document.getElementById("statusIndicator");
@@ -766,7 +769,11 @@ function setConnStatus(text, color) {
   
   if (!connectionStatusEl) return;
   
-  debugLog(`[UI] Connection status: "${text}"`);
+  // Only log when status actually changes
+  if (text !== lastConnStatusText) {
+    debugLog(`[UI] Connection status: "${text}"`);
+    lastConnStatusText = text;
+  }
   
   // Format based on connection state
   if (text === "Connected") {
