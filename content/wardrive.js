@@ -733,24 +733,24 @@ function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
  * Update map and GPS overlay after a zone check
  * - Updates GPS coordinates and accuracy on the map overlay
  * - Refreshes the map iframe with new coordinates
- * @param {Object} coords - Coordinates object with lat, lon, accuracy properties
+ * @param {Object} coords - Coordinates object with lat, lon, accuracy_m properties
  */
 function updateMapOnZoneCheck(coords) {
   if (!coords) return;
   
-  const { lat, lon, accuracy } = coords;
+  const { lat, lon, accuracy_m } = coords;
   
   // Update GPS overlay
   if (gpsInfoEl) {
     gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
   }
-  if (gpsAccEl && accuracy) {
-    gpsAccEl.textContent = `±${Math.round(accuracy)}m`;
+  if (gpsAccEl && accuracy_m) {
+    gpsAccEl.textContent = `±${Math.round(accuracy_m)}m`;
   }
   
   // Refresh map iframe with new coordinates
   scheduleCoverageRefresh(lat, lon);
-  debugLog(`[GEO AUTH] Map updated: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy ? Math.round(accuracy) + 'm' : 'N/A'}`);
+  debugLog(`[GEO AUTH] Map updated: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy_m ? Math.round(accuracy_m) + 'm' : 'N/A'}`);
 }
 
 /**
