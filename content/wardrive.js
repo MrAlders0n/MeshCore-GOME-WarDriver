@@ -762,6 +762,7 @@ function setConnectButton(connected) {
 function setConnStatus(text, color) {
   const connectionStatusEl = document.getElementById("connectionStatus");
   const statusIndicatorEl = document.getElementById("statusIndicator");
+  const noiseDisplayEl = document.getElementById("noiseDisplay");
   
   if (!connectionStatusEl) return;
   
@@ -769,7 +770,7 @@ function setConnStatus(text, color) {
   
   // Format based on connection state
   if (text === "Connected") {
-    // Show: 🟢 DeviceName 🔊 NoiseFloor (device/noise in slate, indicator green)
+    // Show device name on left, noise on right
     const deviceName = state.deviceName || "[No device]";
     let noiseText = "-";
     if (state.lastNoiseFloor === null) {
@@ -779,16 +780,27 @@ function setConnStatus(text, color) {
     } else {
       noiseText = `${state.lastNoiseFloor}dBm`;
     }
-    connectionStatusEl.textContent = `${deviceName} 🔊 ${noiseText}`;
+    connectionStatusEl.textContent = deviceName;
     connectionStatusEl.className = 'font-medium text-slate-300';
+    
+    // Update noise display on right side
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = `🔊 ${noiseText}`;
+    }
   } else if (text === "Disconnected") {
-    // Show: 🔴 Disconnected
+    // Show disconnected status, clear noise
     connectionStatusEl.textContent = text;
     connectionStatusEl.className = `font-medium ${color}`;
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = '';
+    }
   } else {
-    // Connecting, Disconnecting - show as-is
+    // Connecting, Disconnecting - show as-is, clear noise
     connectionStatusEl.textContent = text;
     connectionStatusEl.className = `font-medium ${color}`;
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = '';
+    }
   }
   
   // Update status indicator dot color to match
@@ -1014,7 +1026,6 @@ function startNoiseFloorUpdates() {
     }
     
     try {
-      debugLog("[BLE] Fetching noise floor (5s periodic update)");
       const stats = await state.connection.getRadioStats(5000);
       if (stats && typeof stats.noiseFloor !== 'undefined') {
         state.lastNoiseFloor = stats.noiseFloor;
@@ -1024,8 +1035,8 @@ function startNoiseFloorUpdates() {
         debugWarn(`[BLE] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
       }
     } catch (e) {
-      debugWarn(`[BLE] Periodic noise floor update failed: ${e && e.message ? e.message : String(e)}`);
-      // Don't update state.lastNoiseFloor on error - keep showing last known value
+      // Silently ignore periodic update failures - keep showing last known value
+      // (Timeout warnings during normal operation are just noise)
     }
   }, 5000);
   
@@ -4804,37 +4815,45 @@ async function connect() {
       if (state.disconnectReason && REASON_MESSAGES[state.disconnectReason]) {
         debugLog(`[BLE] Branch: known reason code (${state.disconnectReason})`);
         const errorMsg = REASON_MESSAGES[state.disconnectReason];
+        addErrorLogEntry(`Disconnected: ${errorMsg} (reason: ${state.disconnectReason})`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog(`[BLE] Setting terminal status for reason: ${state.disconnectReason}`);
       } else if (state.disconnectReason === "capacity_full") {
         debugLog("[BLE] Branch: capacity_full");
+        addErrorLogEntry("Disconnected: MeshMapper server at capacity - too many active connections", "CONNECTION");
         setDynamicStatus("MeshMapper at capacity", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
         debugLog("[BLE] Branch: app_down");
+        addErrorLogEntry("Disconnected: MeshMapper server unavailable - check service status", "CONNECTION");
         setDynamicStatus("MeshMapper unavailable", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
         debugLog("[BLE] Branch: slot_revoked");
+        addErrorLogEntry("Disconnected: Wardriving slot revoked by server - exceeded limits or policy violation", "CONNECTION");
         setDynamicStatus("MeshMapper slot revoked", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "session_id_error") {
         debugLog("[BLE] Branch: session_id_error");
+        addErrorLogEntry("Disconnected: Session ID error - failed to establish valid wardrive session", "CONNECTION");
         setDynamicStatus("Session error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for session_id error");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("[BLE] Branch: public_key_error");
+        addErrorLogEntry("Disconnected: Device public key error - invalid or missing key from companion", "CONNECTION");
         setDynamicStatus("Device key error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for public key error");
       } else if (state.disconnectReason === "channel_setup_error") {
         debugLog("[BLE] Branch: channel_setup_error");
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
+        addErrorLogEntry(`Disconnected: #wardriving channel setup failed - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for channel setup error");
         state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("[BLE] Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
+        addErrorLogEntry(`Disconnected: BLE connection error - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for BLE disconnect error");
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
@@ -4845,7 +4864,9 @@ async function connect() {
         debugLog(`[BLE] Branch: else (unknown reason: ${state.disconnectReason})`);
         // For unknown disconnect reasons from API, show a generic message
         debugLog(`[BLE] Showing generic error for unknown reason: ${state.disconnectReason}`);
-        setDynamicStatus(`Connection not allowed: ${state.disconnectReason}`, STATUS_COLORS.error, true);
+        const errorMsg = `Connection not allowed: ${state.disconnectReason}`;
+        addErrorLogEntry(`Disconnected: Connection not allowed by server (reason: ${state.disconnectReason})`, "CONNECTION");
+        setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
       }
       
       setConnectButton(false);
