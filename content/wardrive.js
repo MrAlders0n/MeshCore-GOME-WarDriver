@@ -1058,10 +1058,9 @@ async function performAppLaunchZoneCheck() {
     
     // Center map on checked location
     try {
-      const iframe = coverageFrame.querySelector("iframe");
-      if (iframe && iframe.contentWindow) {
+      if (coverageFrameEl && coverageFrameEl.contentWindow) {
         debugLog(`[GEO AUTH] [INIT] Centering map on checked location: ${coords.lat.toFixed(6)}, ${coords.lon.toFixed(6)}`);
-        iframe.contentWindow.postMessage({
+        coverageFrameEl.contentWindow.postMessage({
           type: "centerMap",
           lat: coords.lat,
           lon: coords.lon
