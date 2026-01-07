@@ -350,6 +350,27 @@
 
     </div>
   </main>
+
+  <!-- Override Confirmation Modal -->
+  <div id="overrideModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4" style="background-color: rgba(0, 0, 0, 0.7);">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl max-w-sm w-full transform transition-all">
+      <div class="px-6 py-4 border-b border-slate-700">
+        <h3 class="text-lg font-medium text-slate-200">Override Auto-Configuration?</h3>
+      </div>
+      <div class="px-6 py-4">
+        <p class="text-sm text-slate-300">This will allow you to manually select the radio power setting.</p>
+        <p class="text-sm text-slate-400 mt-2">The device was automatically configured based on its hardware profile.</p>
+      </div>
+      <div class="px-6 py-4 flex gap-3 border-t border-slate-700">
+        <button id="overrideModalCancel" class="flex-1 px-4 py-2 text-sm font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">
+          Cancel
+        </button>
+        <button id="overrideModalConfirm" class="flex-1 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-500 rounded-lg transition-colors">
+          Override
+        </button>
+      </div>
+    </div>
+  </div>
  
   <!-- Load main script -->
   <script type="module" src="content/wardrive.js"></script>

@@ -5258,34 +5258,64 @@ export async function onLoad() {
     powerOverrideBtn.addEventListener("click", () => {
       debugLog("[UI] Override button clicked");
       
-      // Show confirmation dialog
-      const confirmed = confirm("Are you sure you want to override the auto-configured power setting?");
+      // Show custom confirmation modal
+      const modal = document.getElementById("overrideModal");
+      if (modal) {
+        modal.classList.remove("hidden");
+      }
+    });
+  }
+  
+  // Add event listeners to modal buttons
+  const overrideModalConfirm = document.getElementById("overrideModalConfirm");
+  const overrideModalCancel = document.getElementById("overrideModalCancel");
+  const overrideModal = document.getElementById("overrideModal");
+  
+  if (overrideModalConfirm && overrideModal) {
+    overrideModalConfirm.addEventListener("click", () => {
+      debugLog("[UI] Override confirmed via custom modal");
       
-      if (confirmed) {
-        // Hide auto display, show manual selection
-        const powerAutoDisplay = document.getElementById("powerAutoDisplay");
-        const powerManualSelection = document.getElementById("powerManualSelection");
-        const powerLabelStatus = document.getElementById("powerLabelStatus");
-        
-        if (powerAutoDisplay) {
-          powerAutoDisplay.classList.add("hidden");
-          powerAutoDisplay.style.display = "none";
-        }
-        if (powerManualSelection) {
-          powerManualSelection.classList.remove("hidden");
-          powerManualSelection.style.display = "flex";
-        }
-        
-        // Update state and label
-        state.autoPowerSet = false;
-        if (powerLabelStatus) {
-          powerLabelStatus.textContent = "⚙️ Manual";
-          powerLabelStatus.className = "text-slate-400";
-        }
-        
-        debugLog("[UI] Power override confirmed, switched to manual selection");
-      } else {
-        debugLog("[UI] Power override canceled by user");
+      // Hide modal
+      overrideModal.classList.add("hidden");
+      
+      // Hide auto display, show manual selection
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.add("hidden");
+        powerAutoDisplay.style.display = "none";
+      }
+      if (powerManualSelection) {
+        powerManualSelection.classList.remove("hidden");
+        powerManualSelection.style.display = "flex";
+      }
+      
+      // Update state and label
+      state.autoPowerSet = false;
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "⚙️ Manual";
+        powerLabelStatus.className = "text-slate-400";
+      }
+      
+      debugLog("[UI] Power override confirmed, switched to manual selection");
+    });
+  }
+  
+  if (overrideModalCancel && overrideModal) {
+    overrideModalCancel.addEventListener("click", () => {
+      debugLog("[UI] Override canceled via custom modal");
+      overrideModal.classList.add("hidden");
+    });
+  }
+  
+  // Close modal when clicking backdrop
+  if (overrideModal) {
+    overrideModal.addEventListener("click", (e) => {
+      if (e.target === overrideModal) {
+        debugLog("[UI] Override modal closed via backdrop click");
+        overrideModal.classList.add("hidden");
       }
     });
   }
