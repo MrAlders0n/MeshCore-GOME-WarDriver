@@ -1766,11 +1766,14 @@ function getGpsMaximumAge(minAge = 1000) {
 function parseDeviceModel(rawModel) {
   if (!rawModel || rawModel === "-") return "";
   
+  // Strip null characters (\u0000) that may be present in firmware strings
+  const sanitizedModel = rawModel.replace(/\u0000/g, '');
+  
   // Strip build suffix like "nightly-e31c46f", "stable-a1b2c3d", etc.
   // Match pattern: word-hexstring at end of string
-  const cleanedModel = rawModel.replace(/(nightly|stable|beta|alpha|dev)-[a-f0-9]{7,}$/i, '').trim();
+  const cleanedModel = sanitizedModel.replace(/(nightly|stable|beta|alpha|dev)-[a-f0-9]{7,}$/i, '').trim();
   
-  debugLog(`[DEVICE MODEL] Parsed model: "${rawModel}" -> "${cleanedModel}"`);
+  debugLog(`[DEVICE MODEL] Parsed model: "${rawModel.substring(0, 50)}..." -> "${cleanedModel}"`);
   return cleanedModel;
 }
 
@@ -1990,7 +1993,11 @@ async function requestAuth(reason) {
       payload.ver = APP_VERSION;
       payload.power = getCurrentPowerSetting();
       payload.iata = state.currentZone?.code || WARDIVE_IATA_CODE;
-      payload.model = state.deviceModel || "Unknown";
+      
+      // Get short model name from database, or sanitized raw model if unknown
+      const parsedModel = parseDeviceModel(state.deviceModel);
+      const deviceConfig = findDeviceConfig(parsedModel);
+      payload.model = deviceConfig?.shortName || parsedModel || "Unknown";
       
       // Add GPS coords (use lng for API, internally we use lon)
       payload.coords = {
@@ -2013,19 +2020,41 @@ async function requestAuth(reason) {
       body: JSON.stringify(payload)
     });
 
-    // Handle HTTP-level errors
+    // Parse JSON body (even on error responses - server returns error codes in body)
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      debugError(`[AUTH] Failed to parse response JSON: ${parseError.message}`);
+      if (reason === "connect") {
+        state.disconnectReason = "app_down";
+        return false;
+      }
+      return true; // Allow disconnect to proceed
+    }
+
+    // Handle HTTP-level errors with known error codes in body
     if (!response.ok) {
       debugError(`[AUTH] API returned error status ${response.status}`);
-      // Fail closed on network errors for connect
+      
+      // Check if server returned a known error code
+      if (data && data.reason && REASON_MESSAGES[data.reason]) {
+        debugLog(`[AUTH] Known error code: ${data.reason} - ${data.message || REASON_MESSAGES[data.reason]}`);
+        if (reason === "connect") {
+          state.disconnectReason = data.reason;
+          return false;
+        }
+        return true; // Allow disconnect to proceed
+      }
+      
+      // Unknown error - fail closed for connect
       if (reason === "connect") {
-        debugError("[AUTH] Failing closed (denying connection) due to API error");
+        debugError("[AUTH] Failing closed (denying connection) due to unknown API error");
         state.disconnectReason = "app_down";
         return false;
       }
       return true; // Always allow disconnect to proceed
     }
-
-    const data = await response.json();
     debugLog(`[AUTH] Response: success=${data.success}, tx_allowed=${data.tx_allowed}, rx_allowed=${data.rx_allowed}, session_id=${data.session_id || 'none'}, reason=${data.reason || 'none'}`);
 
     // Handle connect response
