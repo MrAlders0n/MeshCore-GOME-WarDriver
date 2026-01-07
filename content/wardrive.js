@@ -1075,11 +1075,19 @@ function startSlotRefreshTimer() {
       const coords = await getValidGpsForZoneCheck();
       if (coords) {
         const result = await checkZoneStatus(coords);
-        if (result.success && result.zone) {
+        if (result.success && result.in_zone && result.zone) {
+          // Still in zone - update slots display
           state.currentZone = result.zone;
           updateSlotsDisplay(result.zone);
           updateMapOnZoneCheck(coords);  // Update map and GPS overlay
           debugLog(`[GEO AUTH] [SLOT REFRESH] Updated slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+        } else if (result.success && !result.in_zone) {
+          // Moved outside zone - update UI to show outside zone status
+          state.currentZone = null;
+          state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+          updateZoneStatusUI(result);
+          updateMapOnZoneCheck(coords);
+          debugLog(`[GEO AUTH] [SLOT REFRESH] Now outside zone, nearest: ${result.nearest_zone?.name} at ${result.nearest_zone?.distance_km}km`);
         } else if (result && !result.success) {
           // Handle error states (outofdate, etc.) - this will disable button and clear currentZone
           updateZoneStatusUI(result);
