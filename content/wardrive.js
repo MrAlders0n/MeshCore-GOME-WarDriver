@@ -995,32 +995,59 @@ function updateSlotsDisplay(zone) {
   
   if (at_capacity || slots_available === 0) {
     slotsDisplay.textContent = `Full (0/${slots_max})`;
-    slotsDisplay.className = "font-medium text-red-300";
+    slotsDisplay.className = "font-medium text-amber-300";
     
-    // Show persistent error in dynamic status bar
-    const errorMsg = `No TX wardriving slots for ${code}. RX only.`;
-    statusMessageState.outsideZoneError = errorMsg;
-    setDynamicStatus(errorMsg, STATUS_COLORS.error);
-    debugError(`[GEO AUTH] ${errorMsg}`);
-    
-    // Disable Connect button - can't TX wardrive without a slot
-    setConnectButtonDisabled(true);
+    // Show warning in dynamic status bar (yellow, not blocking - user can still connect for RX)
+    const warnMsg = `No TX wardriving slots for ${code}. RX only.`;
+    setDynamicStatus(warnMsg, STATUS_COLORS.warning);
+    debugLog(`[GEO AUTH] ${warnMsg}`);
     
     debugLog(`[UI] Slots display: Full (0/${slots_max})`);
   } else {
-    // Clear any slots-full error if we now have slots available
-    if (statusMessageState.outsideZoneError && statusMessageState.outsideZoneError.includes("No TX wardriving slots")) {
-      statusMessageState.outsideZoneError = null;
-      debugLog(`[UI] Cleared slots-full error - slots now available`);
-    }
-    
     slotsDisplay.textContent = `${slots_available} available`;
     slotsDisplay.className = "font-medium text-emerald-300";
     debugLog(`[UI] Slots display: ${slots_available} available (${slots_available}/${slots_max})`);
     
+    // Slots available - clear warning and show Idle (only if disconnected)
+    if (!state.connection) {
+      setDynamicStatus("Idle", STATUS_COLORS.idle);
+    }
+    
     // Re-check connect button state now that slots are available
     updateConnectButtonState();
   }
+}
+
+/**
+ * Start/restart the 30s slot refresh timer (disconnected mode)
+ * Called on initial zone check success, after disconnect, and after connection failure
+ */
+function startSlotRefreshTimer() {
+  // Clear any existing timer
+  if (state.slotRefreshTimerId) {
+    clearInterval(state.slotRefreshTimerId);
+  }
+  
+  state.slotRefreshTimerId = setInterval(async () => {
+    debugLog("[GEO AUTH] [SLOT REFRESH] 30s timer triggered (disconnected mode)");
+    if (!state.connection && state.currentZone) {
+      // Re-check zone to refresh slots
+      const coords = await getValidGpsForZoneCheck();
+      if (coords) {
+        const result = await checkZoneStatus(coords);
+        if (result.success && result.zone) {
+          state.currentZone = result.zone;
+          updateSlotsDisplay(result.zone);
+          debugLog(`[GEO AUTH] [SLOT REFRESH] Updated slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+        } else if (result && !result.success) {
+          // Handle error states (outofdate, etc.) - this will disable button and clear currentZone
+          updateZoneStatusUI(result);
+          debugLog(`[GEO AUTH] [SLOT REFRESH] Zone check failed, updated UI`);
+        }
+      }
+    }
+  }, 30000); // 30 seconds
+  debugLog("[GEO AUTH] Started 30s slot refresh timer");
 }
 
 /**
@@ -1107,29 +1134,7 @@ async function performAppLaunchZoneCheck() {
       debugLog("[GEO AUTH] [INIT] ✅ Zone check passed, updateConnectButtonState() called");
       
       // Start 30s slot refresh timer (disconnected mode)
-      if (state.slotRefreshTimerId) {
-        clearInterval(state.slotRefreshTimerId);
-      }
-      state.slotRefreshTimerId = setInterval(async () => {
-        debugLog("[GEO AUTH] [SLOT REFRESH] 30s timer triggered (disconnected mode)");
-        if (!state.connection && state.currentZone) {
-          // Re-check zone to refresh slots
-          const coords = await getValidGpsForZoneCheck();
-          if (coords) {
-            const result = await checkZoneStatus(coords);
-            if (result.success && result.zone) {
-              state.currentZone = result.zone;
-              updateSlotsDisplay(result.zone);
-              debugLog(`[GEO AUTH] [SLOT REFRESH] Updated slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
-            } else if (result && !result.success) {
-              // Handle error states (outofdate, etc.) - this will disable button and clear currentZone
-              updateZoneStatusUI(result);
-              debugLog(`[GEO AUTH] [SLOT REFRESH] Zone check failed, updated UI`);
-            }
-          }
-        }
-      }, 30000); // 30 seconds
-      debugLog("[GEO AUTH] [INIT] Started 30s slot refresh timer");
+      startSlotRefreshTimer();
     } else {
       setConnectButtonDisabled(true);
       debugLog("[GEO AUTH] [INIT] ❌ Connect button remains disabled (not in valid zone or check failed)");
@@ -5098,10 +5103,6 @@ async function connect() {
   }
   setConnectButtonDisabled(true);
   
-  // Hide zone status to make room for device name/noise floor
-  zoneStatus.classList.add("hidden");
-  debugLog("[GEO AUTH] [CONNECT] Zone status hidden");
-  
   // CLEAR all logs immediately on connect (new session)
   txLogState.entries = [];
   renderTxLogEntries(true);
@@ -5452,6 +5453,9 @@ async function connect() {
     setConnStatus("Disconnected", STATUS_COLORS.error);
     setDynamicStatus("Connection failed", STATUS_COLORS.error);
     updateConnectButtonState();  // Re-check zone and antenna requirements
+    
+    // Restart slot refresh timer since connection failed
+    startSlotRefreshTimer();
   }
 }
 async function disconnect() {
@@ -5526,37 +5530,8 @@ async function disconnect() {
       debugWarn("[BLE] No known disconnect method on connection object");
     }
     
-    // Show zone status on disconnect and restart 30s slot refresh timer
-    debugLog("[GEO AUTH] [DISCONNECT] Showing zone status");
-    zoneStatus.classList.remove("hidden");
-    
-    // Clear any existing slot refresh timer (may be 60s connected timer from Phase 4.2+)
-    if (state.slotRefreshTimerId) {
-      clearInterval(state.slotRefreshTimerId);
-      debugLog("[GEO AUTH] [DISCONNECT] Cleared existing slot refresh timer");
-    }
-    
-    // Start 30s slot refresh timer (disconnected mode)
-    // Timer will update zone status if valid zone is stored
-    state.slotRefreshTimerId = setInterval(async () => {
-      debugLog("[GEO AUTH] [SLOT REFRESH] 30s timer triggered (disconnected mode)");
-      if (!state.connection && state.currentZone) {
-        const coords = await getValidGpsForZoneCheck();
-        if (coords) {
-          const result = await checkZoneStatus(coords);
-          if (result.success && result.zone) {
-            state.currentZone = result.zone;
-            updateSlotsDisplay(result.zone);
-            debugLog(`[GEO AUTH] [SLOT REFRESH] Updated slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
-          } else if (result && !result.success) {
-            // Handle error states (outofdate, etc.) - this will disable button and clear currentZone
-            updateZoneStatusUI(result);
-            debugLog(`[GEO AUTH] [SLOT REFRESH] Zone check failed, updated UI`);
-          }
-        }
-      }
-    }, 30000); // 30 seconds
-    debugLog("[GEO AUTH] [DISCONNECT] Started 30s slot refresh timer");
+    // Restart 30s slot refresh timer (disconnected mode)
+    startSlotRefreshTimer();
     
     // Note: Zone status will refresh via 30s timer or next GPS movement check (100m)
     
