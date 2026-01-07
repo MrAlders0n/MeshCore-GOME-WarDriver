@@ -4695,7 +4695,6 @@ async function connect() {
       // Update connection bar display (deviceNameEl already set)
       debugLog("[UI] Updating device info display after stats fetch on connect");
       updateDeviceInfoDisplay();
-      updateDeviceInfoDisplay(selfInfo?.name);
       
       // Start periodic noise floor updates if feature is supported
       if (state.lastNoiseFloor !== null) {
@@ -4754,17 +4753,16 @@ async function connect() {
         debugLog("[BLE] All logs cleared on connect (new session)");
         
         // GPS initialization
-        setDynamicStatus("Priming GPS", STATUS_COLORS.info);
         debugLog("[BLE] Starting GPS initialization");
         await primeGpsOnce();
         
         // Connection complete, show Connected status in connection bar
         setConnStatus("Connected", STATUS_COLORS.success);
         
-        // If device is unknown and power not selected, restore warning message
+        // If device is unknown and power not selected, show warning message
         if (!state.autoPowerSet && !getCurrentPowerSetting()) {
           setDynamicStatus("Unknown device - select power manually", STATUS_COLORS.warning, true);
-          debugLog("[BLE] Connection complete - restored unknown device warning");
+          debugLog("[BLE] Connection complete - showing unknown device warning");
         } else {
           setDynamicStatus("Idle"); // Clear dynamic status to em dash
         }
