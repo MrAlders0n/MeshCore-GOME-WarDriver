@@ -991,16 +991,35 @@ function updateSlotsDisplay(zone) {
     return;
   }
   
-  const { slots_available, slots_max, at_capacity } = zone;
+  const { slots_available, slots_max, at_capacity, code } = zone;
   
   if (at_capacity || slots_available === 0) {
     slotsDisplay.textContent = `Full (0/${slots_max})`;
     slotsDisplay.className = "font-medium text-red-400";
+    
+    // Show persistent error in dynamic status bar
+    const errorMsg = `No wardriving slots for ${code}. RX only.`;
+    statusMessageState.outsideZoneError = errorMsg;
+    setDynamicStatus(errorMsg, STATUS_COLORS.error);
+    debugError(`[GEO AUTH] ${errorMsg}`);
+    
+    // Disable Connect button - can't TX wardrive without a slot
+    setConnectButtonDisabled(true);
+    
     debugLog(`[UI] Slots display: Full (0/${slots_max})`);
   } else {
+    // Clear any slots-full error if we now have slots available
+    if (statusMessageState.outsideZoneError && statusMessageState.outsideZoneError.includes("No wardriving slots")) {
+      statusMessageState.outsideZoneError = null;
+      debugLog(`[UI] Cleared slots-full error - slots now available`);
+    }
+    
     slotsDisplay.textContent = `${slots_available} available`;
     slotsDisplay.className = "font-medium text-emerald-300";
     debugLog(`[UI] Slots display: ${slots_available} available (${slots_available}/${slots_max})`);
+    
+    // Re-check connect button state now that slots are available
+    updateConnectButtonState();
   }
 }
 
@@ -5618,8 +5637,8 @@ function updateConnectButtonState() {
       debugLog("[UI] Not in valid zone - waiting for zone check");
       // Don't show message here, zone check will update status
     } else {
-      debugLog("[UI] External antenna selected and in valid zone - clearing message from status bar");
-      setDynamicStatus("—", STATUS_COLORS.idle);
+      debugLog("[UI] External antenna selected and in valid zone - ready to connect");
+      setDynamicStatus("Idle", STATUS_COLORS.idle);
     }
   }
 }
