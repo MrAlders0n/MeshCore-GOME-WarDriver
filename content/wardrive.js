@@ -933,7 +933,7 @@ function updateZoneStatusUI(zoneData) {
     setDynamicStatus(distText, STATUS_COLORS.error);
     
     // Log as error
-    debugError(`[GEO AUTH] [UI] ${distText}`);
+    debugError(`[GEO AUTH] ${distText}`);
     
     locationDisplay.textContent = "—";
     locationDisplay.className = "font-medium text-slate-400";
