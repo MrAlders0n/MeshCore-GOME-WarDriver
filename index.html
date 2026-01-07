@@ -97,12 +97,41 @@
           </div>
         </div>
 
+        <!-- External Antenna -->
+        <div class="space-y-2">
+          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
+            External Antenna <span class="text-amber-400">⚠️ Required</span>
+          </label>
+          <div style="display: flex; gap: 0.5rem;">
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="externalAntenna" value="NO" class="sr-only">
+              <span class="text-sm font-medium">No</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="externalAntenna" value="YES" class="sr-only">
+              <span class="text-sm font-medium">Yes</span>
+            </label>
+          </div>
+        </div>
+
         <!-- Radio Power -->
         <div class="space-y-2">
           <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
-            Radio Power <span id="powerLabelStatus" class="text-amber-400">⚠️ Required</span>
+            Radio Power <span id="powerLabelStatus"></span>
           </label>
-          <div style="display: flex; gap: 0.5rem;">
+          
+          <!-- Auto-configured power display (shown when auto-set) -->
+          <div id="powerAutoDisplay" class="hidden" style="display: flex; align-items: center; gap: 0.5rem;">
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #10b981; background-color: rgba(16, 185, 129, 0.1);">
+              <span id="powerAutoValue" class="text-sm font-medium text-emerald-400">1.0w</span>
+            </div>
+            <button id="powerOverrideBtn" type="button" style="padding: 0.5rem 1rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer; background-color: #1e293b;" class="text-sm font-medium text-slate-300 hover:bg-slate-700">
+              Override
+            </button>
+          </div>
+          
+          <!-- Manual power selection (shown when unknown device or after override) -->
+          <div id="powerManualSelection" class="hidden" style="display: flex; gap: 0.5rem;">
             <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
               <input type="radio" name="power" value="0.3w" class="sr-only">
               <span class="text-sm font-medium">0.3w</span>
@@ -118,23 +147,6 @@
             <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
               <input type="radio" name="power" value="2.0w" class="sr-only">
               <span class="text-sm font-medium">2.0w</span>
-            </label>
-          </div>
-        </div>
-
-        <!-- External Antenna -->
-        <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
-            External Antenna <span class="text-amber-400">⚠️ Required</span>
-          </label>
-          <div style="display: flex; gap: 0.5rem;">
-            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
-              <input type="radio" name="externalAntenna" value="NO" class="sr-only">
-              <span class="text-sm font-medium">No</span>
-            </label>
-            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
-              <input type="radio" name="externalAntenna" value="YES" class="sr-only">
-              <span class="text-sm font-medium">Yes</span>
             </label>
           </div>
         </div>

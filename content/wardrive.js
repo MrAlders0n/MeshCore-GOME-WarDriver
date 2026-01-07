@@ -4506,12 +4506,30 @@ async function autoSetPowerLevel() {
     debugLog(`[DEVICE MODEL] Auto-configuring power to ${deviceConfig.power}w`);
     
     // Select the matching power radio button
-    const powerValue = `${deviceConfig.power}w`;
+    // Format power value to match HTML format exactly (e.g., 1.0 → "1.0w", 0.3 → "0.3w")
+    // Use toFixed(1) to ensure one decimal place
+    const powerValue = `${deviceConfig.power.toFixed(1)}w`;
+    debugLog(`[DEVICE MODEL] Looking for power radio with value: ${powerValue}`);
     const powerRadio = document.querySelector(`input[name="power"][value="${powerValue}"]`);
     
     if (powerRadio) {
       powerRadio.checked = true;
       state.autoPowerSet = true;
+      
+      // Show auto-configured power display, hide manual selection
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
+      const powerAutoValue = document.getElementById("powerAutoValue");
+      
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.remove("hidden");
+      }
+      if (powerManualSelection) {
+        powerManualSelection.classList.add("hidden");
+      }
+      if (powerAutoValue) {
+        powerAutoValue.textContent = powerValue;
+      }
       
       // Update label to show "⚡ Auto"
       if (powerLabelStatus) {
@@ -4528,6 +4546,10 @@ async function autoSetPowerLevel() {
       debugLog(`[DEVICE MODEL] ✅ Auto-power configuration complete: ${powerValue}`);
     } else {
       debugError(`[DEVICE MODEL] Power radio button not found for value: ${powerValue}`);
+      debugLog(`[DEVICE MODEL] Available power buttons:`);
+      document.querySelectorAll('input[name="power"]').forEach(radio => {
+        debugLog(`[DEVICE MODEL]   - ${radio.value}`);
+      });
       state.autoPowerSet = false;
     }
     
@@ -4540,6 +4562,23 @@ async function autoSetPowerLevel() {
     // Unknown device - log error and require manual selection
     debugError(`[DEVICE MODEL] Unknown device: ${state.deviceModel}`);
     state.autoPowerSet = false;
+    
+    // Hide auto-configured power display, show manual selection
+    const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+    const powerManualSelection = document.getElementById("powerManualSelection");
+    
+    if (powerAutoDisplay) {
+      powerAutoDisplay.classList.add("hidden");
+    }
+    if (powerManualSelection) {
+      powerManualSelection.classList.remove("hidden");
+    }
+    
+    // Update label to show "⚠️ Required"
+    if (powerLabelStatus) {
+      powerLabelStatus.textContent = "⚠️ Required";
+      powerLabelStatus.className = "text-amber-400";
+    }
     
     // Update device model display to show "Unknown"
     if (deviceModelEl) {
@@ -4803,12 +4842,27 @@ async function connect() {
       state.bleDisconnectErrorMessage = null; // Clear error message
       state.autoPowerSet = false; // Reset auto-power flag
       
-      // Reset power label to "Required" state
+      // Hide both power displays and clear label
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
       const powerLabelStatus = document.getElementById("powerLabelStatus");
-      if (powerLabelStatus) {
-        powerLabelStatus.textContent = "⚠️ Required";
-        powerLabelStatus.className = "text-amber-400";
+      
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.add("hidden");
       }
+      if (powerManualSelection) {
+        powerManualSelection.classList.add("hidden");
+      }
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "";
+        powerLabelStatus.className = "";
+      }
+      
+      // Uncheck all power radio buttons
+      const powerInputs = document.querySelectorAll('input[name="power"]');
+      powerInputs.forEach(input => {
+        input.checked = false;
+      });
       
       // Unlock wardrive settings after disconnect
       unlockWardriveSettings();
@@ -5018,6 +5072,14 @@ function lockWardriveSettings() {
     }
   });
   
+  // Lock Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.disabled = true;
+    powerOverrideBtn.classList.add("cursor-not-allowed", "pointer-events-none");
+    powerOverrideBtn.style.opacity = "0.5";
+  }
+  
   // Lock all external antenna inputs and labels
   const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
   antennaInputs.forEach(input => {
@@ -5046,6 +5108,14 @@ function unlockWardriveSettings() {
       label.style.opacity = "";
     }
   });
+  
+  // Unlock Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.disabled = false;
+    powerOverrideBtn.classList.remove("cursor-not-allowed", "pointer-events-none");
+    powerOverrideBtn.style.opacity = "";
+  }
   
   // Unlock all external antenna inputs and labels
   const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
@@ -5164,53 +5234,69 @@ export async function onLoad() {
   const powerRadios = document.querySelectorAll('input[name="power"]');
   let previousPowerValue = null; // Track previous selection for revert on cancel
   
+  // Add event listener to Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.addEventListener("click", () => {
+      debugLog("[UI] Override button clicked");
+      
+      // Show confirmation dialog
+      const confirmed = confirm("Are you sure you want to override the auto-configured power setting?");
+      
+      if (confirmed) {
+        // Hide auto display, show manual selection
+        const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+        const powerManualSelection = document.getElementById("powerManualSelection");
+        const powerLabelStatus = document.getElementById("powerLabelStatus");
+        
+        if (powerAutoDisplay) {
+          powerAutoDisplay.classList.add("hidden");
+        }
+        if (powerManualSelection) {
+          powerManualSelection.classList.remove("hidden");
+        }
+        
+        // Update state and label
+        state.autoPowerSet = false;
+        if (powerLabelStatus) {
+          powerLabelStatus.textContent = "⚙️ Manual";
+          powerLabelStatus.className = "text-slate-400";
+        }
+        
+        debugLog("[UI] Power override confirmed, switched to manual selection");
+      } else {
+        debugLog("[UI] Power override canceled by user");
+      }
+    });
+  }
+  
   powerRadios.forEach(radio => {
     radio.addEventListener("change", (e) => {
       const newValue = getCurrentPowerSetting();
       debugLog(`[UI] Radio power changed to: ${newValue}`);
       
-      // Check if this is an override of auto-configured power
-      if (state.autoPowerSet && state.connection) {
-        // Check if settings are NOT locked (auto mode not running)
-        const powerInputs = document.querySelectorAll('input[name="power"]');
-        const isLocked = powerInputs[0]?.disabled;
-        
-        if (!isLocked) {
-          // Show confirmation dialog
-          const confirmed = confirm("Are you sure you want to override the auto-configured power setting?");
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      
+      // If user is selecting after Override button was clicked (autoPowerSet is false after override)
+      // Update label to show "⚙️ Manual"
+      if (!state.autoPowerSet && state.connection) {
+        if (powerLabelStatus) {
+          // Check if this was an unknown device (label is "⚠️ Required")
+          const wasUnknown = powerLabelStatus.textContent === "⚠️ Required";
           
-          if (!confirmed) {
-            // User canceled - revert to previous selection
-            e.target.checked = false;
-            if (previousPowerValue) {
-              const previousRadio = document.querySelector(`input[name="power"][value="${previousPowerValue}"]`);
-              if (previousRadio) {
-                previousRadio.checked = true;
-              }
-            }
-            debugLog("[UI] Power override canceled by user");
-            return;
+          if (wasUnknown) {
+            // Clear the "Required" warning for unknown device
+            powerLabelStatus.textContent = "⚙️ Manual";
+            powerLabelStatus.className = "text-slate-400";
+            setDynamicStatus("Idle");
+            debugLog("[UI] Cleared unknown device status after manual power selection");
           } else {
-            // User confirmed override
-            state.autoPowerSet = false;
-            
-            // Update label back to normal (no Auto indicator)
-            const powerLabelStatus = document.getElementById("powerLabelStatus");
-            if (powerLabelStatus) {
-              powerLabelStatus.textContent = "";
-              powerLabelStatus.className = "";
-            }
-            
-            debugLog("[UI] Power override confirmed, auto-power flag cleared");
+            // This was an override, show Manual indicator
+            powerLabelStatus.textContent = "⚙️ Manual";
+            powerLabelStatus.className = "text-slate-400";
+            debugLog("[UI] Manual power selection after override");
           }
         }
-      }
-      
-      // If unknown device (autoPowerSet is false and we have a connection)
-      // Clear the "Unknown device" status message once user selects power
-      if (!state.autoPowerSet && state.connection && state.deviceModel && state.deviceModel !== "-") {
-        setDynamicStatus("Idle");
-        debugLog("[UI] Cleared unknown device status after manual power selection");
       }
       
       // Store current value as previous for next change
