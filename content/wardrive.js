@@ -5592,23 +5592,34 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 /**
- * Update Connect button state based on external antenna selection (power now auto-configured)
+ * Update Connect button state based on external antenna selection AND zone status
+ * Connect requires: external antenna selected AND in valid zone (no persistent error)
  */
 function updateConnectButtonState() {
   const externalAntennaSelected = getExternalAntennaSetting() !== "";
   const isConnected = !!state.connection;
+  const hasZoneError = !!statusMessageState.outsideZoneError;
+  const inValidZone = !!state.currentZone;
   
   if (!isConnected) {
-    // Only enable Connect if external antenna is selected
-    setConnectButtonDisabled(!externalAntennaSelected);
+    // Enable Connect only if: antenna selected AND in valid zone AND no persistent error
+    const canConnect = externalAntennaSelected && inValidZone && !hasZoneError;
+    setConnectButtonDisabled(!canConnect);
     
-    // Update dynamic status based on selection
-    if (!externalAntennaSelected) {
+    // Update dynamic status based on what's blocking connection
+    // Priority: zone error > antenna not selected > ready
+    if (hasZoneError) {
+      // Zone error already shown as persistent message, don't override
+      debugLog("[UI] Connect blocked by zone error (persistent message already shown)");
+    } else if (!externalAntennaSelected) {
       debugLog("[UI] External antenna not selected - showing message in status bar");
       setDynamicStatus("Select external antenna to connect", STATUS_COLORS.warning);
+    } else if (!inValidZone) {
+      debugLog("[UI] Not in valid zone - waiting for zone check");
+      // Don't show message here, zone check will update status
     } else {
-      debugLog("[UI] External antenna selected - clearing message from status bar");
-      setDynamicStatus("Idle");
+      debugLog("[UI] External antenna selected and in valid zone - clearing message from status bar");
+      setDynamicStatus("—", STATUS_COLORS.idle);
     }
   }
 }
