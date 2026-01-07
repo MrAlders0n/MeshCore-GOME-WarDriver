@@ -126,8 +126,8 @@ const API_TX_FLUSH_DELAY_MS = 3000;         // Flush 3 seconds after TX ping
 
 // MeshMapper API Configuration
 const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
-const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
 const GEO_AUTH_STATUS_URL = "https://meshmapper.net/wardrive-api.php/status";  // Geo-auth zone status endpoint
+const GEO_AUTH_URL = "https://meshmapper.net/wardrive-api.php/auth";  // Geo-auth connect/disconnect endpoint
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
 const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
@@ -141,11 +141,19 @@ const WARDIVE_IATA_CODE = "YOW";
 // For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
 const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
-// ---- Capacity Check Reason Messages ----
+// ---- Auth Reason Messages ----
 // Maps API reason codes to user-facing error messages
 const REASON_MESSAGES = {
   outofdate: "App out of date, please update",
-  // Future reasons can be added here
+  unknown_device: "Unknown device - advertise on mesh first",
+  outside_zone: "Outside zone - cannot connect",
+  zone_disabled: "Zone is disabled",
+  zone_full: "TX slots full - RX only",
+  bad_key: "Invalid API key",
+  gps_stale: "GPS data too old - try again",
+  gps_inaccurate: "GPS accuracy too low - try again",
+  bad_session: "Invalid session",
+  session_expired: "Session expired - reconnect",
 };
 
 // ---- UI helpers ----
@@ -269,16 +277,19 @@ const state = {
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
   capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
-  devicePublicKey: null, // Hex string of device's public key (used for capacity check)
+  devicePublicKey: null, // Hex string of device's public key (used for auth)
   deviceModel: null, // Manufacturer/model string exposed by companion
   autoPowerSet: false, // Whether power was automatically set based on device model
   lastNoiseFloor: null, // Most recent noise floor read from companion (dBm) or 'ERR'
   noiseFloorUpdateTimer: null, // Timer for periodic noise floor updates (5s interval)
   deviceName: null,
-  wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
+  wardriveSessionId: null, // Session ID from /auth API (used for all MeshMapper API posts)
   debugMode: false, // Whether debug mode is enabled by MeshMapper API
+  txAllowed: false, // Whether TX wardriving is permitted (from /auth response)
+  rxAllowed: false, // Whether RX wardriving is permitted (from /auth response)
+  sessionExpiresAt: null, // Unix timestamp when session expires (for heartbeat scheduling)
   tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
-  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "unknown_device", "outside_zone", "zone_disabled", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
   pendingApiPosts: [], // Array of pending background API post promises
@@ -604,16 +615,17 @@ function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
   const powerSelected = getCurrentPowerSetting() !== "";
-  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}, powerSelected=${powerSelected}`);
+  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}, powerSelected=${powerSelected}, txAllowed=${state.txAllowed}, rxAllowed=${state.rxAllowed}`);
   
-  // TX Ping button - disabled during cooldown, ping in progress, OR when no power selected
-  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress || !powerSelected;
+  // TX Ping button - requires TX permission, disabled during cooldown, ping in progress, OR when no power selected
+  txPingBtn.disabled = !connected || !state.txAllowed || inCooldown || state.pingInProgress || !powerSelected;
   
-  // TX/RX Auto button - disabled during cooldown, ping in progress, when RX Auto running, OR when no power selected
-  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning || !powerSelected;
+  // TX/RX Auto button - requires TX permission, disabled during cooldown, ping in progress, when RX Auto running, OR when no power selected
+  txRxAutoBtn.disabled = !connected || !state.txAllowed || inCooldown || state.pingInProgress || state.rxAutoRunning || !powerSelected;
   
-  // RX Auto button - permanently disabled (backend API not ready)
-  rxAutoBtn.disabled = true;
+  // RX Auto button - enabled when connected with RX permission (including RX-only mode)
+  // Disabled during TX/RX Auto mode (can't run both), and requires power selected
+  rxAutoBtn.disabled = !connected || !state.rxAllowed || state.txRxAutoRunning || !powerSelected;
 }
 
 /**
@@ -1936,14 +1948,15 @@ async function checkZoneStatus(coords) {
 }
 
 /**
- * Check capacity / slot availability with MeshMapper API
- * @param {string} reason - Either "connect" (acquire slot) or "disconnect" (release slot)
+ * Request authentication with MeshMapper geo-auth API
+ * Handles both connect (acquire session) and disconnect (release session)
+ * @param {string} reason - Either "connect" (acquire session) or "disconnect" (release session)
  * @returns {Promise<boolean>} True if allowed to continue, false otherwise
  */
-async function checkCapacity(reason) {
+async function requestAuth(reason) {
   // Validate public key exists
   if (!state.devicePublicKey) {
-    debugError("[CAPACITY] checkCapacity called but no public key stored");
+    debugError("[AUTH] requestAuth called but no public key stored");
     return reason === "connect" ? false : true; // Fail closed on connect, allow disconnect
   }
 
@@ -1953,92 +1966,145 @@ async function checkCapacity(reason) {
   }
 
   try {
+    // Build base payload
     const payload = {
       key: MESHMAPPER_API_KEY,
       public_key: state.devicePublicKey,
-      ver: APP_VERSION,
-      who: getDeviceIdentifier(),
-      ver: APP_VERSION,
       reason: reason
     };
 
-    debugLog(`[CAPACITY] Checking capacity: reason=${reason}, public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}`);
+    // For connect: add device metadata and GPS coords
+    if (reason === "connect") {
+      // Acquire fresh GPS for auth
+      debugLog("[AUTH] Acquiring fresh GPS for auth request");
+      const coords = await getValidGpsForZoneCheck();
+      
+      if (!coords) {
+        debugError("[AUTH] Failed to acquire GPS for auth");
+        state.disconnectReason = "gps_unavailable";
+        return false;
+      }
+      
+      // Add device metadata (bound to session at auth time)
+      payload.who = getDeviceIdentifier();
+      payload.ver = APP_VERSION;
+      payload.power = getCurrentPowerSetting();
+      payload.iata = state.currentZone?.code || WARDIVE_IATA_CODE;
+      payload.model = state.deviceModel || "Unknown";
+      
+      // Add GPS coords (use lng for API, internally we use lon)
+      payload.coords = {
+        lat: coords.lat,
+        lng: coords.lon,  // Convert lon → lng for API
+        accuracy_m: coords.accuracy_m,
+        timestamp: coords.timestamp
+      };
+      
+      debugLog(`[AUTH] Connect request: public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}, iata=${payload.iata}`);
+    } else {
+      // For disconnect: add session_id
+      payload.session_id = state.wardriveSessionId;
+      debugLog(`[AUTH] Disconnect request: public_key=${state.devicePublicKey.substring(0, 16)}..., session_id=${payload.session_id}`);
+    }
 
-    const response = await fetch(MESHMAPPER_CAPACITY_CHECK_URL, {
+    const response = await fetch(GEO_AUTH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
+    // Handle HTTP-level errors
     if (!response.ok) {
-      debugError(`[CAPACITY] Capacity check API returned error status ${response.status}`);
+      debugError(`[AUTH] API returned error status ${response.status}`);
       // Fail closed on network errors for connect
       if (reason === "connect") {
-        debugError("[CAPACITY] Failing closed (denying connection) due to API error");
-        state.disconnectReason = "app_down"; // Track disconnect reason
+        debugError("[AUTH] Failing closed (denying connection) due to API error");
+        state.disconnectReason = "app_down";
         return false;
       }
       return true; // Always allow disconnect to proceed
     }
 
     const data = await response.json();
-    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, debug_mode=${data.debug_mode || 'not set'}, reason=${data.reason || 'none'}`);
+    debugLog(`[AUTH] Response: success=${data.success}, tx_allowed=${data.tx_allowed}, rx_allowed=${data.rx_allowed}, session_id=${data.session_id || 'none'}, reason=${data.reason || 'none'}`);
 
-    // Handle capacity full vs. allowed cases separately
-    if (data.allowed === false && reason === "connect") {
-      // Check if a reason code is provided
-      if (data.reason) {
-        debugLog(`[CAPACITY] API returned reason code: ${data.reason}`);
-        state.disconnectReason = data.reason; // Store the reason code directly
-      } else {
-        state.disconnectReason = "capacity_full"; // Default to capacity_full
-      }
-      return false;
-    }
-    
-    // For connect requests, validate session_id and check debug_mode
-    if (reason === "connect" && data.allowed === true) {
-      if (!data.session_id) {
-        debugError("[CAPACITY] Capacity check returned allowed=true but session_id is missing");
-        state.disconnectReason = "session_id_error"; // Track disconnect reason
+    // Handle connect response
+    if (reason === "connect") {
+      // Check for full denial
+      if (data.success === false) {
+        debugLog(`[AUTH] Connect denied: ${data.reason} - ${data.message || ''}`);
+        state.disconnectReason = data.reason || "auth_denied";
         return false;
       }
       
-      // Store the session_id for use in MeshMapper API posts
+      // Success - store session info
+      if (!data.session_id) {
+        debugError("[AUTH] Auth returned success=true but session_id is missing");
+        state.disconnectReason = "session_id_error";
+        return false;
+      }
+      
+      // Store session data
       state.wardriveSessionId = data.session_id;
-      debugLog(`[CAPACITY] Wardrive session ID received and stored: ${state.wardriveSessionId}`);
+      state.txAllowed = data.tx_allowed === true;
+      state.rxAllowed = data.rx_allowed === true;
+      state.sessionExpiresAt = data.expires_at || null;
+      
+      debugLog(`[AUTH] Session acquired: id=${state.wardriveSessionId}, tx=${state.txAllowed}, rx=${state.rxAllowed}, expires=${state.sessionExpiresAt}`);
+      
+      // Check for RX-only scenario (zone_full)
+      if (!state.txAllowed && state.rxAllowed) {
+        debugLog(`[AUTH] RX-only mode: TX slots full, reason=${data.reason}`);
+        // Don't set disconnectReason - this is a partial success
+      }
       
       // Check for debug_mode flag (optional field)
       if (data.debug_mode === 1) {
         state.debugMode = true;
-        debugLog(`[CAPACITY] 🐛 DEBUG MODE ENABLED by API`);
+        debugLog(`[AUTH] 🐛 DEBUG MODE ENABLED by API`);
       } else {
         state.debugMode = false;
-        debugLog(`[CAPACITY] Debug mode NOT enabled`);
       }
+      
+      return true; // Success (full or RX-only)
     }
     
-    // For disconnect requests, clear the session_id and debug mode
+    // Handle disconnect response
     if (reason === "disconnect") {
-      if (state.wardriveSessionId) {
-        debugLog(`[CAPACITY] Clearing wardrive session ID on disconnect: ${state.wardriveSessionId}`);
-        state.wardriveSessionId = null;
-      }
+      // Clear session state regardless of server response
+      debugLog(`[AUTH] Clearing session state on disconnect`);
+      state.wardriveSessionId = null;
+      state.txAllowed = false;
+      state.rxAllowed = false;
+      state.sessionExpiresAt = null;
       state.debugMode = false;
-      debugLog(`[CAPACITY] Debug mode cleared on disconnect`);
+      
+      if (data.success === true && data.disconnected === true) {
+        debugLog(`[AUTH] Disconnect confirmed by server`);
+      } else if (data.success === false) {
+        debugWarn(`[AUTH] Server reported disconnect error: ${data.reason} - ${data.message || ''}`);
+        // Don't fail - we still clean up locally
+      }
+      
+      return true; // Always return true for disconnect
     }
-    
-    return data.allowed === true;
 
   } catch (error) {
-    debugError(`[CAPACITY] Capacity check failed: ${error.message}`);
+    debugError(`[AUTH] Request failed: ${error.message}`);
     
     // Fail closed on network errors for connect
     if (reason === "connect") {
-      debugError("[CAPACITY] Failing closed (denying connection) due to network error");
-      state.disconnectReason = "app_down"; // Track disconnect reason
+      debugError("[AUTH] Failing closed (denying connection) due to network error");
+      state.disconnectReason = "app_down";
       return false;
     }
+    
+    // For disconnect, clear state even on error
+    state.wardriveSessionId = null;
+    state.txAllowed = false;
+    state.rxAllowed = false;
+    state.sessionExpiresAt = null;
+    state.debugMode = false;
     
     return true; // Always allow disconnect to proceed
   }
@@ -5226,22 +5292,29 @@ async function connect() {
         debugLog("[BLE] Device time sync not available or failed");
       }
       try {
-        // Check capacity immediately after time sync, before channel setup and GPS init
-        const allowed = await checkCapacity("connect");
+        // Request auth immediately after time sync, before channel setup and GPS init
+        // Note: requestAuth acquires fresh GPS internally
+        const allowed = await requestAuth("connect");
         if (!allowed) {
-          debugWarn("[CAPACITY] Capacity check denied, disconnecting");
-          // disconnectReason already set by checkCapacity()
+          debugWarn("[AUTH] Auth request denied, disconnecting");
+          // disconnectReason already set by requestAuth()
           // Status message will be set by disconnected event handler based on disconnectReason
           // Disconnect after a brief delay to ensure "Acquiring wardriving slot" is visible
           setTimeout(() => {
-            disconnect().catch(err => debugError(`[BLE] Disconnect after capacity denial failed: ${err.message}`));
+            disconnect().catch(err => debugError(`[BLE] Disconnect after auth denial failed: ${err.message}`));
           }, 1500);
           return;
         }
         
-        // Capacity check passed
-        setDynamicStatus("Acquired wardriving slot", STATUS_COLORS.success);
-        debugLog("[BLE] Wardriving slot acquired successfully");
+        // Auth passed - check if full access or RX-only
+        if (state.txAllowed && state.rxAllowed) {
+          setDynamicStatus("Acquired wardriving slot", STATUS_COLORS.success);
+          debugLog("[AUTH] Full access granted (TX + RX)");
+        } else if (state.rxAllowed) {
+          setDynamicStatus("TX slots full - RX only", STATUS_COLORS.warning);
+          debugLog("[AUTH] RX-only access granted (TX slots full)");
+        }
+        debugLog(`[AUTH] Session acquired: tx=${state.txAllowed}, rx=${state.rxAllowed}`);
         
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
@@ -5250,13 +5323,17 @@ async function connect() {
         startUnifiedRxListening();
         debugLog("[BLE] Unified RX listener started on connect");
         
-        // GPS initialization
-        debugLog("[BLE] Starting GPS initialization");
+        // GPS initialization (primeGpsOnce for watch mode)
+        // Note: Fresh GPS was already acquired by requestAuth, this starts continuous watching
+        debugLog("[BLE] Starting GPS watch mode");
         await primeGpsOnce();
         
-        // Connection complete, show Connected status in connection bar
-        // Note: Zone validation will happen server-side via /auth endpoint (Phase 4.2)
-        setConnStatus("Connected", STATUS_COLORS.success);
+        // Connection complete - show status based on TX+RX vs RX-only
+        if (state.txAllowed && state.rxAllowed) {
+          setConnStatus("Connected", STATUS_COLORS.success);
+        } else if (state.rxAllowed) {
+          setConnStatus("Connected (RX Only)", STATUS_COLORS.warning);
+        }
         
         // If device is unknown and power not selected, show warning message
         if (!state.autoPowerSet && !getCurrentPowerSetting()) {
@@ -5385,6 +5462,9 @@ async function connect() {
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
       state.wardriveSessionId = null; // Clear wardrive session ID
+      state.txAllowed = false; // Clear TX permission
+      state.rxAllowed = false; // Clear RX permission
+      state.sessionExpiresAt = null; // Clear session expiration
       state.debugMode = false; // Clear debug mode
       state.tempTxRepeaterData = null; // Clear temp TX data
       state.disconnectReason = null; // Reset disconnect reason
@@ -5498,14 +5578,14 @@ async function disconnect() {
   }
   stopFlushTimers();
 
-  // 3. THEN release capacity slot if we have a public key
-  if (state.devicePublicKey) {
+  // 3. THEN release session via auth API if we have a public key
+  if (state.devicePublicKey && state.wardriveSessionId) {
     try {
-      debugLog("[BLE] Releasing capacity slot");
-      await checkCapacity("disconnect");
+      debugLog("[AUTH] Releasing session via /auth disconnect");
+      await requestAuth("disconnect");
     } catch (e) {
-      debugWarn(`[CAPACITY] Failed to release capacity slot: ${e.message}`);
-      // Don't fail disconnect if capacity release fails
+      debugWarn(`[AUTH] Failed to release session: ${e.message}`);
+      // Don't fail disconnect if auth release fails
     }
   }
 
