@@ -537,7 +537,15 @@ function pauseAutoCountdown() {
       state.pausedAutoTimerRemainingMs = null;
     }
   }
-  // Stop the auto ping timer (but keep autoTimerId so we know auto mode is active)
+  
+  // CRITICAL: Clear the actual ping timer to prevent it from firing during manual ping
+  if (state.autoTimerId) {
+    debugLog(`[TIMER] Clearing ping timer (id=${state.autoTimerId}) during pause`);
+    clearTimeout(state.autoTimerId);
+    state.autoTimerId = null;
+  }
+  
+  // Stop the UI countdown display
   autoCountdownTimer.stop();
   state.nextAutoPingTime = null;
 }
@@ -547,8 +555,32 @@ function resumeAutoCountdown() {
   if (state.pausedAutoTimerRemainingMs !== null) {
     // Validate paused time is still reasonable before resuming
     if (state.pausedAutoTimerRemainingMs > MIN_PAUSE_THRESHOLD_MS && state.pausedAutoTimerRemainingMs < MAX_REASONABLE_TIMER_MS) {
-      debugLog(`[TIMER] Resuming auto countdown with ${state.pausedAutoTimerRemainingMs}ms remaining`);
-      startAutoCountdown(state.pausedAutoTimerRemainingMs);
+      const remainingMs = state.pausedAutoTimerRemainingMs;
+      debugLog(`[TIMER] Resuming auto countdown with ${remainingMs}ms remaining`);
+      
+      // Start the UI countdown display
+      startAutoCountdown(remainingMs);
+      
+      // CRITICAL: Also schedule the actual ping timer with the remaining time
+      state.autoTimerId = setTimeout(() => {
+        debugLog(`[TX/RX AUTO] Resumed auto ping timer fired (id=${state.autoTimerId})`);
+        
+        // Double-check guards before sending ping
+        if (!state.txRxAutoRunning) {
+          debugLog("[TX/RX AUTO] Auto mode no longer running, ignoring timer");
+          return;
+        }
+        if (state.pingInProgress) {
+          debugLog("[TX/RX AUTO] Ping already in progress, ignoring timer");
+          return;
+        }
+        
+        state.skipReason = null;
+        debugLog("[TX/RX AUTO] Sending auto ping (resumed)");
+        sendPing(false).catch(console.error);
+      }, remainingMs);
+      debugLog(`[TIMER] Resumed ping timer scheduled (id=${state.autoTimerId})`);
+      
       state.pausedAutoTimerRemainingMs = null;
       return true;
     } else {
