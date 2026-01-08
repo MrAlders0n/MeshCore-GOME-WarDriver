@@ -119,13 +119,18 @@ const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (s
 const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
 const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 
-// API Batch Queue Configuration
+// Wardrive Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
 const API_BATCH_FLUSH_INTERVAL_MS = 30000;  // Flush every 30 seconds
 const API_TX_FLUSH_DELAY_MS = 3000;         // Flush 3 seconds after TX ping
 
+// Heartbeat Configuration
+const HEARTBEAT_BUFFER_MS = 5 * 60 * 1000;  // Schedule heartbeat 5 minutes before session expiry
+const WARDRIVE_RETRY_DELAY_MS = 2000;       // Delay before retry on network failure (2 seconds)
+
 // MeshMapper API Configuration
-const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
+const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";  // Legacy endpoint (to be removed)
+const WARDRIVE_ENDPOINT = "https://meshmapper.net/wardrive-api.php/wardrive";  // New wardrive data + heartbeat endpoint
 const GEO_AUTH_STATUS_URL = "https://meshmapper.net/wardrive-api.php/status";  // Geo-auth zone status endpoint
 const GEO_AUTH_URL = "https://meshmapper.net/wardrive-api.php/auth";  // Geo-auth connect/disconnect endpoint
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
@@ -276,7 +281,7 @@ const state = {
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
-  capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
+  capturedPingCoords: null, // { lat, lon, accuracy, noisefloor, timestamp } captured at ping time, used for API post after RX window
   devicePublicKey: null, // Hex string of device's public key (used for auth)
   deviceModel: null, // Manufacturer/model string exposed by companion
   autoPowerSet: false, // Whether power was automatically set based on device model
@@ -288,6 +293,7 @@ const state = {
   txAllowed: false, // Whether TX wardriving is permitted (from /auth response)
   rxAllowed: false, // Whether RX wardriving is permitted (from /auth response)
   sessionExpiresAt: null, // Unix timestamp when session expires (for heartbeat scheduling)
+  heartbeatTimerId: null, // Timer ID for heartbeat scheduling
   tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
   disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "unknown_device", "outside_zone", "zone_disabled", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
@@ -315,8 +321,8 @@ const state = {
   rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, bestObservation}>
 };
 
-// API Batch Queue State
-const apiQueue = {
+// Wardrive Batch Queue State
+const wardriveQueue = {
   messages: [],           // Array of pending payloads
   flushTimerId: null,     // Timer ID for periodic flush (30s)
   txFlushTimerId: null,   // Timer ID for TX-triggered flush (3s)
@@ -660,7 +666,10 @@ function cleanupAllTimers() {
   }
   
   // Clean up API queue timers
-  stopFlushTimers();
+  stopWardriveTimers();
+  
+  // Cancel heartbeat timer
+  cancelHeartbeat();
   
   // Clean up state timer references
   state.autoCountdownTimer = null;
@@ -2098,6 +2107,11 @@ async function requestAuth(reason) {
       
       debugLog(`[AUTH] Session acquired: id=${state.wardriveSessionId}, tx=${state.txAllowed}, rx=${state.rxAllowed}, expires=${state.sessionExpiresAt}`);
       
+      // Schedule heartbeat to keep session alive
+      if (state.sessionExpiresAt) {
+        scheduleHeartbeat(state.sessionExpiresAt);
+      }
+      
       // Check for RX-only scenario (zone_full)
       if (!state.txAllowed && state.rxAllowed) {
         debugLog(`[AUTH] RX-only mode: TX slots full, reason=${data.reason}`);
@@ -2191,186 +2205,55 @@ function buildDebugData(metadata, heardByte, repeaterId) {
 }
 
 /**
- * Post wardrive ping data to MeshMapper API
- * @param {number} lat - Latitude
- * @param {number} lon - Longitude
- * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
- */
-async function postToMeshMapperAPI(lat, lon, heardRepeats) {
-  try {
-    // Validate session_id exists before posting
-    if (!state.wardriveSessionId) {
-      debugError("[API QUEUE] Cannot post to MeshMapper API: no session_id available");
-      setDynamicStatus("Missing session ID", STATUS_COLORS.error);
-      state.disconnectReason = "session_id_error"; // Track disconnect reason
-      // Disconnect after a brief delay to ensure user sees the error message
-      setTimeout(() => {
-        disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
-      }, 1500);
-      return; // Exit early
-    }
-    
-    const payload = {
-      key: MESHMAPPER_API_KEY,
-      lat,
-      lon,
-      who: getDeviceIdentifier(),
-      power: getCurrentPowerSetting(),
-      external_antenna: getExternalAntennaSetting(),
-      heard_repeats: heardRepeats,
-      ver: APP_VERSION,
-      test: 0,
-      iata: WARDIVE_IATA_CODE,
-      session_id: state.wardriveSessionId,
-      WARDRIVE_TYPE: "TX"
-    };
-
-    // Add debug data if debug mode is enabled and repeater data is available
-    if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
-      debugLog(`[API QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
-      
-      const debugDataArray = [];
-      
-      for (const repeater of state.tempTxRepeaterData) {
-        if (repeater.metadata) {
-          const heardByte = repeater.repeaterId;  // First byte of path
-          const debugData = buildDebugData(repeater.metadata, heardByte, repeater.repeaterId);
-          debugDataArray.push(debugData);
-          debugLog(`[API QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
-        }
-      }
-      
-      if (debugDataArray.length > 0) {
-        payload.debug_data = debugDataArray;
-        debugLog(`[API QUEUE] 🐛 TX payload includes ${debugDataArray.length} debug_data entries`);
-      }
-      
-      // Clear temp data after use
-      state.tempTxRepeaterData = null;
-    }
-
-    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}${payload.debug_data ? `, debug_data=${payload.debug_data.length} entries` : ''}`);
-
-    const response = await fetch(MESHMAPPER_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    debugLog(`[API QUEUE] MeshMapper API response status: ${response.status}`);
-
-    // Always try to parse the response body to check for slot revocation
-    // regardless of HTTP status code
-    try {
-      const data = await response.json();
-      debugLog(`[API QUEUE] MeshMapper API response data: ${JSON.stringify(data)}`);
-      
-      // Check if slot has been revoked
-      if (data.allowed === false) {
-        debugError("[API QUEUE] MeshMapper slot has been revoked");
-        setDynamicStatus("API post failed (revoked)", STATUS_COLORS.error);
-        state.disconnectReason = "slot_revoked"; // Track disconnect reason
-        // Disconnect after a brief delay to ensure user sees the error message
-        setTimeout(() => {
-          disconnect().catch(err => debugError(`[BLE] Disconnect after slot revocation failed: ${err.message}`));
-        }, 1500);
-        return; // Exit early after slot revocation
-      } else if (data.allowed === true) {
-        debugLog("[API QUEUE] MeshMapper API allowed check passed: device still has an active MeshMapper slot");
-      } else {
-        debugError(`[API QUEUE] MeshMapper API response missing 'allowed' field: ${JSON.stringify(data)}`);
-      }
-    } catch (parseError) {
-      debugError(`[API QUEUE] Failed to parse MeshMapper API response: ${parseError.message}`);
-      // Continue operation if we can't parse the response
-    }
-
-    if (!response.ok) {
-      debugError(`[API QUEUE] MeshMapper API returned error status ${response.status}`);
-    } else {
-      debugLog(`[API QUEUE] MeshMapper API post successful (status ${response.status})`);
-    }
-  } catch (error) {
-    // Log error but don't fail the ping
-    debugError(`[API QUEUE] MeshMapper API post failed: ${error.message}`);
-  }
-}
-
-/**
- * Post to MeshMapper API in background (non-blocking)
- * This function runs asynchronously after the RX listening window completes
- * UI status messages are suppressed for successful posts, errors are shown
+ * Queue a TX wardrive entry for batch submission
+ * Called after RX listening window completes with final heard_repeats data
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {number} accuracy - GPS accuracy in meters
  * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
+ * @param {number|null} noisefloor - Noisefloor value captured at ping time
+ * @param {number} timestamp - Unix timestamp captured at ping time
  */
-async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
-  debugLog(`[API QUEUE] postApiInBackground called with heard_repeats="${heardRepeats}"`);
+function queueTxEntry(lat, lon, accuracy, heardRepeats, noisefloor, timestamp) {
+  debugLog(`[WARDRIVE QUEUE] queueTxEntry called: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}", noisefloor=${noisefloor}, timestamp=${timestamp}`);
   
-  // Hidden 3-second delay before API POST (no user-facing status message)
-  debugLog("[API QUEUE] Starting 3-second delay before API POST");
-  await new Promise(resolve => setTimeout(resolve, 3000));
-  
-  // Check if we're still connected before posting (disconnect may have happened during delay)
-  if (!state.connection || !state.wardriveSessionId) {
-    debugLog("[API QUEUE] Skipping background API post - disconnected or no session_id");
-    return;
-  }
-  
-  debugLog("[API QUEUE] 3-second delay complete, posting to API");
-  try {
-    await postToMeshMapperAPI(lat, lon, heardRepeats);
-    debugLog("[API QUEUE] Background API post completed successfully");
-    // No success status message - suppress from UI
-  } catch (error) {
-    debugError("[API QUEUE] Background API post failed:", error);
-    // Errors are propagated to caller for user notification
-    throw error;
-  }
-  
-  // Update map after API post
-  debugLog("[UI] Scheduling coverage map refresh");
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-  }, MAP_REFRESH_DELAY_MS);
-}
-
-/**
- * Post to MeshMapper API and refresh coverage map after heard repeats are finalized
- * This function now queues TX messages instead of posting immediately
- * @param {number} lat - Latitude
- * @param {number} lon - Longitude
- * @param {number} accuracy - GPS accuracy in meters
- * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
- */
-async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
-  debugLog(`[API QUEUE] postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
-  
-  // Build payload
-  const payload = {
-    key: MESHMAPPER_API_KEY,
+  // Build entry-only payload (wrapper added by submitWardriveData)
+  const entry = {
+    type: "TX",
     lat,
     lon,
-    who: getDeviceIdentifier(),
-    power: getCurrentPowerSetting(),
+    noisefloor,
     heard_repeats: heardRepeats,
-    ver: APP_VERSION,
-    test: 0,
-    iata: WARDIVE_IATA_CODE,
-    session_id: state.wardriveSessionId
+    timestamp
   };
   
-  // Queue message instead of posting immediately
-  queueApiMessage(payload, "TX");
-  debugLog(`[API QUEUE] TX message queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
+  // Add debug data if debug mode is enabled and repeater data is available
+  if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
+    debugLog(`[WARDRIVE QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
+    
+    const debugDataArray = [];
+    
+    for (const repeater of state.tempTxRepeaterData) {
+      if (repeater.metadata) {
+        const heardByte = repeater.repeaterId;  // First byte of path
+        const debugData = buildDebugData(repeater.metadata, heardByte, repeater.repeaterId);
+        debugDataArray.push(debugData);
+        debugLog(`[WARDRIVE QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
+      }
+    }
+    
+    if (debugDataArray.length > 0) {
+      entry.debug_data = debugDataArray;
+      debugLog(`[WARDRIVE QUEUE] 🐛 TX entry includes ${debugDataArray.length} debug_data entries`);
+    }
+    
+    // Clear temp data after use
+    state.tempTxRepeaterData = null;
+  }
+  
+  // Queue entry for batch submission
+  queueWardriveEntry(entry);
+  debugLog(`[WARDRIVE QUEUE] TX entry queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
   
   // Update map after queueing
   setTimeout(() => {
@@ -2383,8 +2266,8 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
       debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
-    // Unlock ping controls now that message is queued
-    unlockPingControls("after TX message queued");
+    // Unlock ping controls now that entry is queued
+    unlockPingControls("after TX entry queued");
     
     // Update status based on current mode
     if (state.connection) {
@@ -2400,45 +2283,39 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
         }
       } else {
         debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
-        // Status already set by queueApiMessage()
+        // Status already set by queueWardriveEntry()
       }
     }
   }, MAP_REFRESH_DELAY_MS);
 }
 
-// ---- API Batch Queue System ----
+// ---- Wardrive Batch Queue System ----
 
 /**
- * Queue an API message for batch posting
- * @param {Object} payload - The API payload object
- * @param {string} wardriveType - "TX" or "RX" wardrive type
+ * Queue a wardrive entry for batch submission
+ * Entry must include 'type' field ("TX" or "RX")
+ * @param {Object} entry - The wardrive entry with type, lat, lon, noisefloor, heard_repeats, timestamp, debug_data?
  */
-function queueApiMessage(payload, wardriveType) {
-  debugLog(`[API QUEUE] Queueing ${wardriveType} message`);
+function queueWardriveEntry(entry) {
+  debugLog(`[WARDRIVE QUEUE] Queueing ${entry.type} entry`);
   
-  // Add WARDRIVE_TYPE to payload
-  const messagePayload = {
-    ...payload,
-    WARDRIVE_TYPE: wardriveType
-  };
+  wardriveQueue.messages.push(entry);
+  debugLog(`[WARDRIVE QUEUE] Queue size: ${wardriveQueue.messages.length}/${API_BATCH_MAX_SIZE}`);
   
-  apiQueue.messages.push(messagePayload);
-  debugLog(`[API QUEUE] Queue size: ${apiQueue.messages.length}/${API_BATCH_MAX_SIZE}`);
-  
-  // Start periodic flush timer if this is the first message
-  if (apiQueue.messages.length === 1 && !apiQueue.flushTimerId) {
-    startFlushTimer();
+  // Start periodic flush timer if this is the first entry
+  if (wardriveQueue.messages.length === 1 && !wardriveQueue.flushTimerId) {
+    startWardriveFlushTimer();
   }
   
   // If TX type: start/reset 3-second flush timer
-  if (wardriveType === "TX") {
-    scheduleTxFlush();
+  if (entry.type === "TX") {
+    scheduleWardriveFlush();
   }
   
   // If queue reaches max size: flush immediately
-  if (apiQueue.messages.length >= API_BATCH_MAX_SIZE) {
-    debugLog(`[API QUEUE] Queue reached max size (${API_BATCH_MAX_SIZE}), flushing immediately`);
-    flushApiQueue();
+  if (wardriveQueue.messages.length >= API_BATCH_MAX_SIZE) {
+    debugLog(`[WARDRIVE QUEUE] Queue reached max size (${API_BATCH_MAX_SIZE}), flushing immediately`);
+    submitWardriveData();
   }
   
   // Queue depth is logged above for debugging - no need to show in dynamic status bar
@@ -2448,38 +2325,38 @@ function queueApiMessage(payload, wardriveType) {
  * Schedule flush 3 seconds after TX ping
  * Resets timer if called again (coalesces rapid TX pings)
  */
-function scheduleTxFlush() {
-  debugLog(`[API QUEUE] Scheduling TX flush in ${API_TX_FLUSH_DELAY_MS}ms`);
+function scheduleWardriveFlush() {
+  debugLog(`[WARDRIVE QUEUE] Scheduling TX flush in ${API_TX_FLUSH_DELAY_MS}ms`);
   
   // Clear existing TX flush timer if present
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    debugLog(`[API QUEUE] Cleared previous TX flush timer`);
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    debugLog(`[WARDRIVE QUEUE] Cleared previous TX flush timer`);
   }
   
   // Schedule new TX flush
-  apiQueue.txFlushTimerId = setTimeout(() => {
-    debugLog(`[API QUEUE] TX flush timer fired`);
-    flushApiQueue();
+  wardriveQueue.txFlushTimerId = setTimeout(() => {
+    debugLog(`[WARDRIVE QUEUE] TX flush timer fired`);
+    submitWardriveData();
   }, API_TX_FLUSH_DELAY_MS);
 }
 
 /**
  * Start the 30-second periodic flush timer
  */
-function startFlushTimer() {
-  debugLog(`[API QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
+function startWardriveFlushTimer() {
+  debugLog(`[WARDRIVE QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
   
   // Clear existing timer if present
-  if (apiQueue.flushTimerId) {
-    clearInterval(apiQueue.flushTimerId);
+  if (wardriveQueue.flushTimerId) {
+    clearInterval(wardriveQueue.flushTimerId);
   }
   
   // Start periodic flush timer
-  apiQueue.flushTimerId = setInterval(() => {
-    if (apiQueue.messages.length > 0) {
-      debugLog(`[API QUEUE] Periodic flush timer fired, flushing ${apiQueue.messages.length} messages`);
-      flushApiQueue();
+  wardriveQueue.flushTimerId = setInterval(() => {
+    if (wardriveQueue.messages.length > 0) {
+      debugLog(`[WARDRIVE QUEUE] Periodic flush timer fired, flushing ${wardriveQueue.messages.length} messages`);
+      submitWardriveData();
     }
   }, API_BATCH_FLUSH_INTERVAL_MS);
 }
@@ -2487,135 +2364,350 @@ function startFlushTimer() {
 /**
  * Stop all flush timers (periodic and TX)
  */
-function stopFlushTimers() {
-  debugLog(`[API QUEUE] Stopping all flush timers`);
+function stopWardriveTimers() {
+  debugLog(`[WARDRIVE QUEUE] Stopping all flush timers`);
   
-  if (apiQueue.flushTimerId) {
-    clearInterval(apiQueue.flushTimerId);
-    apiQueue.flushTimerId = null;
-    debugLog(`[API QUEUE] Periodic flush timer stopped`);
+  if (wardriveQueue.flushTimerId) {
+    clearInterval(wardriveQueue.flushTimerId);
+    wardriveQueue.flushTimerId = null;
+    debugLog(`[WARDRIVE QUEUE] Periodic flush timer stopped`);
   }
   
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    apiQueue.txFlushTimerId = null;
-    debugLog(`[API QUEUE] TX flush timer stopped`);
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    wardriveQueue.txFlushTimerId = null;
+    debugLog(`[WARDRIVE QUEUE] TX flush timer stopped`);
   }
 }
 
 /**
- * Flush all queued messages to the API
- * Prevents concurrent flushes with isProcessing flag
+ * Submit all queued wardrive entries to the API
+ * Wraps entries with key/session_id and posts to WARDRIVE_ENDPOINT
+ * Prevents concurrent submissions with isProcessing flag
+ * Single retry on network failure
  * @returns {Promise<void>}
  */
-async function flushApiQueue() {
-  // Prevent concurrent flushes
-  if (apiQueue.isProcessing) {
-    debugWarn(`[API QUEUE] Flush already in progress, skipping`);
+async function submitWardriveData() {
+  // Prevent concurrent submissions
+  if (wardriveQueue.isProcessing) {
+    debugWarn(`[WARDRIVE QUEUE] Submission already in progress, skipping`);
     return;
   }
   
-  // Nothing to flush
-  if (apiQueue.messages.length === 0) {
-    debugLog(`[API QUEUE] Queue is empty, nothing to flush`);
+  // Nothing to submit
+  if (wardriveQueue.messages.length === 0) {
+    debugLog(`[WARDRIVE QUEUE] Queue is empty, nothing to submit`);
+    return;
+  }
+  
+  // Validate session_id exists
+  if (!state.wardriveSessionId) {
+    debugError("[WARDRIVE QUEUE] Cannot submit: no session_id available");
+    setDynamicStatus("Missing session ID", STATUS_COLORS.error);
+    handleWardriveApiError("session_id_missing", "Cannot submit: no session_id");
     return;
   }
   
   // Lock processing
-  apiQueue.isProcessing = true;
-  debugLog(`[API QUEUE] Starting flush of ${apiQueue.messages.length} messages`);
+  wardriveQueue.isProcessing = true;
+  debugLog(`[WARDRIVE QUEUE] Starting submission of ${wardriveQueue.messages.length} entries`);
   
-  // Clear TX flush timer when flushing
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    apiQueue.txFlushTimerId = null;
+  // Clear TX flush timer when submitting
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    wardriveQueue.txFlushTimerId = null;
   }
   
-  // Take all messages from queue
-  const batch = [...apiQueue.messages];
-  apiQueue.messages = [];
+  // Take all entries from queue
+  const entries = [...wardriveQueue.messages];
+  wardriveQueue.messages = [];
   
-  // Count TX and RX messages for logging
-  const txCount = batch.filter(m => m.WARDRIVE_TYPE === "TX").length;
-  const rxCount = batch.filter(m => m.WARDRIVE_TYPE === "RX").length;
-  debugLog(`[API QUEUE] Batch composition: ${txCount} TX, ${rxCount} RX`);
+  // Count TX and RX entries for logging
+  const txCount = entries.filter(e => e.type === "TX").length;
+  const rxCount = entries.filter(e => e.type === "RX").length;
+  debugLog(`[WARDRIVE QUEUE] Batch composition: ${txCount} TX, ${rxCount} RX`);
   
-  // Status removed from dynamic status bar - debug log above is sufficient for debugging
+  // Build wrapper payload
+  const payload = {
+    key: MESHMAPPER_API_KEY,
+    session_id: state.wardriveSessionId,
+    data: entries
+  };
   
-  try {
-    // Validate session_id exists
-    if (!state.wardriveSessionId) {
-      debugError("[API QUEUE] Cannot flush: no session_id available");
-      setDynamicStatus("Missing session ID", STATUS_COLORS.error);
-      state.disconnectReason = "session_id_error";
-      setTimeout(() => {
-        disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
-      }, 1500);
-      return;
-    }
-    
-    debugLog(`[API QUEUE] POST to ${MESHMAPPER_API_URL} with ${batch.length} messages`);
-    
-    const response = await fetch(MESHMAPPER_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(batch)
-    });
-    
-    debugLog(`[API QUEUE] Response status: ${response.status}`);
-    
-    // Parse response to check for slot revocation
+  debugLog(`[WARDRIVE QUEUE] POST to ${WARDRIVE_ENDPOINT} with ${entries.length} entries`);
+  
+  // Attempt submission with single retry
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const data = await response.json();
-      debugLog(`[API QUEUE] Response data: ${JSON.stringify(data)}`);
+      const response = await fetch(WARDRIVE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
       
-      // Check if slot has been revoked
-      if (data.allowed === false) {
-        debugError("[API QUEUE] MeshMapper slot has been revoked");
-        setDynamicStatus("API post failed (revoked)", STATUS_COLORS.error);
-        state.disconnectReason = "slot_revoked";
-        setTimeout(() => {
-          disconnect().catch(err => debugError(`[BLE] Disconnect after slot revocation failed: ${err.message}`));
-        }, 1500);
+      debugLog(`[WARDRIVE QUEUE] Response status: ${response.status} (attempt ${attempt})`);
+      
+      // Parse response
+      const data = await response.json();
+      debugLog(`[WARDRIVE QUEUE] Response data: ${JSON.stringify(data)}`);
+      
+      // Check for success
+      if (data.success === true) {
+        debugLog(`[WARDRIVE QUEUE] Submission successful: ${txCount} TX, ${rxCount} RX`);
+        
+        // Schedule heartbeat if expires_at is provided
+        if (data.expires_at) {
+          scheduleHeartbeat(data.expires_at);
+        }
+        
+        // Clear status after successful post
+        if (state.connection && !state.txRxAutoRunning) {
+          setDynamicStatus("Idle");
+        }
+        
+        // Success - exit retry loop
+        wardriveQueue.isProcessing = false;
         return;
-      } else if (data.allowed === true) {
-        debugLog("[API QUEUE] Slot check passed");
       }
-    } catch (parseError) {
-      debugError(`[API QUEUE] Failed to parse response: ${parseError.message}`);
-    }
-    
-    if (!response.ok) {
-      debugError(`[API QUEUE] API returned error status ${response.status}`);
-      setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
-    } else {
-      debugLog(`[API QUEUE] Batch post successful: ${txCount} TX, ${rxCount} RX`);
-      // Clear status after successful post
-      if (state.connection && !state.txRxAutoRunning) {
-        setDynamicStatus("Idle");
+      
+      // Handle error response
+      if (data.success === false) {
+        debugError(`[WARDRIVE QUEUE] API error: ${data.reason || 'unknown'} - ${data.message || ''}`);
+        handleWardriveApiError(data.reason, data.message);
+        wardriveQueue.isProcessing = false;
+        return;
+      }
+      
+      // Unexpected response format
+      debugError(`[WARDRIVE QUEUE] Unexpected response format: ${JSON.stringify(data)}`);
+      lastError = new Error("Unexpected response format");
+      
+    } catch (error) {
+      debugError(`[WARDRIVE QUEUE] Submission failed (attempt ${attempt}): ${error.message}`);
+      lastError = error;
+      
+      // If first attempt failed, wait before retry
+      if (attempt === 1) {
+        debugLog(`[WARDRIVE QUEUE] Retrying in ${WARDRIVE_RETRY_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, WARDRIVE_RETRY_DELAY_MS));
       }
     }
-  } catch (error) {
-    debugError(`[API QUEUE] Batch post failed: ${error.message}`);
-    setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
-  } finally {
-    // Unlock processing
-    apiQueue.isProcessing = false;
-    debugLog(`[API QUEUE] Flush complete`);
   }
+  
+  // Both attempts failed
+  debugError(`[WARDRIVE QUEUE] Submission failed after 2 attempts: ${lastError?.message}`);
+  setDynamicStatus("Error: API submission failed", STATUS_COLORS.error);
+  
+  // Re-queue entries for next attempt (unless queue is full)
+  if (wardriveQueue.messages.length + entries.length <= API_BATCH_MAX_SIZE) {
+    wardriveQueue.messages.unshift(...entries);
+    debugLog(`[WARDRIVE QUEUE] Re-queued ${entries.length} entries for next attempt`);
+  } else {
+    debugWarn(`[WARDRIVE QUEUE] Cannot re-queue entries, queue would exceed max size. ${entries.length} entries lost.`);
+  }
+  
+  wardriveQueue.isProcessing = false;
 }
 
 /**
  * Get queue status for debugging
  * @returns {Object} Queue status object
  */
-function getQueueStatus() {
+function getWardriveQueueStatus() {
   return {
-    queueSize: apiQueue.messages.length,
-    isProcessing: apiQueue.isProcessing,
-    hasPeriodicTimer: apiQueue.flushTimerId !== null,
-    hasTxTimer: apiQueue.txFlushTimerId !== null
+    queueSize: wardriveQueue.messages.length,
+    isProcessing: wardriveQueue.isProcessing,
+    hasPeriodicTimer: wardriveQueue.flushTimerId !== null,
+    hasTxTimer: wardriveQueue.txFlushTimerId !== null
   };
+}
+
+// ---- Heartbeat System ----
+
+/**
+ * Schedule heartbeat to fire before session expires
+ * @param {number} expiresAt - Unix timestamp when session expires
+ */
+function scheduleHeartbeat(expiresAt) {
+  // Cancel any existing heartbeat timer
+  cancelHeartbeat();
+  
+  // Calculate when to send heartbeat (5 minutes before expiry)
+  const now = Math.floor(Date.now() / 1000);
+  const msUntilExpiry = (expiresAt - now) * 1000;
+  const msUntilHeartbeat = msUntilExpiry - HEARTBEAT_BUFFER_MS;
+  
+  if (msUntilHeartbeat <= 0) {
+    // Session is about to expire or already expired - send heartbeat immediately
+    debugWarn(`[HEARTBEAT] Session expires in ${Math.floor(msUntilExpiry / 1000)}s, sending heartbeat immediately`);
+    sendHeartbeat();
+    return;
+  }
+  
+  debugLog(`[HEARTBEAT] Scheduling heartbeat in ${Math.floor(msUntilHeartbeat / 1000)}s (session expires in ${Math.floor(msUntilExpiry / 1000)}s)`);
+  
+  state.heartbeatTimerId = setTimeout(() => {
+    debugLog(`[HEARTBEAT] Heartbeat timer fired`);
+    sendHeartbeat();
+  }, msUntilHeartbeat);
+}
+
+/**
+ * Cancel any scheduled heartbeat
+ */
+function cancelHeartbeat() {
+  if (state.heartbeatTimerId) {
+    clearTimeout(state.heartbeatTimerId);
+    state.heartbeatTimerId = null;
+    debugLog(`[HEARTBEAT] Heartbeat timer cancelled`);
+  }
+}
+
+/**
+ * Send heartbeat to keep session alive
+ * Uses current GPS position for heartbeat coords
+ * Single retry on network failure
+ */
+async function sendHeartbeat() {
+  // Validate we have a session
+  if (!state.wardriveSessionId) {
+    debugWarn(`[HEARTBEAT] Cannot send heartbeat: no session_id`);
+    return;
+  }
+  
+  // Get current GPS position for heartbeat
+  const currentCoords = state.lastFix;
+  const coords = currentCoords ? {
+    lat: currentCoords.coords.latitude,
+    lon: currentCoords.coords.longitude,
+    timestamp: Math.floor(Date.now() / 1000)
+  } : null;
+  
+  // Build heartbeat payload
+  const payload = {
+    key: MESHMAPPER_API_KEY,
+    session_id: state.wardriveSessionId,
+    heartbeat: true,
+    coords
+  };
+  
+  debugLog(`[HEARTBEAT] Sending heartbeat: session_id=${state.wardriveSessionId}, coords=${coords ? `${coords.lat.toFixed(5)},${coords.lon.toFixed(5)}` : 'null'}`);
+  
+  // Attempt heartbeat with single retry
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(WARDRIVE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
+      debugLog(`[HEARTBEAT] Response status: ${response.status} (attempt ${attempt})`);
+      
+      // Parse response
+      const data = await response.json();
+      debugLog(`[HEARTBEAT] Response data: ${JSON.stringify(data)}`);
+      
+      // Check for success
+      if (data.success === true) {
+        debugLog(`[HEARTBEAT] Heartbeat successful`);
+        
+        // Schedule next heartbeat if expires_at is provided
+        if (data.expires_at) {
+          scheduleHeartbeat(data.expires_at);
+        }
+        
+        return; // Success - exit
+      }
+      
+      // Handle error response
+      if (data.success === false) {
+        debugError(`[HEARTBEAT] Heartbeat failed: ${data.reason || 'unknown'} - ${data.message || ''}`);
+        handleWardriveApiError(data.reason, data.message);
+        return;
+      }
+      
+      // Unexpected response format
+      debugError(`[HEARTBEAT] Unexpected response format: ${JSON.stringify(data)}`);
+      lastError = new Error("Unexpected response format");
+      
+    } catch (error) {
+      debugError(`[HEARTBEAT] Heartbeat failed (attempt ${attempt}): ${error.message}`);
+      lastError = error;
+      
+      // If first attempt failed, wait before retry
+      if (attempt === 1) {
+        debugLog(`[HEARTBEAT] Retrying in ${WARDRIVE_RETRY_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, WARDRIVE_RETRY_DELAY_MS));
+      }
+    }
+  }
+  
+  // Both attempts failed
+  debugError(`[HEARTBEAT] Heartbeat failed after 2 attempts: ${lastError?.message}`);
+  // Don't disconnect on heartbeat failure - the next data submission will also schedule a heartbeat
+  // Just log the error and let the session expire naturally if needed
+}
+
+// ---- Wardrive API Error Handler ----
+
+/**
+ * Centralized error handler for wardrive API errors
+ * Handles session expiry, revocation, and other error conditions
+ * @param {string} reason - Error reason code from API
+ * @param {string} message - Human-readable error message
+ */
+function handleWardriveApiError(reason, message) {
+  debugError(`[WARDRIVE API] Error: reason=${reason}, message=${message}`);
+  
+  switch (reason) {
+    case "session_expired":
+    case "session_invalid":
+    case "session_revoked":
+      // Session is no longer valid - disconnect
+      debugError(`[WARDRIVE API] Session error (${reason}): triggering disconnect`);
+      setDynamicStatus("Session expired", STATUS_COLORS.error);
+      state.disconnectReason = reason;
+      setTimeout(() => {
+        disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      }, 1500);
+      break;
+      
+    case "invalid_key":
+    case "unauthorized":
+      // API key issue - disconnect
+      debugError(`[WARDRIVE API] Authorization error (${reason}): triggering disconnect`);
+      setDynamicStatus("Authorization failed", STATUS_COLORS.error);
+      state.disconnectReason = reason;
+      setTimeout(() => {
+        disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      }, 1500);
+      break;
+      
+    case "session_id_missing":
+      // Missing session - disconnect
+      debugError(`[WARDRIVE API] Missing session_id: triggering disconnect`);
+      setDynamicStatus("Missing session ID", STATUS_COLORS.error);
+      state.disconnectReason = "session_id_error";
+      setTimeout(() => {
+        disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
+      }, 1500);
+      break;
+      
+    case "rate_limited":
+      // Rate limited - show warning but don't disconnect
+      debugWarn(`[WARDRIVE API] Rate limited: ${message}`);
+      setDynamicStatus("Rate limited - slow down", STATUS_COLORS.warning);
+      break;
+      
+    default:
+      // Unknown error - show message but don't disconnect
+      debugError(`[WARDRIVE API] Unknown error: ${reason} - ${message}`);
+      setDynamicStatus(`API error: ${message || reason}`, STATUS_COLORS.error);
+      break;
+  }
 }
 
 // ---- Repeater Echo Tracking ----
@@ -3408,12 +3500,13 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
         header,
         lat: currentLocation.lat,
         lon: currentLocation.lon,
-        timestamp: Date.now(),
+        noisefloor: state.lastNoiseFloor ?? null,
+        timestamp: Math.floor(Date.now() / 1000),
         metadata: metadata  // Store full metadata for debug mode
       }
     };
     state.rxBatchBuffer.set(repeaterId, buffer);
-    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}`);
+    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}, noisefloor=${buffer.bestObservation.noisefloor}`);
   } else {
     // Already tracking this repeater - check if new SNR is better
     if (snr > buffer.bestObservation.snr) {
@@ -3425,7 +3518,8 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
         header,
         lat: currentLocation.lat,
         lon: currentLocation.lon,
-        timestamp: Date.now(),
+        noisefloor: state.lastNoiseFloor ?? null,
+        timestamp: Math.floor(Date.now() / 1000),
         metadata: metadata  // Store full metadata for debug mode
       };
     } else {
@@ -3513,6 +3607,7 @@ function flushRepeater(repeaterId) {
     rssi: best.rssi,
     pathLength: best.pathLength,
     header: best.header,
+    noisefloor: best.noisefloor,  // Noisefloor captured at observation time
     timestamp: best.timestamp,
     metadata: best.metadata  // For debug mode
   };
@@ -3520,7 +3615,7 @@ function flushRepeater(repeaterId) {
   debugLog(`[RX BATCH] Posting repeater ${repeaterId}: snr=${best.snr}, location=${best.lat.toFixed(5)},${best.lon.toFixed(5)}`);
   
   // Queue for API posting
-  queueRxApiPost(entry);
+  queueRxEntry(entry);
   
   // Remove from buffer
   state.rxBatchBuffer.delete(repeaterId);
@@ -3553,7 +3648,7 @@ function flushAllRxBatches(trigger = 'session_end') {
  * Uses the batch queue system to aggregate RX messages
  * @param {Object} entry - The entry to post (with best observation data)
  */
-function queueRxApiPost(entry) {
+function queueRxEntry(entry) {
   // Validate session_id exists
   if (!state.wardriveSessionId) {
     debugWarn(`[RX BATCH API] Cannot queue: no session_id available`);
@@ -3564,18 +3659,14 @@ function queueRxApiPost(entry) {
   // Use absolute value and format with one decimal place
   const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr).toFixed(1)})`;
   
-  const payload = {
-    key: MESHMAPPER_API_KEY,
+  // Build entry-only payload (wrapper added by submitWardriveData)
+  const rxEntry = {
+    type: "RX",
     lat: entry.location.lat,
     lon: entry.location.lon,
-    who: getDeviceIdentifier(),
-    power: getCurrentPowerSetting(),
-    external_antenna: getExternalAntennaSetting(),
+    noisefloor: entry.noisefloor ?? null,
     heard_repeats: heardRepeats,
-    ver: APP_VERSION,
-    test: 0,
-    iata: WARDIVE_IATA_CODE,
-    session_id: state.wardriveSessionId
+    timestamp: entry.timestamp
   };
   
   // Add debug data if debug mode is enabled
@@ -3587,14 +3678,14 @@ function queueRxApiPost(entry) {
     const heardByte = lastHopId.toString(16).padStart(2, '0').toUpperCase();
     
     const debugData = buildDebugData(entry.metadata, heardByte, entry.repeater_id);
-    payload.debug_data = debugData;
+    rxEntry.debug_data = debugData;
     
-    debugLog(`[RX BATCH API] 🐛 RX payload includes debug_data for repeater ${entry.repeater_id}`);
+    debugLog(`[RX BATCH API] 🐛 RX entry includes debug_data for repeater ${entry.repeater_id}`);
   }
   
-  // Queue message instead of posting immediately
-  queueApiMessage(payload, "RX");
-  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lon.toFixed(5)}`);
+  // Queue entry for batch submission
+  queueWardriveEntry(rxEntry);
+  debugLog(`[RX BATCH API] RX entry queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lon.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -4766,8 +4857,14 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     
     // Capture GPS coordinates at ping time - these will be used for API post after 10s delay
-    state.capturedPingCoords = { lat, lon, accuracy };
-    debugLog(`[PING] GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
+    state.capturedPingCoords = { 
+      lat, 
+      lon, 
+      accuracy, 
+      noisefloor: state.lastNoiseFloor ?? null,
+      timestamp: Math.floor(Date.now() / 1000)
+    };
+    debugLog(`[PING] GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m, noisefloor=${state.capturedPingCoords.noisefloor}, timestamp=${state.capturedPingCoords.timestamp}`);
     
     // Start repeater echo tracking BEFORE sending the ping
     debugLog(`[PING] Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
@@ -4852,31 +4949,17 @@ async function sendPing(manual = false) {
       // Unlock ping controls immediately (don't wait for API)
       unlockPingControls("after RX listening window completion");
       
-      // Background the API posting (runs asynchronously, doesn't block)
-      // Use captured coordinates for API post (not current GPS position)
+      // Queue TX entry for batch submission (uses captured coordinates, not current GPS position)
       if (capturedCoords) {
-        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = capturedCoords;
-        debugLog(`[API QUEUE] Backgrounding API post for coordinates: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
+        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy, noisefloor: apiNoisefloor, timestamp: apiTimestamp } = capturedCoords;
+        debugLog(`[WARDRIVE QUEUE] Queueing TX entry: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m, noisefloor=${apiNoisefloor}, timestamp=${apiTimestamp}`);
         
-        // Post to API in background and track the promise
-        const apiPromise = postApiInBackground(apiLat, apiLon, apiAccuracy, heardRepeatsStr).catch(error => {
-          debugError(`[API QUEUE] Background API post failed: ${error.message}`, error);
-          // Show error to user only if API fails
-          setDynamicStatus("Error: API post failed", STATUS_COLORS.error);
-        }).finally(() => {
-          // Remove from pending list when complete
-          const index = state.pendingApiPosts.indexOf(apiPromise);
-          if (index > -1) {
-            state.pendingApiPosts.splice(index, 1);
-          }
-        });
-        
-        // Track this promise so disconnect can wait for it
-        state.pendingApiPosts.push(apiPromise);
+        // Queue TX entry (will be submitted with next batch)
+        queueTxEntry(apiLat, apiLon, apiAccuracy, heardRepeatsStr, apiNoisefloor, apiTimestamp);
       } else {
         // This should never happen as coordinates are always captured before ping
-        debugError(`[API QUEUE] CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
-        debugError(`[API QUEUE] Skipping API post to avoid posting incorrect coordinates`);
+        debugError(`[WARDRIVE QUEUE] CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
+        debugError(`[WARDRIVE QUEUE] Skipping TX entry queue to avoid posting incorrect coordinates`);
       }
       
       // Clear timer reference
@@ -5579,9 +5662,9 @@ async function connect() {
       // Flush all pending RX batch data before cleanup
       flushAllRxBatches('disconnect');
       
-      // Clear API queue messages (timers already stopped in cleanupAllTimers)
-      apiQueue.messages = [];
-      debugLog(`[API QUEUE] Queue cleared on disconnect`);
+      // Clear wardrive queue messages (timers already stopped in cleanupAllTimers)
+      wardriveQueue.messages = [];
+      debugLog(`[WARDRIVE QUEUE] Queue cleared on disconnect`);
       
       // Clean up all timers
       cleanupAllTimers();
@@ -5630,12 +5713,12 @@ async function disconnect() {
     debugLog(`[BLE] All pending background API posts completed`);
   }
 
-  // 2. Flush API queue (session_id still valid)
-  if (apiQueue.messages.length > 0) {
-    debugLog(`[BLE] Flushing ${apiQueue.messages.length} queued messages before disconnect`);
-    await flushApiQueue();
+  // 2. Flush wardrive queue (session_id still valid)
+  if (wardriveQueue.messages.length > 0) {
+    debugLog(`[BLE] Flushing ${wardriveQueue.messages.length} queued messages before disconnect`);
+    await submitWardriveData();
   }
-  stopFlushTimers();
+  stopWardriveTimers();
 
   // 3. THEN release session via auth API if we have a public key
   if (state.devicePublicKey && state.wardriveSessionId) {

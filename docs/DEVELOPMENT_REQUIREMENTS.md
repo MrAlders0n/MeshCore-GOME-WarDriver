@@ -29,7 +29,7 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[BLE]` | Bluetooth connection and device communication |
 | `[GPS]` | GPS/geolocation operations |
 | `[PING]` | Ping sending and validation |
-| `[API QUEUE]` | API batch queue operations |
+| `[WARDRIVE QUEUE]` | Wardrive batch queue operations |
 | `[RX BATCH]` | RX batch buffer operations |
 | `[RX LOG]` | RX logging logic |
 | `[RX LOG UI]` | RX UI rendering |
@@ -47,6 +47,9 @@ All debug log messages **MUST** include a descriptive tag in square brackets imm
 | `[RX AUTO]` | RX Auto mode operations |
 | `[INIT]` | Initialization and setup |
 | `[ERROR LOG]` | Error log UI operations |
+| `[AUTH]` | Authentication API operations |
+| `[HEARTBEAT]` | Session heartbeat operations |
+| `[WARDRIVE API]` | Wardrive API error handling |
 
 **Examples:**
 ```javascript

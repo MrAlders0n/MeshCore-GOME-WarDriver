@@ -434,18 +434,57 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Notes**: As of the batch queue implementation, individual API posts have been replaced by batched posts. Messages are queued and flushed in batches.
 - **Source**: ~~`content/wardrive.js:postApiAndRefreshMap()`~~ Replaced by batch queue system
 
-##### Error: API batch post failed
+##### Error: API batch post failed (DEPRECATED)
 - **Message**: `"Error: API batch post failed"`
 - **Color**: Red (error)
-- **When**: Batch API POST fails during flush operation
-- **Notes**: Batch posting failed, but queue system will continue accepting new messages.
-- **Source**: `content/wardrive.js:flushApiQueue()` error handler
+- **When**: ~~Batch API POST fails during flush operation~~ **REPLACED BY NEW WARDRIVE API**
+- **Notes**: Replaced by "Error: API submission failed" in new wardrive API system.
+- **Source**: ~~`content/wardrive.js:flushApiQueue()`~~ Replaced by `submitWardriveData()`
+
+##### Error: API submission failed
+- **Message**: `"Error: API submission failed"`
+- **Color**: Red (error)
+- **When**: Wardrive data submission fails after 2 retry attempts
+- **Notes**: Entries are re-queued for next submission attempt (unless queue is full). Does not trigger disconnect.
+- **Source**: `content/wardrive.js:submitWardriveData()` error handler
+
+##### Session expired
+- **Message**: `"Session expired"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `session_expired` or `session_invalid`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: Session is no longer valid, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Authorization failed
+- **Message**: `"Authorization failed"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `invalid_key` or `unauthorized`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: API key issue, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Rate limited - slow down
+- **Message**: `"Rate limited - slow down"`
+- **Color**: Yellow (warning)
+- **When**: Wardrive API returns `success=false` with reason `rate_limited`
+- **Terminal State**: No (does not trigger disconnect)
+- **Notes**: Submitting data too quickly. Does not trigger disconnect, user should slow down pings.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### API error: [message]
+- **Message**: `"API error: [message]"` (where [message] is the API-provided error message)
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with an unknown reason code
+- **Terminal State**: No (does not trigger disconnect)
+- **Notes**: Fallback message for unknown error codes. Shows raw API message to help with debugging.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
 
 ##### Error: API post failed (DEPRECATED)
 - **Message**: `"Error: API post failed"`
 - **Color**: Red (error)
 - **When**: ~~Background API POST fails during asynchronous posting~~ **REPLACED BY BATCH QUEUE**
-- **Notes**: Replaced by "Error: API batch post failed" in batch queue system.
+- **Notes**: Replaced by "Error: API submission failed" in new wardrive API system.
 - **Source**: ~~`content/wardrive.js:postApiInBackground()`~~ Replaced by batch queue system
 
 ##### — (em dash)
