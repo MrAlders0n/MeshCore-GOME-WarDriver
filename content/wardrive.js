@@ -187,6 +187,7 @@ const gpsAccEl = document.getElementById("gpsAcc");
 const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
 const txPingsEl = document.getElementById("txPings"); // TX log container
 const coverageFrameEl = document.getElementById("coverageFrame");
+const coverageFrameBufferEl = document.getElementById("coverageFrameBuffer");
 
 // Track last connection status to avoid logging spam (declared here to avoid TDZ with setConnStatus call below)
 let lastConnStatusText = null;
@@ -770,6 +771,15 @@ function buildCoverageEmbedUrl(lat, lon) {
   return `${base}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
 }
 let coverageRefreshTimer = null;
+let bufferLoadHandler = null; // Track current load handler for cleanup
+
+/**
+ * Schedule a coverage map refresh using double-buffered iframe swap
+ * Loads new content in hidden buffer iframe, swaps when ready for seamless update
+ * @param {number} lat - Latitude
+ * @param {number} lon - Longitude  
+ * @param {number} delayMs - Delay before starting load (default 0)
+ */
 function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
   if (!coverageFrameEl) return;
 
@@ -777,8 +787,34 @@ function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
 
   coverageRefreshTimer = setTimeout(() => {
     const url = buildCoverageEmbedUrl(lat, lon);
-    debugLog("[UI] Coverage iframe URL:", url);
-    coverageFrameEl.src = url;
+    debugLog("[UI] Coverage iframe loading:", url);
+    
+    // Use double-buffering if buffer iframe exists
+    if (coverageFrameBufferEl) {
+      // Clean up any previous load handler
+      if (bufferLoadHandler) {
+        coverageFrameBufferEl.removeEventListener('load', bufferLoadHandler);
+        bufferLoadHandler = null;
+      }
+      
+      // Create new load handler
+      bufferLoadHandler = function onBufferLoad() {
+        // Swap: copy loaded src to main frame, then hide buffer
+        coverageFrameEl.src = coverageFrameBufferEl.src;
+        debugLog("[UI] Coverage iframe swapped (double-buffer)");
+        
+        // Clean up
+        coverageFrameBufferEl.removeEventListener('load', bufferLoadHandler);
+        bufferLoadHandler = null;
+      };
+      
+      // Set up load listener and start loading in buffer
+      coverageFrameBufferEl.addEventListener('load', bufferLoadHandler);
+      coverageFrameBufferEl.src = url;
+    } else {
+      // Fallback: direct load if buffer not available
+      coverageFrameEl.src = url;
+    }
   }, delayMs);
 }
 
