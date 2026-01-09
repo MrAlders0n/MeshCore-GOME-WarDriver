@@ -51,7 +51,6 @@ function debugError(message, ...args) {
 
 // ---- Config ----
 const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if needed
-const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailable
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
@@ -117,7 +116,6 @@ const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 // Passive RX Log Batch Configuration
 const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
 const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
-const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
 
 // Wardrive Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
@@ -129,13 +127,11 @@ const HEARTBEAT_BUFFER_MS = 5 * 60 * 1000;  // Schedule heartbeat 5 minutes befo
 const WARDRIVE_RETRY_DELAY_MS = 2000;       // Delay before retry on network failure (2 seconds)
 
 // MeshMapper API Configuration
-const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";  // Legacy endpoint (to be removed)
 const WARDRIVE_ENDPOINT = "https://meshmapper.net/wardrive-api.php/wardrive";  // New wardrive data + heartbeat endpoint
 const GEO_AUTH_STATUS_URL = "https://meshmapper.net/wardrive-api.php/status";  // Geo-auth zone status endpoint
 const GEO_AUTH_URL = "https://meshmapper.net/wardrive-api.php/auth";  // Geo-auth connect/disconnect endpoint
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
-const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 
 // Static for now; will be made dynamic later.
 const WARDIVE_IATA_CODE = "YOW";
@@ -171,17 +167,14 @@ const STATUS_COLORS = {
   info: "text-sky-300"
 };
 
-// ---- DOM refs (from index.html; unchanged except the two new selectors) ----
+// ---- DOM refs (from index.html) ----
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
-const deviceInfoEl   = $("deviceInfo");
-const deviceNameEl   = $("deviceName");
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const txPingBtn      = $("txPingBtn");
 const txRxAutoBtn    = $("txRxAutoBtn");
 const rxAutoBtn      = $("rxAutoBtn");
-const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
 const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
@@ -197,9 +190,7 @@ let lastConnStatusText = null;
 setConnectButton(false);
 setConnStatus("Disconnected", STATUS_COLORS.error);
 
-// NEW: selectors
-const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
-const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
+// Power, Device Model, and Zone selectors
 const deviceModelEl  = $("deviceModel");
 // Zone status removed from connection bar - only shown in settings panel (locationDisplay)
 const locationDisplay = $("locationDisplay"); // Location (zone code) in settings
@@ -580,7 +571,7 @@ function resumeAutoCountdown() {
         
         state.skipReason = null;
         debugLog("[TX/RX AUTO] Sending auto ping (resumed)");
-        sendPing(false).catch(console.error);
+        sendPing(false).catch((e) => debugError("[TX/RX AUTO] Resumed auto ping error:", e?.message || String(e)));
       }, remainingMs);
       debugLog(`[TIMER] Resumed ping timer scheduled (id=${state.autoTimerId})`);
       
@@ -1479,22 +1470,6 @@ function updateDistanceUi() {
     distanceInfoEl.textContent = "-";
   } else {
     distanceInfoEl.textContent = `∆${Math.round(distance)}m`;
-  }
-}
-
-/**
- * Update the device display in the connection bar to include noise floor
- * @param {string} name - Device name to show
- */
-function updateDeviceInfoDisplay(name) {
-  debugLog(`[UI] updateDeviceInfoDisplay called with name="${name}"`);
-  const displayName = name || state.deviceName || deviceNameEl?.textContent || "[No device]";
-  // Update device name element
-  if (deviceNameEl) deviceNameEl.textContent = displayName;
-
-  // Update connection bar if connected
-  if (state.connection) {
-    setConnStatus("Connected", STATUS_COLORS.success);
   }
 }
 
@@ -3525,24 +3500,6 @@ function stopUnifiedRxListening() {
 }
 
 
-
-/**
- * Future: Post RX log data to MeshMapper API
- * @param {Array} entries - Array of RX log entries
- */
-async function postRxLogToMeshMapperAPI(entries) {
-  if (!MESHMAPPER_RX_LOG_API_URL) {
-    debugLog('[RX LOG] RX Log API posting not configured yet');
-    return;
-  }
-  
-  // Future implementation:
-  // - Batch post accumulated RX log entries
-  // - Include session_id from state.wardriveSessionId
-  // - Format: { observations: [{ repeaterId, snr, lat, lon, timestamp }] }
-  debugLog(`[RX LOG] Would post ${entries.length} RX log entries to API (not implemented yet)`);
-}
-
 // ---- Passive RX Batch API Integration ----
 
 /**
@@ -4747,10 +4704,6 @@ function logTxPingToUI(payload, lat, lon) {
   // Use ISO format for data storage but user-friendly format for display
   const now = new Date();
   const isoStr = now.toISOString();
-  
-  if (lastPingEl) {
-    lastPingEl.textContent = `${now.toLocaleString()} — ${payload}`;
-  }
 
   // Create log entry with placeholder for repeater data
   const logData = {
@@ -4879,8 +4832,6 @@ async function sendPing(manual = false) {
         // Silently skip on error - firmware might not support it
         debugLog(`[PING] getRadioStats skipped: ${e && e.message ? e.message : String(e)}`);
       }
-      debugLog("[UI] Updating device info display after pre-ping stats refresh");
-      updateDeviceInfoDisplay(deviceNameEl?.textContent);
     }
 
     // Get GPS coordinates
@@ -5130,7 +5081,7 @@ function startRxAuto() {
   
   // Acquire wake lock
   debugLog("[RX AUTO] Acquiring wake lock");
-  acquireWakeLock().catch(console.error);
+  acquireWakeLock().catch((e) => debugWarn("[RX AUTO] Wake lock failed (non-critical):", e?.message || String(e)));
   
   setDynamicStatus("RX Auto started", STATUS_COLORS.success);
   debugLog("[RX AUTO] RX Auto mode started successfully");
@@ -5200,7 +5151,7 @@ function scheduleNextAutoPing() {
     // Clear skip reason before next attempt
     state.skipReason = null;
     debugLog("[TX/RX AUTO] Sending auto ping");
-    sendPing(false).catch(console.error);
+    sendPing(false).catch((e) => debugError("[TX/RX AUTO] Scheduled auto ping error:", e?.message || String(e)));
   }, intervalMs);
   
   debugLog(`[TX/RX AUTO] New timer scheduled (id=${state.autoTimerId})`);
@@ -5257,11 +5208,11 @@ function startAutoPing() {
 
   // Acquire wake lock for auto mode
   debugLog("[TX/RX AUTO] Acquiring wake lock for auto mode");
-  acquireWakeLock().catch(console.error);
+  acquireWakeLock().catch((e) => debugWarn("[TX/RX AUTO] Wake lock failed (non-critical):", e?.message || String(e)));
 
   // Send first ping immediately
   debugLog("[TX/RX AUTO] Sending initial auto ping");
-  sendPing(false).catch(console.error);
+  sendPing(false).catch((e) => debugError("[TX/RX AUTO] Initial auto ping error:", e?.message || String(e)));
 }
 
 // ---- Device Auto-Power Configuration ----
@@ -5457,7 +5408,6 @@ async function connect() {
       // Store device name from selfInfo
       state.deviceName = selfInfo?.name || "[No device]";
       debugLog(`[BLE] Device name stored: ${state.deviceName}`);
-      if (deviceNameEl) deviceNameEl.textContent = state.deviceName;
       
       // Get device model from deviceQuery (contains manufacturerModel)
       debugLog("[BLE] Requesting device info via deviceQuery");
@@ -5498,9 +5448,6 @@ async function connect() {
         }
         state.lastNoiseFloor = null; // Show '--' instead of 'ERR' for unsupported feature
       }
-      // Update connection bar display (deviceNameEl already set)
-      debugLog("[UI] Updating device info display after stats fetch on connect");
-      updateDeviceInfoDisplay();
       
       // Start periodic noise floor updates if feature is supported
       if (state.lastNoiseFloor !== null) {
@@ -5691,9 +5638,7 @@ async function connect() {
       // Stop periodic noise floor updates
       stopNoiseFloorUpdates();
       
-      // Reset noise display to placeholder (just value, label is in HTML)
-      if (deviceInfoEl) deviceInfoEl.textContent = "-";
-      debugLog("[BLE] Clearing device model, name, and noise floor on disconnect");
+      debugLog("[BLE] Clearing device model and noise floor on disconnect");
       state.deviceModel = null;
       state.deviceName = null;
       state.lastNoiseFloor = null;
@@ -6085,7 +6030,7 @@ export async function onLoad() {
   });
   txPingBtn.addEventListener("click", () => {
     debugLog("[UI] Manual ping button clicked");
-    sendPing(true).catch(console.error);
+    sendPing(true).catch((e) => debugError("[PING] Manual ping error:", e?.message || String(e)));
   });
   txRxAutoBtn.addEventListener("click", () => {
     debugLog("[UI] Auto toggle button clicked");
