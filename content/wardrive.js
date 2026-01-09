@@ -804,19 +804,24 @@ function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
     
     // Create new load handler that swaps visibility
     bufferLoadHandler = function onBufferLoad() {
-      // Swap visibility: hide current active, show buffer
-      activeFrame.classList.remove('coverage-frame-active');
-      activeFrame.classList.add('coverage-frame-hidden');
-      bufferFrame.classList.remove('coverage-frame-hidden');
-      bufferFrame.classList.add('coverage-frame-active');
-      
-      // Update active frame reference
-      activeFrame = bufferFrame;
-      debugLog("[UI] Coverage iframe swapped (double-buffer)");
-      
-      // Clean up
-      bufferFrame.removeEventListener('load', bufferLoadHandler);
-      bufferLoadHandler = null;
+      // Small delay to ensure iframe content is fully painted before swap
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          // Swap visibility: hide current active, show buffer
+          activeFrame.classList.remove('coverage-frame-active');
+          activeFrame.classList.add('coverage-frame-hidden');
+          bufferFrame.classList.remove('coverage-frame-hidden');
+          bufferFrame.classList.add('coverage-frame-active');
+          
+          // Update active frame reference
+          activeFrame = bufferFrame;
+          debugLog("[UI] Coverage iframe swapped (double-buffer)");
+          
+          // Clean up
+          bufferFrame.removeEventListener('load', bufferLoadHandler);
+          bufferLoadHandler = null;
+        });
+      });
     };
     
     // Set up load listener and start loading in buffer
