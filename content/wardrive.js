@@ -241,19 +241,53 @@ if (REMOTE_DEBUG_ENABLED) {
 
 // Debug logging helper function
 function debugLog(message, ...args) {
-  if (DEBUG_ENABLED || REMOTE_DEBUG_ENABLED) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('log', [message, ...args]);
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
+  if (DEBUG_ENABLED) {
     console.log(message, ...args);
   }
 }
 
 function debugWarn(message, ...args) {
-  if (DEBUG_ENABLED || REMOTE_DEBUG_ENABLED) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('warn', [message, ...args]);
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
+  if (DEBUG_ENABLED) {
     console.warn(message, ...args);
   }
 }
 
 function debugError(message, ...args) {
-  if (DEBUG_ENABLED || REMOTE_DEBUG_ENABLED) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('error', [message, ...args]);
+    
+    // Still add to Error Log UI even in remote-only mode
+    try {
+      const tagMatch = message.match(/^\[([^\]]+)\]/);
+      const source = tagMatch ? tagMatch[1] : null;
+      const cleanMessage = tagMatch ? message.replace(/^\[[^\]]+\]\s*/, '') : message;
+      
+      if (typeof addErrorLogEntry === 'function') {
+        addErrorLogEntry(cleanMessage, source);
+      }
+    } catch (e) {
+      // Silently fail to prevent recursive errors
+    }
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
+  if (DEBUG_ENABLED) {
     console.error(message, ...args);
     
     // Also add to Error Log UI (use try-catch to prevent recursive errors)
