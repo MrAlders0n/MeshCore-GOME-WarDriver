@@ -4072,9 +4072,7 @@ function updateRxLogSummary() {
   if (!rxLogCount || !rxLogLastTime || !rxLogLastRepeater) return;
   
   const count = rxLogState.entries.length;
-  const dropText = `${rxLogState.dropCount} dropped`;
-  const obsText = count === 1 ? '1 observation' : `${count} observations`;
-  rxLogCount.textContent = `${obsText}, ${dropText}`;
+  rxLogCount.textContent = `Handled: ${count}  Drop: ${rxLogState.dropCount}`;
   
   if (count === 0) {
     rxLogLastTime.textContent = 'No data';
