@@ -142,7 +142,26 @@ connectBtn.addEventListener("click", async () => {
          - Shows status: "Unknown device - select power manually" (yellow, persistent until power selected)
          - Ping controls remain disabled
          - Sets `state.autoPowerSet = false`
-   - Requests radio statistics from the companion (noise floor, last RSSI, SNR) and stores the result in application state. The connection bar displays `Noise: <value>`. If stats fetch fails, an error marker is shown (`Noise: ERR`) but connection proceeds.
+   - **Firmware Version Parsing**:
+     - Parses semver from model string using regex `/v(\d+)\.(\d+)\.(\d+)/`
+     - Example: `"Elecrow ThinkNode-M1 v1.11.0-6d32193"` → `{ major: 1, minor: 11, patch: 0 }`
+     - Nightly builds (e.g., `"nightly-e31c46f"`) return `null` (no semver found)
+     - Stores result in `state.firmwareVersion`
+   - **Noise Floor Collection (Version-Gated)**:
+     - Checks `firmwareSupportsNoisefloor(state.firmwareVersion)`:
+       - Returns `true` if: version is `null` (nightly), OR `major > 1`, OR `(major === 1 && minor >= 11)`
+       - Returns `false` for firmware < 1.11.0
+     - **If supported** (1.11.0+ or nightly):
+       - Requests radio statistics via `getRadioStats(5000)` with 5-second timeout
+       - Stores noise floor in `state.lastNoiseFloor`
+       - Connection bar displays `🔊 <value>dBm`
+       - Starts periodic 5-second updates via `startNoiseFloorUpdates()`
+     - **If not supported** (< 1.11.0):
+       - Skips `getRadioStats()` call entirely (prevents app freeze)
+       - Sets `state.lastNoiseFloor = null`
+       - Connection bar displays `🔊 -`
+       - Adds error log entry: "Noisefloor requires firmware 1.11.0+ (detected: vX.X.X)"
+       - Connection proceeds normally
    - Changes button to "Disconnect" (red)
    - **Connection Status**: `"Connecting"` (blue, maintained)
    - **Dynamic Status**: Auto-power status message (green) or unknown device warning (yellow)
