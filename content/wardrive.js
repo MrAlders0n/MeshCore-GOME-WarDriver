@@ -198,7 +198,7 @@ function startRemoteDebugTimers() {
     // Log when grace period expires (once at 15 seconds)
     const elapsed = Date.now() - debugLogQueue.startupTimestamp;
     if (elapsed >= REMOTE_DEBUG_GRACE_PERIOD_MS && elapsed < (REMOTE_DEBUG_GRACE_PERIOD_MS + REMOTE_DEBUG_RATE_RESET_MS)) {
-      originalConsoleLog('[REMOTE DEBUG] Grace period ended - rate limiting now active (30 logs/sec)');
+      originalConsoleLog(`[REMOTE DEBUG] Grace period ended - rate limiting now active (${REMOTE_DEBUG_RATE_LIMIT} logs/sec)`);
     }
   }, REMOTE_DEBUG_RATE_RESET_MS);
   
