@@ -555,6 +555,7 @@ const state = {
   capturedPingCoords: null, // { lat, lon, accuracy, noisefloor, timestamp } captured at ping time, used for API post after RX window
   devicePublicKey: null, // Hex string of device's public key (used for auth)
   deviceModel: null, // Manufacturer/model string exposed by companion
+  firmwareVersion: null, // Parsed firmware version { major, minor, patch } or null for nightly/unparseable
   autoPowerSet: false, // Whether power was automatically set based on device model
   lastNoiseFloor: null, // Most recent noise floor read from companion (dBm) or 'ERR'
   noiseFloorUpdateTimer: null, // Timer for periodic noise floor updates (5s interval)
@@ -1767,6 +1768,40 @@ function updateDistanceUi() {
 }
 
 /**
+ * Parse firmware version from device model string
+ * @param {string} model - Device model string (e.g., "Elecrow ThinkNode-M1 v1.11.0-6d32193")
+ * @returns {{major: number, minor: number, patch: number}|null} Parsed version or null if unparseable/nightly
+ */
+function parseFirmwareVersion(model) {
+  if (!model) return null;
+  const match = model.match(/v(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    debugLog(`[BLE] Firmware version not found in model string (likely nightly build)`);
+    return null;
+  }
+  return {
+    major: parseInt(match[1], 10),
+    minor: parseInt(match[2], 10),
+    patch: parseInt(match[3], 10)
+  };
+}
+
+/**
+ * Check if firmware version supports noisefloor collection (requires 1.11.0+)
+ * @param {{major: number, minor: number, patch: number}|null} version - Parsed firmware version
+ * @returns {boolean} True if noisefloor is supported
+ */
+function firmwareSupportsNoisefloor(version) {
+  // Null version means nightly build - assume supported (bleeding edge)
+  if (version === null) return true;
+  // Version 2.x.x or higher always supported
+  if (version.major > 1) return true;
+  // Version 1.11.0+ supported
+  if (version.major === 1 && version.minor >= 11) return true;
+  return false;
+}
+
+/**
  * Start periodic noise floor updates (5 second interval)
  * Only called if feature is supported by firmware
  */
@@ -1783,8 +1818,8 @@ function startNoiseFloorUpdates() {
     }
     
     try {
-      // Don't pass timeout - let the interval handle cadence, avoids library timeout bug
-      const stats = await state.connection.getRadioStats(null);
+      // 5 second timeout as safety fallback
+      const stats = await state.connection.getRadioStats(5000);
       if (stats && typeof stats.noiseFloor !== 'undefined') {
         state.lastNoiseFloor = stats.noiseFloor;
         debugLog(`[BLE] Noise floor updated: ${state.lastNoiseFloor}`);
@@ -1795,6 +1830,7 @@ function startNoiseFloorUpdates() {
       }
     } catch (e) {
       // Silently ignore periodic update failures - keep showing last known value
+      debugLog(`[BLE] Noise floor update failed: ${e && e.message ? e.message : String(e)}`);
     }
   }, 5000);
   
@@ -5774,45 +5810,58 @@ async function connect() {
         debugLog(`[BLE] deviceQuery response received: firmwareVer=${deviceInfo?.firmwareVer}, model=${deviceInfo?.manufacturerModel}`);
         state.deviceModel = deviceInfo?.manufacturerModel || "-";
         debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
+        // Parse firmware version for feature detection
+        state.firmwareVersion = parseFirmwareVersion(state.deviceModel);
+        debugLog(`[BLE] Parsed firmware version: ${state.firmwareVersion ? `v${state.firmwareVersion.major}.${state.firmwareVersion.minor}.${state.firmwareVersion.patch}` : 'null (nightly/unparseable)'}`);
         // Don't update deviceModelEl here - autoSetPowerLevel() will set it to shortName or "Unknown"
       } catch (e) {
         debugError(`[BLE] deviceQuery failed: ${e && e.message ? e.message : e}`);
         state.deviceModel = "-";
+        state.firmwareVersion = null;
         if (deviceModelEl) deviceModelEl.textContent = "-";
       }
       
       // Auto-configure radio power based on device model
       await autoSetPowerLevel();
       
-      // Immediately attempt to read radio stats (noise floor) on connect
-      debugLog("[BLE] Requesting radio stats on connect");
-      try {
-        // Don't pass timeout - avoids library timeout bug
-        const stats = await conn.getRadioStats(null);
-        debugLog(`[BLE] getRadioStats returned: ${JSON.stringify(stats)}`);
-        if (stats && typeof stats.noiseFloor !== 'undefined') {
-          state.lastNoiseFloor = stats.noiseFloor;
-          debugLog(`[BLE] Radio stats acquired on connect: noiseFloor=${state.lastNoiseFloor}`);
-        } else {
-          debugWarn(`[BLE] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
-          state.lastNoiseFloor = null;
+      // Check if firmware supports noisefloor before requesting
+      if (firmwareSupportsNoisefloor(state.firmwareVersion)) {
+        // Immediately attempt to read radio stats (noise floor) on connect
+        debugLog("[BLE] Requesting radio stats on connect");
+        try {
+          // 5 second timeout as safety fallback
+          const stats = await conn.getRadioStats(5000);
+          debugLog(`[BLE] getRadioStats returned: ${JSON.stringify(stats)}`);
+          if (stats && typeof stats.noiseFloor !== 'undefined') {
+            state.lastNoiseFloor = stats.noiseFloor;
+            debugLog(`[BLE] Radio stats acquired on connect: noiseFloor=${state.lastNoiseFloor}`);
+          } else {
+            debugWarn(`[BLE] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
+            state.lastNoiseFloor = null;
+          }
+        } catch (e) {
+          // Timeout likely means firmware doesn't support GetStats command yet
+          if (e && e.message && e.message.includes('timeout')) {
+            debugLog(`[BLE] getRadioStats not supported by companion firmware (timeout)`);
+          } else {
+            debugWarn(`[BLE] getRadioStats failed on connect: ${e && e.message ? e.message : String(e)}`);
+          }
+          state.lastNoiseFloor = null; // Show '-' instead of 'ERR' for unsupported feature
         }
-      } catch (e) {
-        // Timeout likely means firmware doesn't support GetStats command yet
-        if (e && e.message && e.message.includes('timeout')) {
-          debugLog(`[BLE] getRadioStats not supported by companion firmware (timeout)`);
+        
+        // Start periodic noise floor updates if feature is supported
+        if (state.lastNoiseFloor !== null) {
+          startNoiseFloorUpdates();
+          debugLog("[BLE] Started periodic noise floor updates (5s interval)");
         } else {
-          debugWarn(`[BLE] getRadioStats failed on connect: ${e && e.message ? e.message : String(e)}`);
+          debugLog("[BLE] Noise floor updates not started (feature unsupported by firmware)");
         }
-        state.lastNoiseFloor = null; // Show '--' instead of 'ERR' for unsupported feature
-      }
-      
-      // Start periodic noise floor updates if feature is supported
-      if (state.lastNoiseFloor !== null) {
-        startNoiseFloorUpdates();
-        debugLog("[BLE] Started periodic noise floor updates (5s interval)");
       } else {
-        debugLog("[BLE] Noise floor updates not started (feature unsupported by firmware)");
+        // Firmware too old for noisefloor
+        const versionStr = state.firmwareVersion ? `v${state.firmwareVersion.major}.${state.firmwareVersion.minor}.${state.firmwareVersion.patch}` : 'unknown';
+        debugLog(`[BLE] Skipping noisefloor - firmware ${versionStr} does not support it (requires 1.11.0+)`);
+        state.lastNoiseFloor = null;
+        addErrorLogEntry(`Noisefloor requires firmware 1.11.0+ (detected: ${versionStr})`, "Firmware Version");
       }
       
       updateAutoButton();
