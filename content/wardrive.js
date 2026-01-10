@@ -121,8 +121,8 @@ const ZONE_CHECK_DISTANCE_M = 100;  // Recheck zone status every 100 meters
 const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // Passive RX Log Batch Configuration
-const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
-const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
+const RX_BATCH_DISTANCE_M = 50;        // Distance trigger for flushing batch (50m)
+const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec) - triggers flush if no movement
 
 // Wardrive Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
@@ -735,8 +735,15 @@ function cleanupAllTimers() {
   state.debugMode = false;
   state.tempTxRepeaterData = null;
   
-  // Clear RX batch buffer (no timeouts to clear anymore)
+  // Clear RX batch buffer (including per-repeater timeout timers)
   if (state.rxBatchBuffer && state.rxBatchBuffer.size > 0) {
+    // Clear all timeout timers before clearing the buffer
+    for (const [repeaterId, buffer] of state.rxBatchBuffer.entries()) {
+      if (buffer.timeoutId) {
+        clearTimeout(buffer.timeoutId);
+        debugLog(`[RX BATCH] Cleared timeout timer for repeater ${repeaterId} during cleanup`);
+      }
+    }
     state.rxBatchBuffer.clear();
     debugLog("[RX BATCH] RX batch buffer cleared");
   }
@@ -3605,10 +3612,18 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
         noisefloor: state.lastNoiseFloor ?? null,
         timestamp: Math.floor(Date.now() / 1000),
         metadata: metadata  // Store full metadata for debug mode
-      }
+      },
+      timeoutId: null  // Timer ID for 30-second timeout flush
     };
     state.rxBatchBuffer.set(repeaterId, buffer);
     debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}, noisefloor=${buffer.bestObservation.noisefloor}`);
+    
+    // Start 30-second timeout timer for this repeater
+    buffer.timeoutId = setTimeout(() => {
+      debugLog(`[RX BATCH] 30s timeout triggered for repeater ${repeaterId}`);
+      flushRepeater(repeaterId);
+    }, RX_BATCH_TIMEOUT_MS);
+    debugLog(`[RX BATCH] Started 30s timeout timer for repeater ${repeaterId}`);
   } else {
     // Already tracking this repeater - check if new SNR is better
     if (snr > buffer.bestObservation.snr) {
@@ -3697,6 +3712,13 @@ function flushRepeater(repeaterId) {
   if (!buffer) {
     debugLog(`[RX BATCH] No buffer to flush for repeater ${repeaterId}`);
     return;
+  }
+  
+  // Clear timeout timer if it exists
+  if (buffer.timeoutId) {
+    clearTimeout(buffer.timeoutId);
+    buffer.timeoutId = null;
+    debugLog(`[RX BATCH] Cleared timeout timer for repeater ${repeaterId}`);
   }
   
   const best = buffer.bestObservation;
