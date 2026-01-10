@@ -8,26 +8,287 @@
 import { WebBleConnection, Constants, Packet, BufferUtils } from "./mc/index.js"; // your BLE client
 
 // ---- Debug Configuration ----
-// Enable debug logging via URL parameter (?debug=true) or set default here
+// Enable debug logging via URL parameter (?debug=1) or set default here
 const urlParams = new URLSearchParams(window.location.search);
-const DEBUG_ENABLED = urlParams.get('debug') === 'true' || false; // Set to true to enable debug logging by default
+const DEBUG_ENABLED = urlParams.get('debug') === '1' || false; // Set to true to enable debug logging by default
+
+// ---- Remote Debug Configuration ----
+// Enable remote debug logging via URL parameters (?debuguser=1&debugkey=<key>)
+// When enabled, all console output is batched and POSTed to meshmapper.net/livedebug.php
+const REMOTE_DEBUG_USER = urlParams.get('debuguser') === '1';
+const REMOTE_DEBUG_KEY = urlParams.get('debugkey') || null;
+let REMOTE_DEBUG_ENABLED = REMOTE_DEBUG_USER && REMOTE_DEBUG_KEY; // Can be disabled on no_session error
+
+// Remote Debug Queue State
+const REMOTE_DEBUG_ENDPOINT = 'https://meshmapper.net/livedebug.php';
+const REMOTE_DEBUG_BATCH_MAX = 100;           // Maximum logs per batch
+const REMOTE_DEBUG_FLUSH_INTERVAL_MS = 15000; // Flush every 15 seconds
+const REMOTE_DEBUG_RATE_LIMIT = 20;           // Max logs per second
+const REMOTE_DEBUG_RATE_RESET_MS = 1000;      // Rate limit reset interval
+const REMOTE_DEBUG_GRACE_PERIOD_MS = 10000;   // Grace period before rate limiting starts (15 seconds)
+
+const debugLogQueue = {
+  messages: [],           // Array of {date: <epoch>, message: <string>}
+  flushTimerId: null,     // Timer ID for periodic flush
+  rateResetTimerId: null, // Timer ID for rate limit reset
+  logsThisSecond: 0,      // Current rate counter
+  droppedCount: 0,        // Logs dropped due to rate limiting
+  isProcessing: false,    // Lock to prevent concurrent flush
+  startupTimestamp: Date.now()  // App launch time for grace period tracking
+};
+
+// Store original console methods before overriding
+const originalConsoleLog = console.log.bind(console);
+const originalConsoleWarn = console.warn.bind(console);
+const originalConsoleError = console.error.bind(console);
+
+/**
+ * Queue a log message for remote debug submission
+ * Handles rate limiting (10/sec) and batch size limits
+ * @param {string} level - Log level (log, warn, error)
+ * @param {Array} args - Arguments passed to console method
+ */
+function queueRemoteDebugLog(level, args) {
+  if (!REMOTE_DEBUG_ENABLED) return;
+  
+  // Grace period check - bypass rate limiting for first 15 seconds
+  const gracePeriodActive = (Date.now() - debugLogQueue.startupTimestamp) < REMOTE_DEBUG_GRACE_PERIOD_MS;
+  
+  // Rate limiting check (only after grace period)
+  if (!gracePeriodActive && debugLogQueue.logsThisSecond >= REMOTE_DEBUG_RATE_LIMIT) {
+    debugLogQueue.droppedCount++;
+    return; // Drop this log
+  }
+  
+  // Increment counter only after grace period
+  if (!gracePeriodActive) {
+    debugLogQueue.logsThisSecond++;
+  }
+  
+  // Serialize arguments to string
+  const messageParts = args.map(arg => {
+    if (arg === null) return 'null';
+    if (arg === undefined) return 'undefined';
+    if (typeof arg === 'object') {
+      try {
+        return JSON.stringify(arg);
+      } catch {
+        return String(arg);
+      }
+    }
+    return String(arg);
+  });
+  
+  // Prepend level prefix for warn/error
+  let prefix = '';
+  if (level === 'warn') prefix = '[WARN] ';
+  if (level === 'error') prefix = '[ERROR] ';
+  
+  const logEntry = {
+    date: Date.now(),
+    message: prefix + messageParts.join(' ')
+  };
+  
+  debugLogQueue.messages.push(logEntry);
+  
+  // Enforce max batch size (drop oldest if over limit)
+  if (debugLogQueue.messages.length > REMOTE_DEBUG_BATCH_MAX) {
+    debugLogQueue.messages.shift();
+    debugLogQueue.droppedCount++;
+  }
+}
+
+/**
+ * Submit queued debug logs to remote endpoint
+ * Uses 2-attempt retry, handles no_session error by disabling remote debug
+ */
+async function submitDebugLogs() {
+  if (!REMOTE_DEBUG_ENABLED || debugLogQueue.messages.length === 0) return;
+  if (debugLogQueue.isProcessing) return; // Prevent concurrent flushes
+  
+  debugLogQueue.isProcessing = true;
+  
+  // Include dropped count in this batch if any logs were dropped
+  if (debugLogQueue.droppedCount > 0) {
+    debugLogQueue.messages.push({
+      date: Date.now(),
+      message: `[REMOTE DEBUG] ${debugLogQueue.droppedCount} logs dropped due to rate limiting`
+    });
+    debugLogQueue.droppedCount = 0;
+  }
+  
+  // Take messages for submission
+  const messagesToSend = debugLogQueue.messages.slice();
+  debugLogQueue.messages = [];
+  
+  const payload = {
+    debugkey: REMOTE_DEBUG_KEY,
+    data: messagesToSend
+  };
+  
+  // Attempt up to 2 times
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(REMOTE_DEBUG_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      
+      const result = await response.json();
+      
+      // Check for no_session error
+      if (!result.success && result.reason === 'no_session') {
+        REMOTE_DEBUG_ENABLED = false;
+        // Stop timers
+        if (debugLogQueue.flushTimerId) {
+          clearInterval(debugLogQueue.flushTimerId);
+          debugLogQueue.flushTimerId = null;
+        }
+        if (debugLogQueue.rateResetTimerId) {
+          clearInterval(debugLogQueue.rateResetTimerId);
+          debugLogQueue.rateResetTimerId = null;
+        }
+        // Show error to user
+        originalConsoleError('[REMOTE DEBUG] Session not found - remote debugging disabled:', result.message);
+        // Don't retry on no_session
+        break;
+      }
+      
+      // Success
+      if (result.success) {
+        break; // Exit retry loop
+      }
+      
+      // Other error - will retry if attempt < 2
+      originalConsoleWarn(`[REMOTE DEBUG] Submit attempt ${attempt} failed:`, result.reason || 'unknown');
+      
+    } catch (err) {
+      originalConsoleWarn(`[REMOTE DEBUG] Submit attempt ${attempt} network error:`, err.message);
+      // Will retry if attempt < 2
+    }
+    
+    // Wait 1 second before retry
+    if (attempt < 2) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+  
+  debugLogQueue.isProcessing = false;
+}
+
+/**
+ * Start remote debug timers (15s flush, 1s rate reset)
+ * Called only if REMOTE_DEBUG_ENABLED is true
+ */
+function startRemoteDebugTimers() {
+  if (!REMOTE_DEBUG_ENABLED) return;
+  
+  // 15-second flush timer
+  debugLogQueue.flushTimerId = setInterval(() => {
+    submitDebugLogs().catch(err => {
+      originalConsoleError('[REMOTE DEBUG] Flush error:', err.message);
+    });
+  }, REMOTE_DEBUG_FLUSH_INTERVAL_MS);
+  
+  // 1-second rate limit reset timer
+  debugLogQueue.rateResetTimerId = setInterval(() => {
+    debugLogQueue.logsThisSecond = 0;
+    
+    // Log when grace period expires (once at 15 seconds)
+    const elapsed = Date.now() - debugLogQueue.startupTimestamp;
+    if (elapsed >= REMOTE_DEBUG_GRACE_PERIOD_MS && elapsed < (REMOTE_DEBUG_GRACE_PERIOD_MS + REMOTE_DEBUG_RATE_RESET_MS)) {
+      originalConsoleLog(`[REMOTE DEBUG] Grace period ended - rate limiting now active (${REMOTE_DEBUG_RATE_LIMIT} logs/sec)`);
+    }
+  }, REMOTE_DEBUG_RATE_RESET_MS);
+  
+  originalConsoleLog('[REMOTE DEBUG] Remote debug logging enabled - logs will be sent to server every 15s');
+}
+
+// Override console methods to capture all output for remote debug
+// These overrides call the original method AND queue for remote submission
+console.log = function(...args) {
+  originalConsoleLog(...args);
+  queueRemoteDebugLog('log', args);
+};
+
+console.warn = function(...args) {
+  originalConsoleWarn(...args);
+  queueRemoteDebugLog('warn', args);
+};
+
+console.error = function(...args) {
+  originalConsoleError(...args);
+  queueRemoteDebugLog('error', args);
+};
+
+// Start remote debug timers if enabled
+if (REMOTE_DEBUG_ENABLED) {
+  startRemoteDebugTimers();
+  
+  // Register beforeunload to attempt final flush
+  window.addEventListener('beforeunload', () => {
+    if (REMOTE_DEBUG_ENABLED && debugLogQueue.messages.length > 0) {
+      // Use sendBeacon for reliable delivery during page unload
+      const payload = JSON.stringify({
+        debugkey: REMOTE_DEBUG_KEY,
+        data: debugLogQueue.messages
+      });
+      navigator.sendBeacon(REMOTE_DEBUG_ENDPOINT, payload);
+    }
+  });
+}
 
 // Debug logging helper function
 function debugLog(message, ...args) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('log', [message, ...args]);
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
   if (DEBUG_ENABLED) {
-    console.log(`[DEBUG] ${message}`, ...args);
+    console.log(message, ...args);
   }
 }
 
 function debugWarn(message, ...args) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('warn', [message, ...args]);
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
   if (DEBUG_ENABLED) {
-    console.warn(`[DEBUG] ${message}`, ...args);
+    console.warn(message, ...args);
   }
 }
 
 function debugError(message, ...args) {
+  // Direct queue for remote-only mode (bypasses console)
+  if (REMOTE_DEBUG_ENABLED && !DEBUG_ENABLED) {
+    queueRemoteDebugLog('error', [message, ...args]);
+    
+    // Still add to Error Log UI even in remote-only mode
+    try {
+      const tagMatch = message.match(/^\[([^\]]+)\]/);
+      const source = tagMatch ? tagMatch[1] : null;
+      const cleanMessage = tagMatch ? message.replace(/^\[[^\]]+\]\s*/, '') : message;
+      
+      if (typeof addErrorLogEntry === 'function') {
+        addErrorLogEntry(cleanMessage, source);
+      }
+    } catch (e) {
+      // Silently fail to prevent recursive errors
+    }
+    return; // Don't proceed to console
+  }
+  
+  // Console output (which gets captured by override if remote is enabled)
   if (DEBUG_ENABLED) {
-    console.error(`[DEBUG] ${message}`, ...args);
+    console.error(message, ...args);
     
     // Also add to Error Log UI (use try-catch to prevent recursive errors)
     try {
