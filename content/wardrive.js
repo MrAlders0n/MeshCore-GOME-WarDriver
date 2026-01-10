@@ -1028,7 +1028,16 @@ function updateZoneStatusUI(zoneData) {
     if (statusMessageState.outsideZoneError) {
       debugLog(`[GEO AUTH] [UI] Clearing persistent outside zone error - now in zone ${zone.code}`);
       statusMessageState.outsideZoneError = null;
-      setDynamicStatus("—", STATUS_COLORS.idle); // Clear the dynamic status bar
+      // Only clear to Idle if not showing a disconnect error
+      // Check if disconnectReason is an error (not normal/null/undefined)
+      const isErrorDisconnect = state.disconnectReason && 
+        state.disconnectReason !== "normal" && 
+        state.disconnectReason !== null;
+      if (!isErrorDisconnect) {
+        setDynamicStatus("—", STATUS_COLORS.idle); // Clear the dynamic status bar
+      } else {
+        debugLog(`[GEO AUTH] [UI] Preserving disconnect error status (reason: ${state.disconnectReason})`);
+      }
     }
     
     locationDisplay.textContent = zone.code;
@@ -5386,6 +5395,9 @@ async function connect() {
   
   debugLog("[BLE] All logs cleared on connect start (new session)");
   
+  // Clear any previous disconnect reason so error status doesn't persist
+  state.disconnectReason = null;
+  
   // Set connection bar to "Connecting" - will remain until GPS init completes
   setConnStatus("Connecting", STATUS_COLORS.info);
   setDynamicStatus("Idle"); // Clear dynamic status
@@ -5916,7 +5928,15 @@ function updateConnectButtonState() {
       // Don't show message here, zone check will update status
     } else {
       debugLog("[UI] External antenna selected and in valid zone - ready to connect");
-      setDynamicStatus("Idle", STATUS_COLORS.idle);
+      // Only set Idle if not showing a disconnect error
+      const isErrorDisconnect = state.disconnectReason && 
+        state.disconnectReason !== "normal" && 
+        state.disconnectReason !== null;
+      if (!isErrorDisconnect) {
+        setDynamicStatus("Idle", STATUS_COLORS.idle);
+      } else {
+        debugLog(`[UI] Preserving disconnect error status (reason: ${state.disconnectReason})`);
+      }
     }
   }
 }
