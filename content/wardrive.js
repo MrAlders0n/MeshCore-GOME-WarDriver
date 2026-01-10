@@ -3883,7 +3883,7 @@ function updateTxLogSummary() {
   if (!txLogCount || !txLogLastTime || !txLogLastSnr) return;
   
   const count = txLogState.entries.length;
-  txLogCount.textContent = count === 1 ? '1 ping' : `${count} pings`;
+  txLogCount.textContent = `Pings: ${count}`;
   
   if (count === 0) {
     txLogLastTime.textContent = 'No data';
@@ -4295,7 +4295,7 @@ function updateErrorLogSummary() {
   const count = errorLogState.entries.length;
   
   if (count === 0) {
-    errorLogCount.textContent = '0 errors';
+    errorLogCount.textContent = 'Events: 0';
     errorLogLastTime.textContent = 'No errors';
     errorLogLastTime.classList.add('hidden');
     if (errorLogLastError) {
@@ -4306,7 +4306,7 @@ function updateErrorLogSummary() {
   }
   
   const lastEntry = errorLogState.entries[errorLogState.entries.length - 1];
-  errorLogCount.textContent = `${count} error${count !== 1 ? 's' : ''}`;
+  errorLogCount.textContent = `Events: ${count}`;
   
   const date = new Date(lastEntry.timestamp);
   errorLogLastTime.textContent = date.toLocaleTimeString();
