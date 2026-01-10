@@ -25,7 +25,7 @@ const REMOTE_DEBUG_BATCH_MAX = 100;           // Maximum logs per batch
 const REMOTE_DEBUG_FLUSH_INTERVAL_MS = 15000; // Flush every 15 seconds
 const REMOTE_DEBUG_RATE_LIMIT = 10;           // Max logs per second
 const REMOTE_DEBUG_RATE_RESET_MS = 1000;      // Rate limit reset interval
-const REMOTE_DEBUG_GRACE_PERIOD_MS = 15000;   // Grace period before rate limiting starts (15 seconds)
+const REMOTE_DEBUG_GRACE_PERIOD_MS = 5000;   // Grace period before rate limiting starts (15 seconds)
 
 const debugLogQueue = {
   messages: [],           // Array of {date: <epoch>, message: <string>}
