@@ -10,59 +10,67 @@
   <meta name="Original author" content="Kyle Reed">
   <meta name="Modified by" content="MrAlders0n">
   <link rel="manifest" href="content/wardrive.json">
-  <link rel="icon" href="content/wardrive.png">
+  <link rel="icon" href="content/wardrive-badge.png">
   <link rel="stylesheet" href="content/tailwind.css">
   <link rel="stylesheet" href="content/style.css">
 
-  <!-- Leaflet -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-
-  <!-- AES-JS for AES-ECB decryption support -->
-  <script src="https://cdn.jsdelivr.net/npm/aes-js@3.1.2/index.min.js"></script>
+  <!-- AES-JS for AES-ECB decryption support (used for channel message encryption) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/aes-js@3.1.2/index.min.js"></script>
 
   <style>
-    .leaflet-interactive.marker-shadow {
-      filter: url(#marker-shadow);
+    /* Double-buffered iframe styles */
+    .coverage-frame {
+      width: 100%;
+      height: 400px;
+      border: 0;
+      position: absolute;
+      top: 0;
+      left: 0;
+      transition: opacity 0.15s ease-in-out;
+    }
+    .coverage-frame-active {
+      opacity: 1;
+      z-index: 1;
+      pointer-events: auto;
+    }
+    .coverage-frame-hidden {
+      opacity: 0;
+      z-index: 0;
+      pointer-events: none;
     }
   </style>
 </head>
 
 <body class="bg-slate-900 text-slate-100">
-  <main class="min-h-screen flex items-start justify-center p-4">
+  <main class="min-h-screen flex items-start justify-center px-3 pt-1 pb-3">
     <div class="w-full max-w-xl space-y-2">
 
       <!-- App Title -->
       <header class="flex items-center justify-between gap-2">
-        <h1 class="flex items-center gap-2 text-lg sm:text-xl font-semibold truncate min-w-0">
-          <img class="h-6 w-6 sm:h-8 sm: w-8 flex-shrink-0" src="content/wardrive.png" alt="MeshCore" />
+        <h1 class="flex items-center gap-2 text-lg sm:text-xl font-bold truncate min-w-0">
+          <img class="h-12 w-12 sm:h-14 sm:w-14 flex-shrink-0" src="content/wardrive.png" alt="MeshCore" />
           <span class="truncate">MeshMapper</span>
         </h1>
-        <span id="appVersion" class="text-xs text-slate-400 flex-shrink-0 whitespace-nowrap">v1.0</span>
+        <span id="appVersion" class="text-xs bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-full text-slate-400 flex-shrink-0">v1.0</span>
       </header>
 
       <!-- Connection Status Bar with Settings Panel -->
       <div>
         <!-- Connection Status Bar -->
         <div id="connectionBar" class="bg-slate-800/80 border border-slate-700 rounded-t-xl rounded-b-none px-4 py-0.5 flex items-center justify-between">
-          <div class="flex items-center gap-4 text-sm">
-            <div class="flex items-center gap-2">
-              <span id="statusIndicator" class="text-base">●</span>
-              <span id="connectionStatus" class="font-medium text-red-300">Disconnected</span>
-            </div>
-            <div class="flex items-center gap-2 text-xs text-slate-400">
-              <span>Device:</span>
-              <span id="deviceInfo" class="text-slate-300">-</span>
-            </div>
+          <div class="flex items-center gap-2 text-sm">
+            <span id="statusIndicator" class="text-base text-red-400">●</span>
+            <span id="connectionStatus" class="font-medium text-red-300">Disconnected</span>
           </div>
-          <button id="settingsGearBtn" class="p-0 text-slate-400 hover:text-slate-200 transition-colors" aria-label="Toggle settings">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-            </svg>
-          </button>
+          <div class="flex items-center gap-3">
+            <span id="noiseDisplay" class="text-sm text-slate-300"></span>
+            <button id="settingsGearBtn" class="p-0 text-slate-400 hover:text-slate-200 transition-colors" aria-label="Toggle settings">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+              </svg>
+            </button>
+          </div>
         </div>
 
         <!-- Settings Panel (extends from connection bar) -->
@@ -95,27 +103,6 @@
           </div>
         </div>
 
-        <!-- Radio Power -->
-        <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
-            Radio Power <span class="text-amber-400">⚠️ Required</span>
-          </label>
-          <div style="display: flex; gap: 0.5rem;">
-            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
-              <input type="radio" name="power" value="0.3w" class="sr-only">
-              <span class="text-sm font-medium">0.3w</span>
-            </label>
-            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
-              <input type="radio" name="power" value="0.6w" class="sr-only">
-              <span class="text-sm font-medium">0.6w</span>
-            </label>
-            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
-              <input type="radio" name="power" value="1.0w" class="sr-only">
-              <span class="text-sm font-medium">1.0w</span>
-            </label>
-          </div>
-        </div>
-
         <!-- External Antenna -->
         <div class="space-y-2">
           <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
@@ -133,21 +120,73 @@
           </div>
         </div>
 
-        <!-- Permissions & Status -->
+        <!-- Radio Power -->
         <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">Permissions & Status</label>
-          <div class="flex flex-wrap gap-4 text-sm">
-            <div class="flex items-center gap-2">
-              <span class="text-slate-300">Bluetooth:</span>
-              <span id="permBluetooth" class="font-medium">-</span>
+          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
+            Radio Power <span id="powerLabelStatus"></span>
+          </label>
+          
+          <!-- Placeholder when disconnected -->
+          <div id="powerPlaceholder" style="display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; background-color: rgba(71, 85, 105, 0.1);">
+            <span class="text-sm font-medium text-slate-500">Waiting for connection...</span>
+          </div>
+          
+          <!-- Auto-configured power display (shown when auto-set) -->
+          <div id="powerAutoDisplay" class="hidden" style="align-items: center; gap: 0.5rem;">
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #10b981; background-color: rgba(16, 185, 129, 0.1);">
+              <span id="powerAutoValue" class="text-sm font-medium text-emerald-400">1.0w</span>
             </div>
-            <div class="flex items-center gap-2">
-              <span class="text-slate-300">Location:</span>
-              <span id="permLocation" class="font-medium">-</span>
+            <button id="powerOverrideBtn" type="button" style="padding: 0.5rem 1rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer; background-color: #1e293b;" class="text-sm font-medium text-slate-300 hover:bg-slate-700">
+              Override
+            </button>
+          </div>
+          
+          <!-- Manual power selection (shown when unknown device or after override) -->
+          <div id="powerManualSelection" class="hidden" style="gap: 0.5rem;">
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="power" value="0.3w" class="sr-only">
+              <span class="text-sm font-medium">0.3w</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="power" value="0.6w" class="sr-only">
+              <span class="text-sm font-medium">0.6w</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="power" value="1.0w" class="sr-only">
+              <span class="text-sm font-medium">1.0w</span>
+            </label>
+            <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
+              <input type="radio" name="power" value="2.0w" class="sr-only">
+              <span class="text-sm font-medium">2.0w</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Status Info -->
+        <div class="space-y-2">
+          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">Status Info</label>
+          
+          <!-- Model and Channel (always 2 columns) -->
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex items-center gap-2 text-sm">
+              <span class="text-slate-300">Model:</span>
+              <span id="deviceModel" class="font-medium">—</span>
             </div>
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 text-sm">
               <span class="text-slate-300">Channel:</span>
-              <span id="channelInfo" class="font-medium">-</span>
+              <span id="channelInfo" class="font-medium">—</span>
+            </div>
+          </div>
+          
+          <!-- Location and Slots (always 2 columns) -->
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex items-center gap-2 text-sm">
+              <span class="text-slate-300">Location:</span>
+              <span id="locationDisplay" class="font-medium">—</span>
+            </div>
+            <div class="flex items-center gap-2 text-sm">
+              <span class="text-slate-300">Slots:</span>
+              <span id="slotsDisplay" class="font-medium text-slate-400">N/A</span>
             </div>
           </div>
         </div>
@@ -160,14 +199,20 @@
       </section>
 
       <!-- Map Section with Overlays -->
-      <section class="relative bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden">
+      <section class="relative bg-slate-800/80 border border-slate-700 rounded-xl overflow-hidden" style="height: 400px;">
+        <!-- Double-buffered iframes: one visible, one loading in background -->
         <iframe
-          id="coverageFrame"
+          id="coverageFrameA"
+          class="coverage-frame coverage-frame-active"
           title="MeshMapper Coverage Zone"
-          style="width: 100%; height: 400px; border: 0;"
-          loading="lazy"
           referrerpolicy="no-referrer"
           src="https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&lat=45.42150&lon=-75.69720&meters=10000">
+        </iframe>
+        <iframe
+          id="coverageFrameB"
+          class="coverage-frame coverage-frame-hidden"
+          title="MeshMapper Coverage Zone"
+          referrerpolicy="no-referrer">
         </iframe>
 
         <!-- Map Overlays -->
@@ -224,7 +269,7 @@
           <div class="flex items-center gap-3 text-sm min-w-0 flex-1">
             <h2 id="txPingsHeading" class="text-sm font-medium text-slate-300 uppercase tracking-wide">TX Log</h2>
             <span class="text-slate-500">|</span>
-            <span id="txLogCount" class="font-medium text-slate-300">0 pings</span>
+            <span id="txLogCount" class="font-medium text-slate-300">Pings: 0</span>
             <span id="txLogLastTime" class="text-slate-400 text-xs truncate hidden sm:inline">No data</span>
           </div>
           <div class="flex items-center gap-2">
@@ -256,7 +301,7 @@
           <div class="flex items-center gap-3 text-sm min-w-0 flex-1">
             <h2 id="rxLogHeading" class="text-sm font-medium text-slate-300 uppercase tracking-wide">RX Log</h2>
             <span class="text-slate-500">|</span>
-            <span id="rxLogCount" class="font-medium text-slate-300">0 observations • 0 dropped</span>
+            <span id="rxLogCount" class="font-medium text-slate-300">Handled: 0  Drop: 0</span>
             <span id="rxLogLastTime" class="text-slate-400 text-xs truncate hidden sm:inline">No data</span>
           </div>
           <div class="flex items-center gap-2">
@@ -286,7 +331,7 @@
           <div class="flex items-center gap-3 text-sm min-w-0 flex-1">
             <h2 id="errorLogHeading" class="text-sm font-medium text-red-300 uppercase tracking-wide">Error Log</h2>
             <span class="text-slate-500">|</span>
-            <span id="errorLogCount" class="font-medium text-red-300">0 errors</span>
+            <span id="errorLogCount" class="font-medium text-red-300">Events: 0</span>
             <span id="errorLogLastTime" class="text-slate-400 text-xs truncate hidden sm:inline">No errors</span>
           </div>
           <div class="flex items-center gap-2">
@@ -315,14 +360,8 @@
         <ul class="text-xs text-slate-400 space-y-1 list-disc list-inside">
           <li>Requires Bluetooth and Location permissions</li>
           <li>Keep app in foreground with screen on & unlocked</li>
-          <li>YOW region only</li>
-          <li>Sends location to <code class="bg-slate-900 px-1 py-0.5 rounded">#wardriving</code> for coverage map</li>
           <li class="text-amber-400 font-medium">⚠️ Not supported in Safari — Use Bluefy on iOS</li>
         </ul>
-        <p class="text-xs italic text-slate-500 pt-2 border-t border-slate-700">
-          Fork of <a class="underline" target="_blank" href="https://github.com/kallanreed/mesh-map">kallanreed/mesh-map</a>,
-          modified for <a class="underline" target="_blank" href="https://meshmapper.net">meshmapper.net</a>
-        </p>
       </section>
 
     </div>
@@ -334,5 +373,26 @@
     import { onLoad } from './content/wardrive.js';
     onLoad();
   </script>
+
+  <!-- Override Confirmation Modal -->
+  <div id="overrideModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.7); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 1rem;">
+    <div style="background-color: #1e293b; border: 1px solid #475569; border-radius: 0.75rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); max-width: 24rem; width: 100%;">
+      <div style="padding: 1.5rem; border-bottom: 1px solid #475569;">
+        <h3 style="font-size: 1.125rem; font-weight: 500; color: #e2e8f0;">Override Auto-Configuration?</h3>
+      </div>
+      <div style="padding: 1.5rem;">
+        <p style="font-size: 0.875rem; color: #cbd5e1; margin-bottom: 0.5rem;">This will allow you to manually select the radio power setting.</p>
+        <p style="font-size: 0.875rem; color: #94a3b8;">The device was automatically configured based on its hardware profile.</p>
+      </div>
+      <div style="padding: 1.5rem; display: flex; gap: 0.75rem; border-top: 1px solid #475569;">
+        <button id="overrideModalCancel" style="flex: 1; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 500; color: #cbd5e1; background-color: #475569; border-radius: 0.5rem; border: none; cursor: pointer; transition: background-color 0.2s;">
+          Cancel
+        </button>
+        <button id="overrideModalConfirm" style="flex: 1; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 500; color: white; background-color: #10b981; border-radius: 0.5rem; border: none; cursor: pointer; transition: background-color 0.2s;">
+          Override
+        </button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

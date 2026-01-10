@@ -51,7 +51,6 @@ function debugError(message, ...args) {
 
 // ---- Config ----
 const CHANNEL_NAME     = "#wardriving";        // change to "#wardrive" if needed
-const DEFAULT_INTERVAL_S = 30;                 // fallback if selector unavailable
 const PING_PREFIX      = "@[MapperBot]";
 const GPS_FRESHNESS_BUFFER_MS = 5000;          // Buffer time for GPS freshness checks
 const GPS_ACCURACY_THRESHOLD_M = 100;          // Maximum acceptable GPS accuracy in meters
@@ -68,8 +67,15 @@ const ADVERT_HEADER = 0x11;                   // Header byte for ADVERT packets 
 
 // RX Packet Filter Configuration
 const MAX_RX_PATH_LENGTH = 9;                 // Maximum path length for RX packets (drop if exceeded to filter corrupted packets)
-const RX_ALLOWED_CHANNELS = ['#wardriving', '#public', '#testing', '#ottawa']; // Allowed channels for RX wardriving
+const RX_ALLOWED_CHANNELS = ['#wardriving', 'Public', '#testing', '#ottawa']; // Allowed channels for RX wardriving (Public uses fixed key, hashtag channels use SHA-256 derivation)
 const RX_PRINTABLE_THRESHOLD = 0.80;          // Minimum printable character ratio for GRP_TXT (80%)
+
+// Fixed key for Public channel (default MeshCore channel without hashtag)
+// This is a well-known key used by all MeshCore devices for the default Public channel
+const PUBLIC_CHANNEL_FIXED_KEY = new Uint8Array([
+  0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a,
+  0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72
+]);
 
 // Pre-computed channel hash and key for the wardriving channel
 // These will be computed once at startup and used for message correlation and decryption
@@ -78,6 +84,10 @@ let WARDRIVING_CHANNEL_KEY = null;
 
 // Pre-computed channel hashes and keys for all allowed RX channels
 const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
+
+// ---- Device Models Database ----
+// Loaded from device-models.json at startup
+let DEVICE_MODELS = [];
 
 // Initialize channel hashes and keys at startup
 (async function initializeChannelHash() {
@@ -91,7 +101,7 @@ const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
     // Initialize all allowed RX channels
     debugLog(`[INIT] Pre-computing hashes/keys for ${RX_ALLOWED_CHANNELS.length} allowed RX channels...`);
     for (const channelName of RX_ALLOWED_CHANNELS) {
-      const key = await deriveChannelKey(channelName);
+      const key = await getChannelKey(channelName);
       const hash = await computeChannelHash(key);
       RX_CHANNEL_MAP.set(hash, { name: channelName, key: key });
       debugLog(`[INIT] ${channelName} -> hash=0x${hash.toString(16).padStart(2, '0')}`);
@@ -104,30 +114,31 @@ const RX_CHANNEL_MAP = new Map(); // Map<channelHash, {name, key}>
   }
 })();
 
-// Ottawa Geofence Configuration
-const OTTAWA_CENTER_LAT = 45.4215;  // Parliament Hill latitude
-const OTTAWA_CENTER_LON = -75.6972; // Parliament Hill longitude
-const OTTAWA_GEOFENCE_RADIUS_M = 150000; // 150 km in meters
+// Geo-Auth Zone Configuration
+const ZONE_CHECK_DISTANCE_M = 100;  // Recheck zone status every 100 meters
 
 // Distance-Based Ping Filtering
 const MIN_PING_DISTANCE_M = 25; // Minimum distance (25m) between pings
 
 // Passive RX Log Batch Configuration
-const RX_BATCH_DISTANCE_M = 25;        // Distance trigger for flushing batch (separate from MIN_PING_DISTANCE_M for independent tuning)
-const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec)
-const RX_BATCH_MIN_WAIT_MS = 2000;     // Min wait to collect burst RX events
+const RX_BATCH_DISTANCE_M = 50;        // Distance trigger for flushing batch (50m)
+const RX_BATCH_TIMEOUT_MS = 30000;     // Max hold time per repeater (30 sec) - triggers flush if no movement
 
-// API Batch Queue Configuration
+// Wardrive Batch Queue Configuration
 const API_BATCH_MAX_SIZE = 50;              // Maximum messages per batch POST
 const API_BATCH_FLUSH_INTERVAL_MS = 30000;  // Flush every 30 seconds
 const API_TX_FLUSH_DELAY_MS = 3000;         // Flush 3 seconds after TX ping
 
+// Heartbeat Configuration
+const HEARTBEAT_BUFFER_MS = 5 * 60 * 1000;  // Schedule heartbeat 5 minutes before session expiry
+const WARDRIVE_RETRY_DELAY_MS = 2000;       // Delay before retry on network failure (2 seconds)
+
 // MeshMapper API Configuration
-const MESHMAPPER_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
-const MESHMAPPER_CAPACITY_CHECK_URL = "https://yow.meshmapper.net/capacitycheck.php";
+const WARDRIVE_ENDPOINT = "https://meshmapper.net/wardrive-api.php/wardrive";  // New wardrive data + heartbeat endpoint
+const GEO_AUTH_STATUS_URL = "https://meshmapper.net/wardrive-api.php/status";  // Geo-auth zone status endpoint
+const GEO_AUTH_URL = "https://meshmapper.net/wardrive-api.php/auth";  // Geo-auth connect/disconnect endpoint
 const MESHMAPPER_API_KEY = "59C7754DABDF5C11CA5F5D8368F89";
 const MESHMAPPER_DEFAULT_WHO = "GOME-WarDriver"; // Default identifier
-const MESHMAPPER_RX_LOG_API_URL = "https://yow.meshmapper.net/wardriving-api.php";
 
 // Static for now; will be made dynamic later.
 const WARDIVE_IATA_CODE = "YOW";
@@ -138,11 +149,28 @@ const WARDIVE_IATA_CODE = "YOW";
 // For DEV builds: Contains "DEV-<EPOCH>" format (e.g., "DEV-1734652800")
 const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 
-// ---- Capacity Check Reason Messages ----
+// ---- Auth Reason Messages ----
 // Maps API reason codes to user-facing error messages
 const REASON_MESSAGES = {
+  // Auth/connect errors
   outofdate: "App out of date, please update",
-  // Future reasons can be added here
+  unknown_device: "Unknown device - advertise on mesh first",
+  outside_zone: "Outside zone",
+  zone_disabled: "Zone is disabled",
+  zone_full: "Zone at capacity",
+  bad_key: "Invalid API key",
+  gps_stale: "GPS data too old - try again",
+  gps_inaccurate: "GPS accuracy too low - try again",
+  // Session errors (wardrive API)
+  bad_session: "Invalid session",
+  session_expired: "Session expired",
+  session_invalid: "Session invalid",
+  session_revoked: "Session revoked",
+  // Authorization errors (wardrive API)
+  invalid_key: "Invalid API key",
+  unauthorized: "Unauthorized",
+  // Rate limiting (wardrive API)
+  rate_limited: "Rate limited - slow down",
 };
 
 // ---- UI helpers ----
@@ -155,27 +183,34 @@ const STATUS_COLORS = {
   info: "text-sky-300"
 };
 
-// ---- DOM refs (from index.html; unchanged except the two new selectors) ----
+// ---- DOM refs (from index.html) ----
 const $ = (id) => document.getElementById(id);
 const statusEl       = $("status");
-const deviceInfoEl   = $("deviceInfo");
 const channelInfoEl  = $("channelInfo");
 const connectBtn     = $("connectBtn");
 const txPingBtn      = $("txPingBtn");
 const txRxAutoBtn    = $("txRxAutoBtn");
 const rxAutoBtn      = $("rxAutoBtn");
-const lastPingEl     = $("lastPing");
 const gpsInfoEl = document.getElementById("gpsInfo");
 const gpsAccEl = document.getElementById("gpsAcc");
 const distanceInfoEl = document.getElementById("distanceInfo"); // Distance from last ping
 const txPingsEl = document.getElementById("txPings"); // TX log container
-const coverageFrameEl = document.getElementById("coverageFrame");
+// Double-buffered iframes for seamless map updates
+let coverageFrameA = document.getElementById("coverageFrameA");
+let coverageFrameB = document.getElementById("coverageFrameB");
+let activeFrame = coverageFrameA; // Track which frame is currently visible
+
+// Track last connection status to avoid logging spam (declared here to avoid TDZ with setConnStatus call below)
+let lastConnStatusText = null;
+
 setConnectButton(false);
 setConnStatus("Disconnected", STATUS_COLORS.error);
 
-// NEW: selectors
-const intervalSelect = $("intervalSelect"); // 15 / 30 / 60 seconds
-const powerSelect    = $("powerSelect");    // "", "0.3w", "0.6w", "1.0w"
+// Power, Device Model, and Zone selectors
+const deviceModelEl  = $("deviceModel");
+// Zone status removed from connection bar - only shown in settings panel (locationDisplay)
+const locationDisplay = $("locationDisplay"); // Location (zone code) in settings
+const slotsDisplay   = $("slotsDisplay");    // Slot availability in settings
 
 // TX Log selectors
 const txLogSummaryBar = $("txLogSummaryBar");
@@ -256,15 +291,28 @@ const state = {
   skipReason: null, // Reason for skipping a ping - internal value only (e.g., "gps too old")
   pausedAutoTimerRemainingMs: null, // Remaining time when auto ping timer was paused by manual ping
   lastSuccessfulPingLocation: null, // { lat, lon } of the last successful ping (Mesh + API)
-  capturedPingCoords: null, // { lat, lon, accuracy } captured at ping time, used for API post after 7s delay
-  devicePublicKey: null, // Hex string of device's public key (used for capacity check)
-  wardriveSessionId: null, // Session ID from capacity check API (used for all MeshMapper API posts)
+  capturedPingCoords: null, // { lat, lon, accuracy, noisefloor, timestamp } captured at ping time, used for API post after RX window
+  devicePublicKey: null, // Hex string of device's public key (used for auth)
+  deviceModel: null, // Manufacturer/model string exposed by companion
+  autoPowerSet: false, // Whether power was automatically set based on device model
+  lastNoiseFloor: null, // Most recent noise floor read from companion (dBm) or 'ERR'
+  noiseFloorUpdateTimer: null, // Timer for periodic noise floor updates (5s interval)
+  deviceName: null,
+  wardriveSessionId: null, // Session ID from /auth API (used for all MeshMapper API posts)
   debugMode: false, // Whether debug mode is enabled by MeshMapper API
+  txAllowed: false, // Whether TX wardriving is permitted (from /auth response)
+  rxAllowed: false, // Whether RX wardriving is permitted (from /auth response)
+  sessionExpiresAt: null, // Unix timestamp when session expires (for heartbeat scheduling)
+  heartbeatTimerId: null, // Timer ID for heartbeat scheduling
   tempTxRepeaterData: null, // Temporary storage for TX repeater debug data
-  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "capacity_full", "public_key_error", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
+  disconnectReason: null, // Tracks the reason for disconnection (e.g., "app_down", "unknown_device", "outside_zone", "zone_disabled", "channel_setup_error", "ble_disconnect_error", "session_id_error", "normal", or API reason codes like "outofdate")
   channelSetupErrorMessage: null, // Error message from channel setup failure
   bleDisconnectErrorMessage: null, // Error message from BLE disconnect failure
   pendingApiPosts: [], // Array of pending background API post promises
+  currentZone: null, // Current zone object from preflight check: { name, code, enabled, at_capacity, slots_available, slots_max }
+  lastZoneCheckCoords: null, // { lat, lon } of last zone status check (for 100m movement trigger)
+  zoneCheckInProgress: false, // Prevents duplicate concurrent zone checks
+  slotRefreshTimerId: null, // Timer for periodic slot capacity refresh (30s disconnected, 60s connected)
   txTracking: {
     isListening: false,           // Whether we're currently listening for TX echoes
     sentTimestamp: null,          // Timestamp when the ping was sent
@@ -283,8 +331,8 @@ const state = {
   rxBatchBuffer: new Map()        // Map<repeaterId, {firstLocation, bestObservation}>
 };
 
-// API Batch Queue State
-const apiQueue = {
+// Wardrive Batch Queue State
+const wardriveQueue = {
   messages: [],           // Array of pending payloads
   flushTimerId: null,     // Timer ID for periodic flush (30s)
   txFlushTimerId: null,   // Timer ID for TX-triggered flush (3s)
@@ -298,7 +346,8 @@ const statusMessageState = {
   pendingMessage: null,     // Pending message to display after minimum visibility
   pendingTimer: null,       // Timer for pending message
   currentText: '',          // Current status text
-  currentColor: ''          // Current status color
+  currentColor: '',         // Current status color
+  outsideZoneError: null    // Persistent "outside zone" error message (blocks other messages until cleared)
 };
 
 /**
@@ -441,12 +490,6 @@ const autoCountdownTimer = createCountdownTimer(
       return { message: "Sending auto ping", color: STATUS_COLORS.info };
     }
     // If there's a skip reason, show it with the countdown in warning color
-    if (state.skipReason === "outside geofence") {
-      return { 
-        message: `Ping skipped, outside of geofenced region, waiting for next ping (${remainingSec}s)`,
-        color: STATUS_COLORS.warning
-      };
-    }
     if (state.skipReason === "too close") {
       return { 
         message: `Ping skipped, too close to last ping, waiting for next ping (${remainingSec}s)`,
@@ -504,7 +547,15 @@ function pauseAutoCountdown() {
       state.pausedAutoTimerRemainingMs = null;
     }
   }
-  // Stop the auto ping timer (but keep autoTimerId so we know auto mode is active)
+  
+  // CRITICAL: Clear the actual ping timer to prevent it from firing during manual ping
+  if (state.autoTimerId) {
+    debugLog(`[TIMER] Clearing ping timer (id=${state.autoTimerId}) during pause`);
+    clearTimeout(state.autoTimerId);
+    state.autoTimerId = null;
+  }
+  
+  // Stop the UI countdown display
   autoCountdownTimer.stop();
   state.nextAutoPingTime = null;
 }
@@ -514,8 +565,32 @@ function resumeAutoCountdown() {
   if (state.pausedAutoTimerRemainingMs !== null) {
     // Validate paused time is still reasonable before resuming
     if (state.pausedAutoTimerRemainingMs > MIN_PAUSE_THRESHOLD_MS && state.pausedAutoTimerRemainingMs < MAX_REASONABLE_TIMER_MS) {
-      debugLog(`[TIMER] Resuming auto countdown with ${state.pausedAutoTimerRemainingMs}ms remaining`);
-      startAutoCountdown(state.pausedAutoTimerRemainingMs);
+      const remainingMs = state.pausedAutoTimerRemainingMs;
+      debugLog(`[TIMER] Resuming auto countdown with ${remainingMs}ms remaining`);
+      
+      // Start the UI countdown display
+      startAutoCountdown(remainingMs);
+      
+      // CRITICAL: Also schedule the actual ping timer with the remaining time
+      state.autoTimerId = setTimeout(() => {
+        debugLog(`[TX/RX AUTO] Resumed auto ping timer fired (id=${state.autoTimerId})`);
+        
+        // Double-check guards before sending ping
+        if (!state.txRxAutoRunning) {
+          debugLog("[TX/RX AUTO] Auto mode no longer running, ignoring timer");
+          return;
+        }
+        if (state.pingInProgress) {
+          debugLog("[TX/RX AUTO] Ping already in progress, ignoring timer");
+          return;
+        }
+        
+        state.skipReason = null;
+        debugLog("[TX/RX AUTO] Sending auto ping (resumed)");
+        sendPing(false).catch((e) => debugError("[TX/RX AUTO] Resumed auto ping error:", e?.message || String(e)));
+      }, remainingMs);
+      debugLog(`[TIMER] Resumed ping timer scheduled (id=${state.autoTimerId})`);
+      
       state.pausedAutoTimerRemainingMs = null;
       return true;
     } else {
@@ -587,16 +662,18 @@ function startCooldown() {
 function updateControlsForCooldown() {
   const connected = !!state.connection;
   const inCooldown = isInCooldown();
-  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}`);
+  const powerSelected = getCurrentPowerSetting() !== "";
+  debugLog(`[UI] updateControlsForCooldown: connected=${connected}, inCooldown=${inCooldown}, pingInProgress=${state.pingInProgress}, txRxAutoRunning=${state.txRxAutoRunning}, rxAutoRunning=${state.rxAutoRunning}, powerSelected=${powerSelected}, txAllowed=${state.txAllowed}, rxAllowed=${state.rxAllowed}`);
   
-  // TX Ping button - disabled during cooldown or ping in progress
-  txPingBtn.disabled = !connected || inCooldown || state.pingInProgress;
+  // TX Ping button - requires TX permission, disabled during cooldown, ping in progress, OR when no power selected
+  txPingBtn.disabled = !connected || !state.txAllowed || inCooldown || state.pingInProgress || !powerSelected;
   
-  // TX/RX Auto button - disabled during cooldown, ping in progress, OR when RX Auto running
-  txRxAutoBtn.disabled = !connected || inCooldown || state.pingInProgress || state.rxAutoRunning;
+  // TX/RX Auto button - requires TX permission, disabled during cooldown, ping in progress, when RX Auto running, OR when no power selected
+  txRxAutoBtn.disabled = !connected || !state.txAllowed || inCooldown || state.pingInProgress || state.rxAutoRunning || !powerSelected;
   
-  // RX Auto button - permanently disabled (backend API not ready)
-  rxAutoBtn.disabled = true;
+  // RX Auto button - enabled when connected with RX permission (including RX-only mode)
+  // Disabled during TX/RX Auto mode (can't run both), and requires power selected
+  rxAutoBtn.disabled = !connected || !state.rxAllowed || state.txRxAutoRunning || !powerSelected;
 }
 
 /**
@@ -631,7 +708,10 @@ function cleanupAllTimers() {
   }
   
   // Clean up API queue timers
-  stopFlushTimers();
+  stopWardriveTimers();
+  
+  // Cancel heartbeat timer
+  cancelHeartbeat();
   
   // Clean up state timer references
   state.autoCountdownTimer = null;
@@ -655,15 +735,22 @@ function cleanupAllTimers() {
   state.debugMode = false;
   state.tempTxRepeaterData = null;
   
-  // Clear RX batch buffer (no timeouts to clear anymore)
+  // Clear RX batch buffer (including per-repeater timeout timers)
   if (state.rxBatchBuffer && state.rxBatchBuffer.size > 0) {
+    // Clear all timeout timers before clearing the buffer
+    for (const [repeaterId, buffer] of state.rxBatchBuffer.entries()) {
+      if (buffer.timeoutId) {
+        clearTimeout(buffer.timeoutId);
+        debugLog(`[RX BATCH] Cleared timeout timer for repeater ${repeaterId} during cleanup`);
+      }
+    }
     state.rxBatchBuffer.clear();
     debugLog("[RX BATCH] RX batch buffer cleared");
   }
 }
 
 function enableControls(connected) {
-  connectBtn.disabled     = false;
+  setConnectButtonDisabled(false);
   channelInfoEl.textContent = CHANNEL_NAME;
   updateControlsForCooldown();
   
@@ -695,22 +782,112 @@ function updateAutoButton() {
   }
 }
 function buildCoverageEmbedUrl(lat, lon) {
+  // Use current zone code from preflight check, fallback to default
+  const zoneCode = (state.currentZone?.code || WARDIVE_IATA_CODE).toLowerCase();
   const base =
-    "https://yow.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&dir=1&meters=1500";
+    `https://${zoneCode}.meshmapper.net/embed.php?cov_grid=1&fail_grid=1&pings=0&repeaters=1&rep_coverage=0&grid_lines=0&dir=1&meters=1500`;
   return `${base}&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
 }
 let coverageRefreshTimer = null;
+let bufferLoadHandler = null; // Track current load handler for cleanup
+
+/**
+ * Schedule a coverage map refresh using double-buffered iframe swap
+ * Loads new content in hidden iframe, swaps visibility when ready (no flicker)
+ * @param {number} lat - Latitude
+ * @param {number} lon - Longitude  
+ * @param {number} delayMs - Delay before starting load (default 0)
+ */
 function scheduleCoverageRefresh(lat, lon, delayMs = 0) {
-  if (!coverageFrameEl) return;
+  if (!coverageFrameA || !coverageFrameB) return;
 
   if (coverageRefreshTimer) clearTimeout(coverageRefreshTimer);
 
   coverageRefreshTimer = setTimeout(() => {
     const url = buildCoverageEmbedUrl(lat, lon);
-    debugLog("[UI] Coverage iframe URL:", url);
-    coverageFrameEl.src = url;
+    debugLog("[UI] Coverage iframe loading:", url);
+    
+    // Determine which frame is hidden (the buffer)
+    const bufferFrame = (activeFrame === coverageFrameA) ? coverageFrameB : coverageFrameA;
+    
+    // Clean up any previous load handler
+    if (bufferLoadHandler) {
+      bufferFrame.removeEventListener('load', bufferLoadHandler);
+      bufferLoadHandler = null;
+    }
+    
+    // Create new load handler that swaps visibility
+    bufferLoadHandler = function onBufferLoad() {
+      // Delay after load to ensure iframe content is fully rendered
+      // Cross-origin iframes may fire load before paint is complete
+      setTimeout(() => {
+        // Swap opacity: fade out current active, fade in buffer
+        activeFrame.classList.remove('coverage-frame-active');
+        activeFrame.classList.add('coverage-frame-hidden');
+        bufferFrame.classList.remove('coverage-frame-hidden');
+        bufferFrame.classList.add('coverage-frame-active');
+        
+        // Update active frame reference
+        activeFrame = bufferFrame;
+        debugLog("[UI] Coverage iframe swapped (double-buffer)");
+        
+        // Clean up
+        bufferFrame.removeEventListener('load', bufferLoadHandler);
+        bufferLoadHandler = null;
+      }, 300); // 300ms delay for content to render
+    };
+    
+    // Set up load listener and start loading in buffer
+    bufferFrame.addEventListener('load', bufferLoadHandler);
+    bufferFrame.src = url;
   }, delayMs);
 }
+
+/**
+ * Update map and GPS overlay after a zone check
+ * - Updates GPS coordinates and accuracy on the map overlay
+ * - Refreshes the map iframe with new coordinates (unless auto mode is running)
+ * @param {Object} coords - Coordinates object with lat, lon, accuracy_m properties
+ */
+function updateMapOnZoneCheck(coords) {
+  if (!coords) return;
+  
+  const { lat, lon, accuracy_m } = coords;
+  
+  // Update GPS overlay
+  if (gpsInfoEl) {
+    gpsInfoEl.textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+  }
+  if (gpsAccEl && accuracy_m) {
+    gpsAccEl.textContent = `±${Math.round(accuracy_m)}m`;
+  }
+  
+  // Skip map refresh if auto mode is running (ping completion handles map refresh)
+  if (state.txRxAutoRunning || state.rxAutoRunning) {
+    debugLog(`[GEO AUTH] Skipping map refresh - auto mode running`);
+    return;
+  }
+  
+  // Refresh map iframe with new coordinates
+  scheduleCoverageRefresh(lat, lon);
+  debugLog(`[GEO AUTH] Map updated: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy_m ? Math.round(accuracy_m) + 'm' : 'N/A'}`);
+}
+
+/**
+ * Set Connect button visual disabled state
+ * Updates opacity and cursor to indicate whether button is clickable
+ * @param {boolean} disabled - Whether button should appear disabled
+ */
+function setConnectButtonDisabled(disabled) {
+  if (!connectBtn) return;
+  connectBtn.disabled = disabled;
+  if (disabled) {
+    connectBtn.classList.add("opacity-50", "cursor-not-allowed");
+  } else {
+    connectBtn.classList.remove("opacity-50", "cursor-not-allowed");
+  }
+}
+
 function setConnectButton(connected) {
   if (!connectBtn) return;
   if (connected) {
@@ -750,12 +927,50 @@ function setConnectButton(connected) {
 function setConnStatus(text, color) {
   const connectionStatusEl = document.getElementById("connectionStatus");
   const statusIndicatorEl = document.getElementById("statusIndicator");
+  const noiseDisplayEl = document.getElementById("noiseDisplay");
   
   if (!connectionStatusEl) return;
   
-  debugLog(`[UI] Connection status: "${text}"`);
-  connectionStatusEl.textContent = text;
-  connectionStatusEl.className = `font-medium ${color}`;
+  // Only log when status actually changes
+  if (text !== lastConnStatusText) {
+    debugLog(`[UI] Connection status: "${text}"`);
+    lastConnStatusText = text;
+  }
+  
+  // Format based on connection state
+  if (text === "Connected") {
+    // Show device name on left, noise on right
+    const deviceName = state.deviceName || "[No device]";
+    let noiseText = "-";
+    if (state.lastNoiseFloor === null) {
+      noiseText = "Firmware 1.11+";
+    } else if (state.lastNoiseFloor === 'ERR') {
+      noiseText = "ERR";
+    } else {
+      noiseText = `${state.lastNoiseFloor}dBm`;
+    }
+    connectionStatusEl.textContent = deviceName;
+    connectionStatusEl.className = 'font-medium text-slate-300';
+    
+    // Update noise display on right side
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = `🔊 ${noiseText}`;
+    }
+  } else if (text === "Disconnected") {
+    // Show disconnected status, clear noise
+    connectionStatusEl.textContent = text;
+    connectionStatusEl.className = `font-medium ${color}`;
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = '';
+    }
+  } else {
+    // Connecting, Disconnecting - show as-is, clear noise
+    connectionStatusEl.textContent = text;
+    connectionStatusEl.className = `font-medium ${color}`;
+    if (noiseDisplayEl) {
+      noiseDisplayEl.textContent = '';
+    }
+  }
   
   // Update status indicator dot color to match
   if (statusIndicatorEl) {
@@ -771,11 +986,19 @@ function setConnStatus(text, color) {
  * Connection status words (Connected/Connecting/Disconnecting/Disconnected) are blocked
  * and replaced with em dash (—) placeholder.
  * 
+ * When outsideZoneError is set, all other messages are blocked until the error is cleared.
+ * 
  * @param {string} text - Status message text (null/empty shows "—")
  * @param {string} color - Status color class from STATUS_COLORS
  * @param {boolean} immediate - If true, bypass minimum visibility (for countdown timers)
  */
 function setDynamicStatus(text, color = STATUS_COLORS.idle, immediate = false) {
+  // If outside zone error is active, block all other messages (except clearing it)
+  if (statusMessageState.outsideZoneError && text !== statusMessageState.outsideZoneError) {
+    debugLog(`[UI] Dynamic status blocked by persistent outside zone error: "${text}"`);
+    return;
+  }
+  
   // Normalize empty/null/whitespace to em dash
   if (!text || text.trim() === '') {
     text = '—';
@@ -792,6 +1015,353 @@ function setDynamicStatus(text, color = STATUS_COLORS.idle, immediate = false) {
   
   // Reuse existing setStatus implementation with minimum visibility
   setStatus(text, color, immediate);
+}
+
+/**
+ * Update zone status UI based on zone check response
+ * @param {Object} zoneData - Zone status response from checkZoneStatus()
+ */
+function updateZoneStatusUI(zoneData) {
+  debugLog(`[GEO AUTH] [UI] Updating zone status UI`);
+  
+  if (!zoneData) {
+    debugWarn(`[GEO AUTH] [UI] No zone data provided, setting error state`);
+    locationDisplay.textContent = "Unknown";
+    locationDisplay.className = "font-medium text-red-400";
+    updateSlotsDisplay(null);
+    return;
+  }
+  
+  // Handle success with in_zone
+  if (zoneData.success && zoneData.in_zone) {
+    const zone = zoneData.zone;
+    const atCapacity = zone.at_capacity;
+    const statusColor = atCapacity ? "text-amber-300" : "text-emerald-300";
+    
+    // Clear persistent outside zone error if it was set
+    if (statusMessageState.outsideZoneError) {
+      debugLog(`[GEO AUTH] [UI] Clearing persistent outside zone error - now in zone ${zone.code}`);
+      statusMessageState.outsideZoneError = null;
+      // Only clear to Idle if not showing a disconnect error
+      // Check if disconnectReason is an error (not normal/null/undefined)
+      const isErrorDisconnect = state.disconnectReason && 
+        state.disconnectReason !== "normal" && 
+        state.disconnectReason !== null;
+      if (!isErrorDisconnect) {
+        setDynamicStatus("—", STATUS_COLORS.idle); // Clear the dynamic status bar
+      } else {
+        debugLog(`[GEO AUTH] [UI] Preserving disconnect error status (reason: ${state.disconnectReason})`);
+      }
+    }
+    
+    locationDisplay.textContent = zone.code;
+    locationDisplay.className = `font-medium ${statusColor}`;
+    
+    updateSlotsDisplay(zone);
+    
+    debugLog(`[GEO AUTH] [UI] Zone status: in zone ${zone.code}, slots ${zone.slots_available}/${zone.slots_max}, at_capacity=${atCapacity}`);
+    return;
+  }
+  
+  // Handle success but outside zone
+  if (zoneData.success && !zoneData.in_zone) {
+    const nearest = zoneData.nearest_zone;
+    const distText = `Outside zone (${nearest.distance_km}km to ${nearest.code})`;
+    
+    // Set persistent outside zone error - blocks all other dynamic status messages
+    statusMessageState.outsideZoneError = distText;
+    debugLog(`[GEO AUTH] [UI] Set persistent outside zone error: "${distText}"`);
+    
+    // Show error in dynamic status bar (red) - this overrides "Select external antenna" message
+    setDynamicStatus(distText, STATUS_COLORS.error);
+    
+    // Log as error
+    debugError(`[GEO AUTH] ${distText}`);
+    
+    locationDisplay.textContent = "—";
+    locationDisplay.className = "font-medium text-slate-400";
+    
+    updateSlotsDisplay(null);
+    
+    debugLog(`[GEO AUTH] [UI] Zone status: outside zone, nearest is ${nearest.code} at ${nearest.distance_km}km`);
+    return;
+  }
+  
+  // Handle error states
+  if (!zoneData.success) {
+    const reason = zoneData.reason || "unknown";
+    let statusText = "Zone check failed";
+    let dynamicStatusText = null;  // For persistent errors in dynamic status bar
+    
+    if (reason === "gps_stale") {
+      statusText = "GPS: stale";
+    } else if (reason === "gps_inaccurate") {
+      statusText = "GPS: inaccurate";
+    } else if (reason === "outofdate") {
+      // App version outdated - show persistent error in dynamic status bar
+      statusText = "";  // Clear location display
+      dynamicStatusText = zoneData.message || "App version outdated, please update";
+      
+      // Set persistent error - blocks all other dynamic status messages
+      statusMessageState.outsideZoneError = dynamicStatusText;
+      debugLog(`[GEO AUTH] Set persistent outofdate error: "${dynamicStatusText}"`);
+      
+      // Show error in dynamic status bar (red)
+      setDynamicStatus(dynamicStatusText, STATUS_COLORS.error);
+      
+      // Disable Connect button - can't use app with outdated version
+      setConnectButtonDisabled(true);
+      
+      // Clear current zone to stop slot refresh timer from running
+      state.currentZone = null;
+      
+      // Log as error (single consolidated message)
+      debugError(`[GEO AUTH] ${dynamicStatusText}`);
+    }
+    
+    locationDisplay.textContent = statusText || "Unknown";
+    locationDisplay.className = "font-medium text-red-400";
+    
+    updateSlotsDisplay(null);
+    
+    // Only log if not already logged above (outofdate case)
+    if (reason !== "outofdate") {
+      debugError(`[GEO AUTH] [UI] Zone check error: reason=${reason}, message=${zoneData.message}`);
+    }
+    return;
+  }
+}
+
+/**
+ * Update slots display in settings panel
+ * @param {Object|null} zone - Zone object with slots_available and slots_max, or null for N/A
+ */
+function updateSlotsDisplay(zone) {
+  if (!zone) {
+    slotsDisplay.textContent = "N/A";
+    slotsDisplay.className = "font-medium text-slate-400";
+    debugLog(`[UI] Slots display: N/A`);
+    return;
+  }
+  
+  const { slots_available, slots_max, at_capacity, code } = zone;
+  
+  if (at_capacity || slots_available === 0) {
+    slotsDisplay.textContent = `Full (0/${slots_max})`;
+    slotsDisplay.className = "font-medium text-amber-300";
+    
+    // Update location display to amber (slots full)
+    locationDisplay.className = "font-medium text-amber-300";
+    
+    // Show warning in dynamic status bar (yellow, not blocking - user can still connect for RX)
+    const warnMsg = `No TX wardriving slots for ${code}. RX only.`;
+    setDynamicStatus(warnMsg, STATUS_COLORS.warning);
+    debugLog(`[GEO AUTH] ${warnMsg}`);
+    
+    debugLog(`[UI] Slots display: Full (0/${slots_max})`);
+  } else {
+    slotsDisplay.textContent = `${slots_available} available`;
+    slotsDisplay.className = "font-medium text-emerald-300";
+    
+    // Update location display to green (slots available)
+    locationDisplay.className = "font-medium text-emerald-300";
+    
+    debugLog(`[UI] Slots display: ${slots_available} available (${slots_available}/${slots_max})`);
+    
+    // Re-check connect button state now that slots are available
+    // Note: updateConnectButtonState() will set the appropriate status message
+    // based on both zone status AND antenna selection
+    updateConnectButtonState();
+  }
+}
+
+/**
+ * Start/restart the 30s slot refresh timer (disconnected mode)
+ * Called on initial zone check success, after disconnect, and after connection failure
+ */
+function startSlotRefreshTimer() {
+  // Clear any existing timer
+  if (state.slotRefreshTimerId) {
+    clearInterval(state.slotRefreshTimerId);
+  }
+  
+  state.slotRefreshTimerId = setInterval(async () => {
+    const mode = state.connection ? "connected" : "disconnected";
+    debugLog(`[GEO AUTH] [SLOT REFRESH] 30s timer triggered (${mode} mode)`);
+    // Continue checking even while connected to keep slot display current
+    // Re-check zone to refresh slots or detect zone re-entry
+    const coords = await getValidGpsForZoneCheck();
+    if (coords) {
+      const result = await checkZoneStatus(coords);
+      if (result.success && result.in_zone && result.zone) {
+        // In zone (or returned to zone) - update slots display
+        const wasOutside = !state.currentZone;
+        state.currentZone = result.zone;
+        state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+        updateZoneStatusUI(result);
+        updateMapOnZoneCheck(coords);  // Update map and GPS overlay
+        if (wasOutside) {
+          debugLog(`[GEO AUTH] [SLOT REFRESH] ✅ Returned to zone: ${result.zone.name}, slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+        } else {
+          debugLog(`[GEO AUTH] [SLOT REFRESH] Updated slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+        }
+      } else if (result.success && !result.in_zone) {
+        // Outside zone - update UI to show outside zone status
+        state.currentZone = null;
+        state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+        updateZoneStatusUI(result);
+        updateMapOnZoneCheck(coords);
+        debugLog(`[GEO AUTH] [SLOT REFRESH] Outside zone, nearest: ${result.nearest_zone?.name} at ${result.nearest_zone?.distance_km}km`);
+      } else if (result && !result.success) {
+        // Handle error states (outofdate, etc.) - this will disable button and clear currentZone
+        state.currentZone = null;
+        updateZoneStatusUI(result);
+        debugLog(`[GEO AUTH] [SLOT REFRESH] Zone check failed: ${result.reason || 'unknown'}`);
+      }
+    }
+  }, 30000); // 30 seconds
+  debugLog("[GEO AUTH] Started 30s slot refresh timer");
+}
+
+/**
+ * Perform zone check on app launch
+ * - Disables Connect button initially
+ * - Shows "Checking zone..." status
+ * - Gets GPS and performs zone check
+ * - Updates UI and enables Connect if in valid zone
+ * - Starts 30s slot refresh timer
+ * - Centers map on checked location
+ */
+async function performAppLaunchZoneCheck() {
+  debugLog("[GEO AUTH] [INIT] Performing app launch zone check");
+  
+  // Disable Connect button initially
+  setConnectButtonDisabled(true);
+  debugLog("[GEO AUTH] [INIT] Connect button disabled during zone check");
+  
+  // Show "Checking zone..." in location display
+  locationDisplay.textContent = "Checking...";
+  locationDisplay.className = "font-medium text-slate-400";
+  debugLog("[GEO AUTH] [INIT] Location display set to 'Checking...'");
+  
+  try {
+    // Get valid GPS coordinates
+    debugLog("[GEO AUTH] [INIT] Getting valid GPS coordinates for zone check");
+    const coords = await getValidGpsForZoneCheck();
+    
+    if (!coords) {
+      debugWarn("[GEO AUTH] [INIT] Failed to get valid GPS coordinates after retries");
+      updateZoneStatusUI(null, "gps_unavailable");
+      // Connect button remains disabled
+      return;
+    }
+    
+    debugLog(`[GEO AUTH] [INIT] Valid GPS acquired: ${coords.lat.toFixed(6)}, ${coords.lon.toFixed(6)}`);
+    
+    // Perform zone check
+    debugLog("[GEO AUTH] [INIT] Calling checkZoneStatus()");
+    const result = await checkZoneStatus(coords);
+    
+    // Store result in state based on response
+    if (result.success && result.in_zone && result.zone) {
+      // User is inside a valid zone
+      state.currentZone = result.zone;
+      state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+      debugLog(`[GEO AUTH] [INIT] ✅ Zone check successful: ${result.zone.name} (${result.zone.code})`);
+      debugLog(`[GEO AUTH] [INIT] In zone: ${result.in_zone}, At capacity: ${result.zone.at_capacity}`);
+    } else if (result.success && !result.in_zone) {
+      // User is outside all zones - this is a valid response, not a failure
+      state.currentZone = null;
+      state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+      const nearest = result.nearest_zone;
+      debugLog(`[GEO AUTH] [INIT] ⚠️ Outside all zones, nearest: ${nearest.name} (${nearest.code}) at ${nearest.distance_km}km`);
+    } else {
+      // Actual failure (API error, network error, etc.)
+      state.currentZone = null;
+      state.lastZoneCheckCoords = null;
+      debugWarn(`[GEO AUTH] [INIT] Zone check failed: ${result.error || "Unknown error"}`);
+    }
+    
+    // Update UI with result
+    updateZoneStatusUI(result, null);
+    
+    // Update map and GPS overlay with zone check coordinates
+    updateMapOnZoneCheck(coords);
+    
+    // Enable Connect button only if in valid zone AND external antenna selected
+    if (result.success && result.in_zone) {
+      updateConnectButtonState();  // Checks both zone and antenna
+      debugLog("[GEO AUTH] [INIT] ✅ Zone check passed, updateConnectButtonState() called");
+      
+      // Start 30s slot refresh timer (disconnected mode)
+      startSlotRefreshTimer();
+    } else {
+      setConnectButtonDisabled(true);
+      debugLog("[GEO AUTH] [INIT] ❌ Connect button remains disabled (not in valid zone or check failed)");
+    }
+    
+  } catch (err) {
+    debugError(`[GEO AUTH] [INIT] Exception during app launch zone check: ${err.message}`);
+    updateZoneStatusUI(null, "error");
+    setConnectButtonDisabled(true);
+  }
+}
+
+/**
+ * Handle zone recheck when GPS moves >= 100m from last zone check
+ * Called from GPS watch callback ONLY when disconnected
+ * Updates zone status display for user awareness
+ * @param {Object} newCoords - Current GPS coordinates {lat, lon}
+ */
+async function handleZoneCheckOnMove(newCoords) {
+  // Skip if no previous zone check or check already in progress
+  if (!state.lastZoneCheckCoords || state.zoneCheckInProgress) {
+    return;
+  }
+  
+  // Calculate distance from last zone check location
+  const distance = calculateHaversineDistance(
+    state.lastZoneCheckCoords.lat,
+    state.lastZoneCheckCoords.lon,
+    newCoords.lat,
+    newCoords.lon
+  );
+  
+  debugLog(`[GEO AUTH] [GPS MOVEMENT] Distance from last zone check: ${distance.toFixed(1)}m (threshold: ${ZONE_CHECK_DISTANCE_M}m)`);
+  
+  // Trigger zone check if moved >= 100m
+  if (distance >= ZONE_CHECK_DISTANCE_M) {
+    debugLog(`[GEO AUTH] [GPS MOVEMENT] ⚠️ Moved ${distance.toFixed(1)}m - triggering zone recheck (disconnected mode)`);
+    
+    state.zoneCheckInProgress = true;
+    
+    try {
+      // Perform zone check with current coordinates
+      const result = await checkZoneStatus(newCoords);
+      
+      // Update state
+      if (result.success && result.zone) {
+        state.currentZone = result.zone;
+        state.lastZoneCheckCoords = { lat: newCoords.lat, lon: newCoords.lon };
+        debugLog(`[GEO AUTH] [GPS MOVEMENT] ✅ Zone recheck successful: ${result.zone.name} (${result.zone.code})`);
+      } else {
+        state.currentZone = null;
+        state.lastZoneCheckCoords = null;
+        debugWarn(`[GEO AUTH] [GPS MOVEMENT] Zone recheck failed: ${result.error || "Unknown error"}`);
+      }
+      
+      // Update UI with new zone status
+      updateZoneStatusUI(result, null);
+      
+      // Update map and GPS overlay with new coordinates
+      updateMapOnZoneCheck(newCoords);
+      
+    } catch (err) {
+      debugError(`[GEO AUTH] [GPS MOVEMENT] Exception during zone recheck: ${err.message}`);
+    } finally {
+      state.zoneCheckInProgress = false;
+    }
+  }
 }
 
 
@@ -881,17 +1451,6 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
  * @param {number} lon - Longitude to check
  * @returns {boolean} True if within geofence, false otherwise
  */
-function validateGeofence(lat, lon) {
-  debugLog(`[GEOFENCE] Validating geofence for coordinates: (${lat.toFixed(5)}, ${lon.toFixed(5)})`);
-  debugLog(`[GEOFENCE] Geofence center: (${OTTAWA_CENTER_LAT}, ${OTTAWA_CENTER_LON}), radius: ${OTTAWA_GEOFENCE_RADIUS_M}m`);
-  
-  const distance = calculateHaversineDistance(lat, lon, OTTAWA_CENTER_LAT, OTTAWA_CENTER_LON);
-  const isWithinGeofence = distance <= OTTAWA_GEOFENCE_RADIUS_M;
-  
-  debugLog(`[GEOFENCE] Geofence validation: distance=${distance.toFixed(2)}m, within_geofence=${isWithinGeofence}`);
-  return isWithinGeofence;
-}
-
 /**
  * Validate that current GPS coordinates are at least 25m from last successful ping
  * @param {number} lat - Current latitude
@@ -946,7 +1505,51 @@ function updateDistanceUi() {
   }
 }
 
+/**
+ * Start periodic noise floor updates (5 second interval)
+ * Only called if feature is supported by firmware
+ */
+function startNoiseFloorUpdates() {
+  // Clear any existing timer
+  stopNoiseFloorUpdates();
+  
+  // Start periodic updates every 5 seconds
+  state.noiseFloorUpdateTimer = setInterval(async () => {
+    if (!state.connection) {
+      debugLog("[BLE] No connection, stopping noise floor updates");
+      stopNoiseFloorUpdates();
+      return;
+    }
+    
+    try {
+      // Don't pass timeout - let the interval handle cadence, avoids library timeout bug
+      const stats = await state.connection.getRadioStats(null);
+      if (stats && typeof stats.noiseFloor !== 'undefined') {
+        state.lastNoiseFloor = stats.noiseFloor;
+        debugLog(`[BLE] Noise floor updated: ${state.lastNoiseFloor}`);
+        // Update connection bar
+        if (state.connection) {
+          setConnStatus("Connected", STATUS_COLORS.success);
+        }
+      }
+    } catch (e) {
+      // Silently ignore periodic update failures - keep showing last known value
+    }
+  }, 5000);
+  
+  debugLog("[BLE] Noise floor update timer started (5s interval)");
+}
 
+/**
+ * Stop periodic noise floor updates
+ */
+function stopNoiseFloorUpdates() {
+  if (state.noiseFloorUpdateTimer) {
+    clearInterval(state.noiseFloorUpdateTimer);
+    state.noiseFloorUpdateTimer = null;
+    debugLog("[BLE] Noise floor update timer stopped");
+  }
+}
 
 // ---- Geolocation ----
 async function getCurrentPosition() {
@@ -1041,6 +1644,12 @@ function startGeoWatch() {
       if (state.rxTracking. isWardriving && state.rxBatchBuffer.size > 0) {
         checkAllRxBatchesForDistanceTrigger({ lat: pos.coords. latitude, lon: pos.coords. longitude });
       }
+      
+      // Check if GPS movement triggers zone recheck (100m threshold)
+      // Only monitor while disconnected - zone validation while connected happens via /wardrive posts
+      if (!state.connection) {
+        handleZoneCheckOnMove({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+      }
     },
     (err) => {
       debugError(`[GPS] GPS watch error: ${err.code} - ${err.message}`);
@@ -1116,6 +1725,9 @@ async function primeGpsOnce() {
  * This allows any hashtag channel to be used (e.g., #wardriving, #wardrive, #test).
  * Channel names must start with # and contain only a-z, 0-9, and dashes.
  * 
+ * NOTE: This function is ONLY for hashtag channels. The "Public" channel (without hashtag)
+ * uses a fixed key defined in PUBLIC_CHANNEL_FIXED_KEY constant.
+ * 
  * Algorithm: sha256(channelName).subarray(0, 16)
  * 
  * @param {string} channelName - The hashtag channel name (e.g., "#wardriving")
@@ -1161,6 +1773,21 @@ async function deriveChannelKey(channelName) {
   debugLog(`[CHANNEL] Channel key derived successfully (${channelKey.length} bytes)`);
   
   return channelKey;
+}
+
+/**
+ * Get channel key for any channel (handles both Public and hashtag channels)
+ * Provides a unified interface for retrieving channel keys regardless of type
+ * @param {string} channelName - Channel name (e.g., "Public", "#wardriving", "#testing")
+ * @returns {Promise<Uint8Array>} The 16-byte channel key
+ */
+async function getChannelKey(channelName) {
+  if (channelName === 'Public') {
+    debugLog(`[CHANNEL] Using fixed key for Public channel`);
+    return PUBLIC_CHANNEL_FIXED_KEY;
+  } else {
+    return await deriveChannelKey(channelName);
+  }
 }
 
 // ---- Channel helpers ----
@@ -1260,6 +1887,58 @@ function getGpsMaximumAge(minAge = 1000) {
   return Math.max(minAge, intervalMs - GPS_FRESHNESS_BUFFER_MS);
 }
 
+// ---- Device Model Parsing Functions ----
+
+/**
+ * Parse device model string by removing build suffix (e.g., "nightly-e31c46f")
+ * @param {string} rawModel - Raw manufacturer model string from deviceQuery
+ * @returns {string} Cleaned model string without build suffix
+ */
+function parseDeviceModel(rawModel) {
+  if (!rawModel || rawModel === "-") return "";
+  
+  // Strip null characters (\u0000) that may be present in firmware strings
+  const sanitizedModel = rawModel.replace(/\u0000/g, '');
+  
+  // Strip build suffix like "nightly-e31c46f", "stable-a1b2c3d", etc.
+  // Match pattern: word-hexstring at end of string
+  const cleanedModel = sanitizedModel.replace(/(nightly|stable|beta|alpha|dev)-[a-f0-9]{7,}$/i, '').trim();
+  
+  debugLog(`[DEVICE MODEL] Parsed model: "${rawModel.substring(0, 50)}..." -> "${cleanedModel}"`);
+  return cleanedModel;
+}
+
+/**
+ * Find device configuration in DEVICE_MODELS database
+ * @param {string} modelString - Cleaned model string (without build suffix)
+ * @returns {Object|null} Device config object with {manufacturer, shortName, power, txPower} or null if not found
+ */
+function findDeviceConfig(modelString) {
+  if (!modelString || !DEVICE_MODELS || DEVICE_MODELS.length === 0) {
+    return null;
+  }
+  
+  // Try exact match first
+  let device = DEVICE_MODELS.find(d => d.manufacturer === modelString);
+  if (device) {
+    debugLog(`[DEVICE MODEL] Exact match found: "${device.manufacturer}"`);
+    return device;
+  }
+  
+  // Try partial match (model string contains manufacturer string or vice versa)
+  device = DEVICE_MODELS.find(d => 
+    modelString.includes(d.manufacturer) || d.manufacturer.includes(modelString)
+  );
+  
+  if (device) {
+    debugLog(`[DEVICE MODEL] Partial match found: "${device.manufacturer}"`);
+    return device;
+  }
+  
+  debugLog(`[DEVICE MODEL] No match found for: "${modelString}"`);
+  return null;
+}
+
 function getCurrentPowerSetting() {
   const checkedPower = document.querySelector('input[name="power"]:checked');
   return checkedPower ? checkedPower.value : "";
@@ -1283,114 +1962,319 @@ function buildPayload(lat, lon) {
  * @returns {string} Device name or default identifier
  */
 function getDeviceIdentifier() {
-  const deviceText = deviceInfoEl?.textContent;
-  return (deviceText && deviceText !== "—") ? deviceText : MESHMAPPER_DEFAULT_WHO;
+  // Use state.deviceName which is set during connect from selfInfo.name
+  if (state.deviceName && state.deviceName !== "[No device]") {
+    return state.deviceName;
+  }
+  return MESHMAPPER_DEFAULT_WHO;
+}
+
+// ---- Geo-Auth Zone Checking ----
+
+/**
+ * Get valid GPS coordinates for zone checking with retry logic
+ * @param {number} maxRetries - Maximum number of retry attempts (default: 3)
+ * @param {number} retryDelayMs - Delay between retries in milliseconds (default: 5000)
+ * @returns {Promise<Object|null>} GPS object {lat, lon, accuracy_m, timestamp} or null if failed
+ */
+async function getValidGpsForZoneCheck(maxRetries = 3, retryDelayMs = 5000) {
+  debugLog(`[GPS] [GEO AUTH] Getting valid GPS for zone check (max retries: ${maxRetries})`);
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      debugLog(`[GPS] [GEO AUTH] GPS acquisition attempt ${attempt}/${maxRetries}`);
+      
+      const position = await getCurrentPosition();
+      const lat = position.coords.latitude;
+      const lng = position.coords.longitude;
+      const accuracy_m = position.coords.accuracy;
+      const timestamp = Math.floor(position.timestamp / 1000); // Convert to Unix seconds
+      
+      // Validate freshness (< 60 seconds old)
+      const ageMs = Date.now() - position.timestamp;
+      if (ageMs > 60000) {
+        debugWarn(`[GPS] [GEO AUTH] GPS too stale: ${ageMs}ms old (max 60000ms)`);
+        if (attempt < maxRetries) {
+          debugLog(`[GPS] [GEO AUTH] Retrying in ${retryDelayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+          continue;
+        }
+        return null;
+      }
+      
+      // Validate accuracy (< 50 meters)
+      if (accuracy_m > 50) {
+        debugWarn(`[GPS] [GEO AUTH] GPS too inaccurate: ${accuracy_m}m (max 50m)`);
+        if (attempt < maxRetries) {
+          debugLog(`[GPS] [GEO AUTH] Retrying in ${retryDelayMs}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+          continue;
+        }
+        return null;
+      }
+      
+      debugLog(`[GPS] [GEO AUTH] Valid GPS acquired: lat=${lat.toFixed(6)}, lon=${lng.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, age=${ageMs}ms`);
+      return { lat, lon: lng, accuracy_m, timestamp };
+      
+    } catch (error) {
+      debugError(`[GPS] [GEO AUTH] GPS acquisition failed (attempt ${attempt}/${maxRetries}): ${error.message}`);
+      if (attempt < maxRetries) {
+        debugLog(`[GPS] [GEO AUTH] Retrying in ${retryDelayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+      }
+    }
+  }
+  
+  debugError(`[GPS] [GEO AUTH] GPS acquisition failed after ${maxRetries} attempts`);
+  return null;
 }
 
 /**
- * Check capacity / slot availability with MeshMapper API
- * @param {string} reason - Either "connect" (acquire slot) or "disconnect" (release slot)
+ * Check zone status via geo-auth API
+ * @param {Object} coords - GPS coordinates object from getValidGpsForZoneCheck()
+ * @param {number} coords.lat - Latitude
+ * @param {number} coords.lon - Longitude
+ * @param {number} coords.accuracy_m - GPS accuracy in meters
+ * @param {number} coords.timestamp - Unix timestamp in seconds
+ * @returns {Promise<Object|null>} Zone status response or null on error
+ */
+async function checkZoneStatus(coords) {
+  const { lat, lon, accuracy_m, timestamp } = coords;
+  debugLog(`[GEO AUTH] Checking zone status: lat=${lat.toFixed(6)}, lon=${lon.toFixed(6)}, accuracy=${accuracy_m.toFixed(1)}m, timestamp=${timestamp}`);
+  
+  try {
+    // API expects lng, so convert lon to lng for the payload
+    // Include app version for version checking
+    const payload = { lat, lng: lon, accuracy_m, ver: APP_VERSION, timestamp };
+    
+    debugLog(`[GEO AUTH] Sending POST to ${GEO_AUTH_STATUS_URL}`);
+    
+    const response = await fetch(GEO_AUTH_STATUS_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) {
+      debugError(`[GEO AUTH] Zone status API returned error status ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    debugLog(`[GEO AUTH] Zone status response:`, data);
+    
+    // Log detailed response based on result
+    if (data.success && data.in_zone) {
+      debugLog(`[GEO AUTH] ✅ In zone: ${data.zone.name} (${data.zone.code}), slots: ${data.zone.slots_available}/${data.zone.slots_max}, at_capacity: ${data.zone.at_capacity}`);
+    } else if (data.success && !data.in_zone) {
+      debugLog(`[GEO AUTH] ⚠️ Outside all zones, nearest: ${data.nearest_zone.name} (${data.nearest_zone.code}) at ${data.nearest_zone.distance_km}km`);
+    } else if (!data.success) {
+      // Only log non-outofdate failures here (outofdate logged in updateZoneStatusUI)
+      if (data.reason !== "outofdate") {
+        debugError(`[GEO AUTH] ❌ Zone check failed: reason=${data.reason}, message=${data.message}`);
+      }
+    }
+    
+    return data;
+    
+  } catch (error) {
+    debugError(`[GEO AUTH] Network error during zone check: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * Request authentication with MeshMapper geo-auth API
+ * Handles both connect (acquire session) and disconnect (release session)
+ * @param {string} reason - Either "connect" (acquire session) or "disconnect" (release session)
  * @returns {Promise<boolean>} True if allowed to continue, false otherwise
  */
-async function checkCapacity(reason) {
+async function requestAuth(reason) {
   // Validate public key exists
   if (!state.devicePublicKey) {
-    debugError("[CAPACITY] checkCapacity called but no public key stored");
+    debugError("[AUTH] requestAuth called but no public key stored");
     return reason === "connect" ? false : true; // Fail closed on connect, allow disconnect
   }
 
   // Set status for connect requests
   if (reason === "connect") {
-    setDynamicStatus("Acquiring wardriving slot", STATUS_COLORS.info);
+    setDynamicStatus("Authenticating to MeshMapper", STATUS_COLORS.info);
   }
 
   try {
+    // Build base payload
     const payload = {
       key: MESHMAPPER_API_KEY,
       public_key: state.devicePublicKey,
-      ver: APP_VERSION,
-      who: getDeviceIdentifier(),
-      ver: APP_VERSION,
       reason: reason
     };
 
-    debugLog(`[CAPACITY] Checking capacity: reason=${reason}, public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}`);
+    // For connect: add device metadata and GPS coords
+    if (reason === "connect") {
+      // Acquire fresh GPS for auth
+      debugLog("[AUTH] Acquiring fresh GPS for auth request");
+      const coords = await getValidGpsForZoneCheck();
+      
+      if (!coords) {
+        debugError("[AUTH] Failed to acquire GPS for auth");
+        state.disconnectReason = "gps_unavailable";
+        return false;
+      }
+      
+      // Add device metadata (bound to session at auth time)
+      payload.who = getDeviceIdentifier();
+      payload.ver = APP_VERSION;
+      payload.power = getCurrentPowerSetting();
+      payload.iata = state.currentZone?.code || WARDIVE_IATA_CODE;
+      
+      // Get short model name from database, or sanitized raw model if unknown
+      const parsedModel = parseDeviceModel(state.deviceModel);
+      const deviceConfig = findDeviceConfig(parsedModel);
+      payload.model = deviceConfig?.shortName || parsedModel || "Unknown";
+      
+      // Add GPS coords (use lng for API, internally we use lon)
+      payload.coords = {
+        lat: coords.lat,
+        lng: coords.lon,  // Convert lon → lng for API
+        accuracy_m: coords.accuracy_m,
+        timestamp: coords.timestamp
+      };
+      
+      debugLog(`[AUTH] Connect request: public_key=${state.devicePublicKey.substring(0, 16)}..., who=${payload.who}, iata=${payload.iata}`);
+    } else {
+      // For disconnect: add session_id
+      payload.session_id = state.wardriveSessionId;
+      debugLog(`[AUTH] Disconnect request: public_key=${state.devicePublicKey.substring(0, 16)}..., session_id=${payload.session_id}`);
+    }
 
-    const response = await fetch(MESHMAPPER_CAPACITY_CHECK_URL, {
+    const response = await fetch(GEO_AUTH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
-    if (!response.ok) {
-      debugError(`[CAPACITY] Capacity check API returned error status ${response.status}`);
-      // Fail closed on network errors for connect
+    // Parse JSON body (even on error responses - server returns error codes in body)
+    let data;
+    try {
+      data = await response.json();
+    } catch (parseError) {
+      debugError(`[AUTH] Failed to parse response JSON: ${parseError.message}`);
       if (reason === "connect") {
-        debugError("[CAPACITY] Failing closed (denying connection) due to API error");
-        state.disconnectReason = "app_down"; // Track disconnect reason
+        state.disconnectReason = "app_down";
+        return false;
+      }
+      return true; // Allow disconnect to proceed
+    }
+
+    // Handle HTTP-level errors with known error codes in body
+    if (!response.ok) {
+      const serverMsg = data?.message || 'No message';
+      addErrorLogEntry(`API returned error status ${response.status}: ${serverMsg}`, "AUTH");
+      debugError(`[AUTH] API returned error status ${response.status}: ${serverMsg}`);
+      
+      // Check if server returned a known error code
+      if (data && data.reason && REASON_MESSAGES[data.reason]) {
+        debugLog(`[AUTH] Known error code: ${data.reason} - ${data.message || REASON_MESSAGES[data.reason]}`);
+        if (reason === "connect") {
+          state.disconnectReason = data.reason;
+          return false;
+        }
+        return true; // Allow disconnect to proceed
+      }
+      
+      // Unknown error - fail closed for connect, include server message
+      if (reason === "connect") {
+        addErrorLogEntry(`Auth failed: ${data?.reason || 'unknown'} - ${serverMsg}`, "AUTH");
+        debugError(`[AUTH] Failing closed (denying connection) due to unknown API error: ${data?.reason || 'unknown'}`);
+        state.disconnectReason = "app_down";
         return false;
       }
       return true; // Always allow disconnect to proceed
     }
+    debugLog(`[AUTH] Response: success=${data.success}, tx_allowed=${data.tx_allowed}, rx_allowed=${data.rx_allowed}, session_id=${data.session_id || 'none'}, reason=${data.reason || 'none'}`);
 
-    const data = await response.json();
-    debugLog(`[CAPACITY] Capacity check response: allowed=${data.allowed}, session_id=${data.session_id || 'missing'}, debug_mode=${data.debug_mode || 'not set'}, reason=${data.reason || 'none'}`);
-
-    // Handle capacity full vs. allowed cases separately
-    if (data.allowed === false && reason === "connect") {
-      // Check if a reason code is provided
-      if (data.reason) {
-        debugLog(`[CAPACITY] API returned reason code: ${data.reason}`);
-        state.disconnectReason = data.reason; // Store the reason code directly
-      } else {
-        state.disconnectReason = "capacity_full"; // Default to capacity_full
-      }
-      return false;
-    }
-    
-    // For connect requests, validate session_id and check debug_mode
-    if (reason === "connect" && data.allowed === true) {
-      if (!data.session_id) {
-        debugError("[CAPACITY] Capacity check returned allowed=true but session_id is missing");
-        state.disconnectReason = "session_id_error"; // Track disconnect reason
+    // Handle connect response
+    if (reason === "connect") {
+      // Check for full denial
+      if (data.success === false) {
+        debugLog(`[AUTH] Connect denied: ${data.reason} - ${data.message || ''}`);
+        state.disconnectReason = data.reason || "auth_denied";
         return false;
       }
       
-      // Store the session_id for use in MeshMapper API posts
+      // Success - store session info
+      if (!data.session_id) {
+        debugError("[AUTH] Auth returned success=true but session_id is missing");
+        state.disconnectReason = "session_id_error";
+        return false;
+      }
+      
+      // Store session data
       state.wardriveSessionId = data.session_id;
-      debugLog(`[CAPACITY] Wardrive session ID received and stored: ${state.wardriveSessionId}`);
+      state.txAllowed = data.tx_allowed === true;
+      state.rxAllowed = data.rx_allowed === true;
+      state.sessionExpiresAt = data.expires_at || null;
+      
+      debugLog(`[AUTH] Session acquired: id=${state.wardriveSessionId}, tx=${state.txAllowed}, rx=${state.rxAllowed}, expires=${state.sessionExpiresAt}`);
+      
+      // Schedule heartbeat to keep session alive
+      if (state.sessionExpiresAt) {
+        scheduleHeartbeat(state.sessionExpiresAt);
+      }
+      
+      // Check for RX-only scenario (zone_full)
+      if (!state.txAllowed && state.rxAllowed) {
+        debugLog(`[AUTH] RX-only mode: TX slots full, reason=${data.reason}`);
+        // Don't set disconnectReason - this is a partial success
+      }
       
       // Check for debug_mode flag (optional field)
       if (data.debug_mode === 1) {
         state.debugMode = true;
-        debugLog(`[CAPACITY] 🐛 DEBUG MODE ENABLED by API`);
+        debugLog(`[AUTH] 🐛 DEBUG MODE ENABLED by API`);
       } else {
         state.debugMode = false;
-        debugLog(`[CAPACITY] Debug mode NOT enabled`);
       }
+      
+      return true; // Success (full or RX-only)
     }
     
-    // For disconnect requests, clear the session_id and debug mode
+    // Handle disconnect response
     if (reason === "disconnect") {
-      if (state.wardriveSessionId) {
-        debugLog(`[CAPACITY] Clearing wardrive session ID on disconnect: ${state.wardriveSessionId}`);
-        state.wardriveSessionId = null;
-      }
+      // Clear session state regardless of server response
+      debugLog(`[AUTH] Clearing session state on disconnect`);
+      state.wardriveSessionId = null;
+      state.txAllowed = false;
+      state.rxAllowed = false;
+      state.sessionExpiresAt = null;
       state.debugMode = false;
-      debugLog(`[CAPACITY] Debug mode cleared on disconnect`);
+      
+      if (data.success === true && data.disconnected === true) {
+        debugLog(`[AUTH] Disconnect confirmed by server`);
+      } else if (data.success === false) {
+        debugWarn(`[AUTH] Server reported disconnect error: ${data.reason} - ${data.message || ''}`);
+        // Don't fail - we still clean up locally
+      }
+      
+      return true; // Always return true for disconnect
     }
-    
-    return data.allowed === true;
 
   } catch (error) {
-    debugError(`[CAPACITY] Capacity check failed: ${error.message}`);
+    debugError(`[AUTH] Request failed: ${error.message}`);
     
     // Fail closed on network errors for connect
     if (reason === "connect") {
-      debugError("[CAPACITY] Failing closed (denying connection) due to network error");
-      state.disconnectReason = "app_down"; // Track disconnect reason
+      debugError("[AUTH] Failing closed (denying connection) due to network error");
+      state.disconnectReason = "app_down";
       return false;
     }
+    
+    // For disconnect, clear state even on error
+    state.wardriveSessionId = null;
+    state.txAllowed = false;
+    state.rxAllowed = false;
+    state.sessionExpiresAt = null;
+    state.debugMode = false;
     
     return true; // Always allow disconnect to proceed
   }
@@ -1431,186 +2315,55 @@ function buildDebugData(metadata, heardByte, repeaterId) {
 }
 
 /**
- * Post wardrive ping data to MeshMapper API
- * @param {number} lat - Latitude
- * @param {number} lon - Longitude
- * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
- */
-async function postToMeshMapperAPI(lat, lon, heardRepeats) {
-  try {
-    // Validate session_id exists before posting
-    if (!state.wardriveSessionId) {
-      debugError("[API QUEUE] Cannot post to MeshMapper API: no session_id available");
-      setDynamicStatus("Missing session ID", STATUS_COLORS.error);
-      state.disconnectReason = "session_id_error"; // Track disconnect reason
-      // Disconnect after a brief delay to ensure user sees the error message
-      setTimeout(() => {
-        disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
-      }, 1500);
-      return; // Exit early
-    }
-    
-    const payload = {
-      key: MESHMAPPER_API_KEY,
-      lat,
-      lon,
-      who: getDeviceIdentifier(),
-      power: getCurrentPowerSetting(),
-      external_antenna: getExternalAntennaSetting(),
-      heard_repeats: heardRepeats,
-      ver: APP_VERSION,
-      test: 0,
-      iata: WARDIVE_IATA_CODE,
-      session_id: state.wardriveSessionId,
-      WARDRIVE_TYPE: "TX"
-    };
-
-    // Add debug data if debug mode is enabled and repeater data is available
-    if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
-      debugLog(`[API QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
-      
-      const debugDataArray = [];
-      
-      for (const repeater of state.tempTxRepeaterData) {
-        if (repeater.metadata) {
-          const heardByte = repeater.repeaterId;  // First byte of path
-          const debugData = buildDebugData(repeater.metadata, heardByte, repeater.repeaterId);
-          debugDataArray.push(debugData);
-          debugLog(`[API QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
-        }
-      }
-      
-      if (debugDataArray.length > 0) {
-        payload.debug_data = debugDataArray;
-        debugLog(`[API QUEUE] 🐛 TX payload includes ${debugDataArray.length} debug_data entries`);
-      }
-      
-      // Clear temp data after use
-      state.tempTxRepeaterData = null;
-    }
-
-    debugLog(`[API QUEUE] Posting to MeshMapper API: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, who=${payload.who}, power=${payload.power}, heard_repeats=${heardRepeats}, ver=${payload.ver}, iata=${payload.iata}, session_id=${payload.session_id}, WARDRIVE_TYPE=${payload.WARDRIVE_TYPE}${payload.debug_data ? `, debug_data=${payload.debug_data.length} entries` : ''}`);
-
-    const response = await fetch(MESHMAPPER_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-
-    debugLog(`[API QUEUE] MeshMapper API response status: ${response.status}`);
-
-    // Always try to parse the response body to check for slot revocation
-    // regardless of HTTP status code
-    try {
-      const data = await response.json();
-      debugLog(`[API QUEUE] MeshMapper API response data: ${JSON.stringify(data)}`);
-      
-      // Check if slot has been revoked
-      if (data.allowed === false) {
-        debugError("[API QUEUE] MeshMapper slot has been revoked");
-        setDynamicStatus("API post failed (revoked)", STATUS_COLORS.error);
-        state.disconnectReason = "slot_revoked"; // Track disconnect reason
-        // Disconnect after a brief delay to ensure user sees the error message
-        setTimeout(() => {
-          disconnect().catch(err => debugError(`[BLE] Disconnect after slot revocation failed: ${err.message}`));
-        }, 1500);
-        return; // Exit early after slot revocation
-      } else if (data.allowed === true) {
-        debugLog("[API QUEUE] MeshMapper API allowed check passed: device still has an active MeshMapper slot");
-      } else {
-        debugError(`[API QUEUE] MeshMapper API response missing 'allowed' field: ${JSON.stringify(data)}`);
-      }
-    } catch (parseError) {
-      debugError(`[API QUEUE] Failed to parse MeshMapper API response: ${parseError.message}`);
-      // Continue operation if we can't parse the response
-    }
-
-    if (!response.ok) {
-      debugError(`[API QUEUE] MeshMapper API returned error status ${response.status}`);
-    } else {
-      debugLog(`[API QUEUE] MeshMapper API post successful (status ${response.status})`);
-    }
-  } catch (error) {
-    // Log error but don't fail the ping
-    debugError(`[API QUEUE] MeshMapper API post failed: ${error.message}`);
-  }
-}
-
-/**
- * Post to MeshMapper API in background (non-blocking)
- * This function runs asynchronously after the RX listening window completes
- * UI status messages are suppressed for successful posts, errors are shown
+ * Queue a TX wardrive entry for batch submission
+ * Called after RX listening window completes with final heard_repeats data
  * @param {number} lat - Latitude
  * @param {number} lon - Longitude
  * @param {number} accuracy - GPS accuracy in meters
  * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
+ * @param {number|null} noisefloor - Noisefloor value captured at ping time
+ * @param {number} timestamp - Unix timestamp captured at ping time
  */
-async function postApiInBackground(lat, lon, accuracy, heardRepeats) {
-  debugLog(`[API QUEUE] postApiInBackground called with heard_repeats="${heardRepeats}"`);
+function queueTxEntry(lat, lon, accuracy, heardRepeats, noisefloor, timestamp) {
+  debugLog(`[WARDRIVE QUEUE] queueTxEntry called: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}", noisefloor=${noisefloor}, timestamp=${timestamp}`);
   
-  // Hidden 3-second delay before API POST (no user-facing status message)
-  debugLog("[API QUEUE] Starting 3-second delay before API POST");
-  await new Promise(resolve => setTimeout(resolve, 3000));
-  
-  // Check if we're still connected before posting (disconnect may have happened during delay)
-  if (!state.connection || !state.wardriveSessionId) {
-    debugLog("[API QUEUE] Skipping background API post - disconnected or no session_id");
-    return;
-  }
-  
-  debugLog("[API QUEUE] 3-second delay complete, posting to API");
-  try {
-    await postToMeshMapperAPI(lat, lon, heardRepeats);
-    debugLog("[API QUEUE] Background API post completed successfully");
-    // No success status message - suppress from UI
-  } catch (error) {
-    debugError("[API QUEUE] Background API post failed:", error);
-    // Errors are propagated to caller for user notification
-    throw error;
-  }
-  
-  // Update map after API post
-  debugLog("[UI] Scheduling coverage map refresh");
-  setTimeout(() => {
-    const shouldRefreshMap = accuracy && accuracy < GPS_ACCURACY_THRESHOLD_M;
-    
-    if (shouldRefreshMap) {
-      debugLog(`[UI] Refreshing coverage map (accuracy ${accuracy}m within threshold)`);
-      scheduleCoverageRefresh(lat, lon);
-    } else {
-      debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
-    }
-  }, MAP_REFRESH_DELAY_MS);
-}
-
-/**
- * Post to MeshMapper API and refresh coverage map after heard repeats are finalized
- * This function now queues TX messages instead of posting immediately
- * @param {number} lat - Latitude
- * @param {number} lon - Longitude
- * @param {number} accuracy - GPS accuracy in meters
- * @param {string} heardRepeats - Heard repeats string (e.g., "4e(1.75),b7(-0.75)" or "None")
- */
-async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
-  debugLog(`[API QUEUE] postApiAndRefreshMap called with heard_repeats="${heardRepeats}"`);
-  
-  // Build payload
-  const payload = {
-    key: MESHMAPPER_API_KEY,
+  // Build entry-only payload (wrapper added by submitWardriveData)
+  const entry = {
+    type: "TX",
     lat,
     lon,
-    who: getDeviceIdentifier(),
-    power: getCurrentPowerSetting(),
+    noisefloor,
     heard_repeats: heardRepeats,
-    ver: APP_VERSION,
-    test: 0,
-    iata: WARDIVE_IATA_CODE,
-    session_id: state.wardriveSessionId
+    timestamp
   };
   
-  // Queue message instead of posting immediately
-  queueApiMessage(payload, "TX");
-  debugLog(`[API QUEUE] TX message queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
+  // Add debug data if debug mode is enabled and repeater data is available
+  if (state.debugMode && state.tempTxRepeaterData && state.tempTxRepeaterData.length > 0) {
+    debugLog(`[WARDRIVE QUEUE] 🐛 Debug mode active - building debug_data array for TX`);
+    
+    const debugDataArray = [];
+    
+    for (const repeater of state.tempTxRepeaterData) {
+      if (repeater.metadata) {
+        const heardByte = repeater.repeaterId;  // First byte of path
+        const debugData = buildDebugData(repeater.metadata, heardByte, repeater.repeaterId);
+        debugDataArray.push(debugData);
+        debugLog(`[WARDRIVE QUEUE] 🐛 Added debug data for TX repeater: ${repeater.repeaterId}`);
+      }
+    }
+    
+    if (debugDataArray.length > 0) {
+      entry.debug_data = debugDataArray;
+      debugLog(`[WARDRIVE QUEUE] 🐛 TX entry includes ${debugDataArray.length} debug_data entries`);
+    }
+    
+    // Clear temp data after use
+    state.tempTxRepeaterData = null;
+  }
+  
+  // Queue entry for batch submission
+  queueWardriveEntry(entry);
+  debugLog(`[WARDRIVE QUEUE] TX entry queued: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, heard_repeats="${heardRepeats}"`);
   
   // Update map after queueing
   setTimeout(() => {
@@ -1623,62 +2376,42 @@ async function postApiAndRefreshMap(lat, lon, accuracy, heardRepeats) {
       debugLog(`[UI] Skipping map refresh (accuracy ${accuracy}m exceeds threshold)`);
     }
     
-    // Unlock ping controls now that message is queued
-    unlockPingControls("after TX message queued");
+    // Unlock ping controls now that entry is queued
+    unlockPingControls("after TX entry queued");
     
-    // Update status based on current mode
-    if (state.connection) {
-      if (state.txRxAutoRunning) {
-        // Check if we should resume a paused auto countdown (manual ping during auto mode)
-        const resumed = resumeAutoCountdown();
-        if (!resumed) {
-          // No paused timer to resume, schedule new auto ping (this was an auto ping)
-          debugLog("[TX/RX AUTO] Scheduling next auto ping");
-          scheduleNextAutoPing();
-        } else {
-          debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
-        }
-      } else {
-        debugLog("[TX/RX AUTO] Setting dynamic status to show queue size");
-        // Status already set by queueApiMessage()
-      }
-    }
+    // NOTE: Auto ping scheduling is handled in the RX listening window completion callback (line ~4939)
+    // Do NOT schedule here - that would create duplicate timers causing rapid-fire pings
+    debugLog("[TX/RX AUTO] TX entry queued, map refresh timer complete");
   }, MAP_REFRESH_DELAY_MS);
 }
 
-// ---- API Batch Queue System ----
+// ---- Wardrive Batch Queue System ----
 
 /**
- * Queue an API message for batch posting
- * @param {Object} payload - The API payload object
- * @param {string} wardriveType - "TX" or "RX" wardrive type
+ * Queue a wardrive entry for batch submission
+ * Entry must include 'type' field ("TX" or "RX")
+ * @param {Object} entry - The wardrive entry with type, lat, lon, noisefloor, heard_repeats, timestamp, debug_data?
  */
-function queueApiMessage(payload, wardriveType) {
-  debugLog(`[API QUEUE] Queueing ${wardriveType} message`);
+function queueWardriveEntry(entry) {
+  debugLog(`[WARDRIVE QUEUE] Queueing ${entry.type} entry`);
   
-  // Add WARDRIVE_TYPE to payload
-  const messagePayload = {
-    ...payload,
-    WARDRIVE_TYPE: wardriveType
-  };
+  wardriveQueue.messages.push(entry);
+  debugLog(`[WARDRIVE QUEUE] Queue size: ${wardriveQueue.messages.length}/${API_BATCH_MAX_SIZE}`);
   
-  apiQueue.messages.push(messagePayload);
-  debugLog(`[API QUEUE] Queue size: ${apiQueue.messages.length}/${API_BATCH_MAX_SIZE}`);
-  
-  // Start periodic flush timer if this is the first message
-  if (apiQueue.messages.length === 1 && !apiQueue.flushTimerId) {
-    startFlushTimer();
+  // Start periodic flush timer if this is the first entry
+  if (wardriveQueue.messages.length === 1 && !wardriveQueue.flushTimerId) {
+    startWardriveFlushTimer();
   }
   
   // If TX type: start/reset 3-second flush timer
-  if (wardriveType === "TX") {
-    scheduleTxFlush();
+  if (entry.type === "TX") {
+    scheduleWardriveFlush();
   }
   
   // If queue reaches max size: flush immediately
-  if (apiQueue.messages.length >= API_BATCH_MAX_SIZE) {
-    debugLog(`[API QUEUE] Queue reached max size (${API_BATCH_MAX_SIZE}), flushing immediately`);
-    flushApiQueue();
+  if (wardriveQueue.messages.length >= API_BATCH_MAX_SIZE) {
+    debugLog(`[WARDRIVE QUEUE] Queue reached max size (${API_BATCH_MAX_SIZE}), flushing immediately`);
+    submitWardriveData();
   }
   
   // Queue depth is logged above for debugging - no need to show in dynamic status bar
@@ -1688,38 +2421,38 @@ function queueApiMessage(payload, wardriveType) {
  * Schedule flush 3 seconds after TX ping
  * Resets timer if called again (coalesces rapid TX pings)
  */
-function scheduleTxFlush() {
-  debugLog(`[API QUEUE] Scheduling TX flush in ${API_TX_FLUSH_DELAY_MS}ms`);
+function scheduleWardriveFlush() {
+  debugLog(`[WARDRIVE QUEUE] Scheduling TX flush in ${API_TX_FLUSH_DELAY_MS}ms`);
   
   // Clear existing TX flush timer if present
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    debugLog(`[API QUEUE] Cleared previous TX flush timer`);
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    debugLog(`[WARDRIVE QUEUE] Cleared previous TX flush timer`);
   }
   
   // Schedule new TX flush
-  apiQueue.txFlushTimerId = setTimeout(() => {
-    debugLog(`[API QUEUE] TX flush timer fired`);
-    flushApiQueue();
+  wardriveQueue.txFlushTimerId = setTimeout(() => {
+    debugLog(`[WARDRIVE QUEUE] TX flush timer fired`);
+    submitWardriveData();
   }, API_TX_FLUSH_DELAY_MS);
 }
 
 /**
  * Start the 30-second periodic flush timer
  */
-function startFlushTimer() {
-  debugLog(`[API QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
+function startWardriveFlushTimer() {
+  debugLog(`[WARDRIVE QUEUE] Starting periodic flush timer (${API_BATCH_FLUSH_INTERVAL_MS}ms)`);
   
   // Clear existing timer if present
-  if (apiQueue.flushTimerId) {
-    clearInterval(apiQueue.flushTimerId);
+  if (wardriveQueue.flushTimerId) {
+    clearInterval(wardriveQueue.flushTimerId);
   }
   
   // Start periodic flush timer
-  apiQueue.flushTimerId = setInterval(() => {
-    if (apiQueue.messages.length > 0) {
-      debugLog(`[API QUEUE] Periodic flush timer fired, flushing ${apiQueue.messages.length} messages`);
-      flushApiQueue();
+  wardriveQueue.flushTimerId = setInterval(() => {
+    if (wardriveQueue.messages.length > 0) {
+      debugLog(`[WARDRIVE QUEUE] Periodic flush timer fired, flushing ${wardriveQueue.messages.length} messages`);
+      submitWardriveData();
     }
   }, API_BATCH_FLUSH_INTERVAL_MS);
 }
@@ -1727,135 +2460,358 @@ function startFlushTimer() {
 /**
  * Stop all flush timers (periodic and TX)
  */
-function stopFlushTimers() {
-  debugLog(`[API QUEUE] Stopping all flush timers`);
+function stopWardriveTimers() {
+  debugLog(`[WARDRIVE QUEUE] Stopping all flush timers`);
   
-  if (apiQueue.flushTimerId) {
-    clearInterval(apiQueue.flushTimerId);
-    apiQueue.flushTimerId = null;
-    debugLog(`[API QUEUE] Periodic flush timer stopped`);
+  if (wardriveQueue.flushTimerId) {
+    clearInterval(wardriveQueue.flushTimerId);
+    wardriveQueue.flushTimerId = null;
+    debugLog(`[WARDRIVE QUEUE] Periodic flush timer stopped`);
   }
   
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    apiQueue.txFlushTimerId = null;
-    debugLog(`[API QUEUE] TX flush timer stopped`);
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    wardriveQueue.txFlushTimerId = null;
+    debugLog(`[WARDRIVE QUEUE] TX flush timer stopped`);
   }
 }
 
 /**
- * Flush all queued messages to the API
- * Prevents concurrent flushes with isProcessing flag
+ * Submit all queued wardrive entries to the API
+ * Wraps entries with key/session_id and posts to WARDRIVE_ENDPOINT
+ * Prevents concurrent submissions with isProcessing flag
+ * Single retry on network failure
  * @returns {Promise<void>}
  */
-async function flushApiQueue() {
-  // Prevent concurrent flushes
-  if (apiQueue.isProcessing) {
-    debugWarn(`[API QUEUE] Flush already in progress, skipping`);
+async function submitWardriveData() {
+  // Prevent concurrent submissions
+  if (wardriveQueue.isProcessing) {
+    debugWarn(`[WARDRIVE QUEUE] Submission already in progress, skipping`);
     return;
   }
   
-  // Nothing to flush
-  if (apiQueue.messages.length === 0) {
-    debugLog(`[API QUEUE] Queue is empty, nothing to flush`);
+  // Nothing to submit
+  if (wardriveQueue.messages.length === 0) {
+    debugLog(`[WARDRIVE QUEUE] Queue is empty, nothing to submit`);
+    return;
+  }
+  
+  // Validate session_id exists
+  if (!state.wardriveSessionId) {
+    debugError("[WARDRIVE QUEUE] Cannot submit: no session_id available");
+    setDynamicStatus("Missing session ID", STATUS_COLORS.error);
+    handleWardriveApiError("session_id_missing", "Cannot submit: no session_id");
     return;
   }
   
   // Lock processing
-  apiQueue.isProcessing = true;
-  debugLog(`[API QUEUE] Starting flush of ${apiQueue.messages.length} messages`);
+  wardriveQueue.isProcessing = true;
+  debugLog(`[WARDRIVE QUEUE] Starting submission of ${wardriveQueue.messages.length} entries`);
   
-  // Clear TX flush timer when flushing
-  if (apiQueue.txFlushTimerId) {
-    clearTimeout(apiQueue.txFlushTimerId);
-    apiQueue.txFlushTimerId = null;
+  // Clear TX flush timer when submitting
+  if (wardriveQueue.txFlushTimerId) {
+    clearTimeout(wardriveQueue.txFlushTimerId);
+    wardriveQueue.txFlushTimerId = null;
   }
   
-  // Take all messages from queue
-  const batch = [...apiQueue.messages];
-  apiQueue.messages = [];
+  // Take all entries from queue
+  const entries = [...wardriveQueue.messages];
+  wardriveQueue.messages = [];
   
-  // Count TX and RX messages for logging
-  const txCount = batch.filter(m => m.WARDRIVE_TYPE === "TX").length;
-  const rxCount = batch.filter(m => m.WARDRIVE_TYPE === "RX").length;
-  debugLog(`[API QUEUE] Batch composition: ${txCount} TX, ${rxCount} RX`);
+  // Count TX and RX entries for logging
+  const txCount = entries.filter(e => e.type === "TX").length;
+  const rxCount = entries.filter(e => e.type === "RX").length;
+  debugLog(`[WARDRIVE QUEUE] Batch composition: ${txCount} TX, ${rxCount} RX`);
   
-  // Status removed from dynamic status bar - debug log above is sufficient for debugging
+  // Build wrapper payload
+  const payload = {
+    key: MESHMAPPER_API_KEY,
+    session_id: state.wardriveSessionId,
+    data: entries
+  };
   
-  try {
-    // Validate session_id exists
-    if (!state.wardriveSessionId) {
-      debugError("[API QUEUE] Cannot flush: no session_id available");
-      setDynamicStatus("Missing session ID", STATUS_COLORS.error);
-      state.disconnectReason = "session_id_error";
-      setTimeout(() => {
-        disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
-      }, 1500);
-      return;
-    }
-    
-    debugLog(`[API QUEUE] POST to ${MESHMAPPER_API_URL} with ${batch.length} messages`);
-    
-    const response = await fetch(MESHMAPPER_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(batch)
-    });
-    
-    debugLog(`[API QUEUE] Response status: ${response.status}`);
-    
-    // Parse response to check for slot revocation
+  debugLog(`[WARDRIVE QUEUE] POST to ${WARDRIVE_ENDPOINT} with ${entries.length} entries`);
+  
+  // Attempt submission with single retry
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const data = await response.json();
-      debugLog(`[API QUEUE] Response data: ${JSON.stringify(data)}`);
+      const response = await fetch(WARDRIVE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
       
-      // Check if slot has been revoked
-      if (data.allowed === false) {
-        debugError("[API QUEUE] MeshMapper slot has been revoked");
-        setDynamicStatus("API post failed (revoked)", STATUS_COLORS.error);
-        state.disconnectReason = "slot_revoked";
-        setTimeout(() => {
-          disconnect().catch(err => debugError(`[BLE] Disconnect after slot revocation failed: ${err.message}`));
-        }, 1500);
+      debugLog(`[WARDRIVE QUEUE] Response status: ${response.status} (attempt ${attempt})`);
+      
+      // Parse response
+      const data = await response.json();
+      debugLog(`[WARDRIVE QUEUE] Response data: ${JSON.stringify(data)}`);
+      
+      // Check for success
+      if (data.success === true) {
+        debugLog(`[WARDRIVE QUEUE] Submission successful: ${txCount} TX, ${rxCount} RX`);
+        
+        // Schedule heartbeat if expires_at is provided
+        if (data.expires_at) {
+          scheduleHeartbeat(data.expires_at);
+        }
+        
+        // Clear status after successful post
+        if (state.connection && !state.txRxAutoRunning) {
+          setDynamicStatus("Idle");
+        }
+        
+        // Success - exit retry loop
+        wardriveQueue.isProcessing = false;
         return;
-      } else if (data.allowed === true) {
-        debugLog("[API QUEUE] Slot check passed");
       }
-    } catch (parseError) {
-      debugError(`[API QUEUE] Failed to parse response: ${parseError.message}`);
-    }
-    
-    if (!response.ok) {
-      debugError(`[API QUEUE] API returned error status ${response.status}`);
-      setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
-    } else {
-      debugLog(`[API QUEUE] Batch post successful: ${txCount} TX, ${rxCount} RX`);
-      // Clear status after successful post
-      if (state.connection && !state.txRxAutoRunning) {
-        setDynamicStatus("Idle");
+      
+      // Handle error response
+      if (data.success === false) {
+        debugError(`[WARDRIVE QUEUE] API error: ${data.reason || 'unknown'} - ${data.message || ''}`);
+        handleWardriveApiError(data.reason, data.message);
+        wardriveQueue.isProcessing = false;
+        return;
+      }
+      
+      // Unexpected response format
+      debugError(`[WARDRIVE QUEUE] Unexpected response format: ${JSON.stringify(data)}`);
+      lastError = new Error("Unexpected response format");
+      
+    } catch (error) {
+      debugError(`[WARDRIVE QUEUE] Submission failed (attempt ${attempt}): ${error.message}`);
+      lastError = error;
+      
+      // If first attempt failed, wait before retry
+      if (attempt === 1) {
+        debugLog(`[WARDRIVE QUEUE] Retrying in ${WARDRIVE_RETRY_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, WARDRIVE_RETRY_DELAY_MS));
       }
     }
-  } catch (error) {
-    debugError(`[API QUEUE] Batch post failed: ${error.message}`);
-    setDynamicStatus("Error: API batch post failed", STATUS_COLORS.error);
-  } finally {
-    // Unlock processing
-    apiQueue.isProcessing = false;
-    debugLog(`[API QUEUE] Flush complete`);
   }
+  
+  // Both attempts failed
+  debugError(`[WARDRIVE QUEUE] Submission failed after 2 attempts: ${lastError?.message}`);
+  setDynamicStatus("Error: API submission failed", STATUS_COLORS.error);
+  
+  // Re-queue entries for next attempt (unless queue is full)
+  if (wardriveQueue.messages.length + entries.length <= API_BATCH_MAX_SIZE) {
+    wardriveQueue.messages.unshift(...entries);
+    debugLog(`[WARDRIVE QUEUE] Re-queued ${entries.length} entries for next attempt`);
+  } else {
+    debugWarn(`[WARDRIVE QUEUE] Cannot re-queue entries, queue would exceed max size. ${entries.length} entries lost.`);
+  }
+  
+  wardriveQueue.isProcessing = false;
 }
 
 /**
  * Get queue status for debugging
  * @returns {Object} Queue status object
  */
-function getQueueStatus() {
+function getWardriveQueueStatus() {
   return {
-    queueSize: apiQueue.messages.length,
-    isProcessing: apiQueue.isProcessing,
-    hasPeriodicTimer: apiQueue.flushTimerId !== null,
-    hasTxTimer: apiQueue.txFlushTimerId !== null
+    queueSize: wardriveQueue.messages.length,
+    isProcessing: wardriveQueue.isProcessing,
+    hasPeriodicTimer: wardriveQueue.flushTimerId !== null,
+    hasTxTimer: wardriveQueue.txFlushTimerId !== null
   };
+}
+
+// ---- Heartbeat System ----
+
+/**
+ * Schedule heartbeat to fire before session expires
+ * @param {number} expiresAt - Unix timestamp when session expires
+ */
+function scheduleHeartbeat(expiresAt) {
+  // Cancel any existing heartbeat timer
+  cancelHeartbeat();
+  
+  // Calculate when to send heartbeat (5 minutes before expiry)
+  const now = Math.floor(Date.now() / 1000);
+  const msUntilExpiry = (expiresAt - now) * 1000;
+  const msUntilHeartbeat = msUntilExpiry - HEARTBEAT_BUFFER_MS;
+  
+  if (msUntilHeartbeat <= 0) {
+    // Session is about to expire or already expired - send heartbeat immediately
+    debugWarn(`[HEARTBEAT] Session expires in ${Math.floor(msUntilExpiry / 1000)}s, sending heartbeat immediately`);
+    sendHeartbeat();
+    return;
+  }
+  
+  debugLog(`[HEARTBEAT] Scheduling heartbeat in ${Math.floor(msUntilHeartbeat / 1000)}s (session expires in ${Math.floor(msUntilExpiry / 1000)}s)`);
+  
+  state.heartbeatTimerId = setTimeout(() => {
+    debugLog(`[HEARTBEAT] Heartbeat timer fired`);
+    sendHeartbeat();
+  }, msUntilHeartbeat);
+}
+
+/**
+ * Cancel any scheduled heartbeat
+ */
+function cancelHeartbeat() {
+  if (state.heartbeatTimerId) {
+    clearTimeout(state.heartbeatTimerId);
+    state.heartbeatTimerId = null;
+    debugLog(`[HEARTBEAT] Heartbeat timer cancelled`);
+  }
+}
+
+/**
+ * Send heartbeat to keep session alive
+ * Uses current GPS position for heartbeat coords
+ * Single retry on network failure
+ */
+async function sendHeartbeat() {
+  // Validate we have a session
+  if (!state.wardriveSessionId) {
+    debugWarn(`[HEARTBEAT] Cannot send heartbeat: no session_id`);
+    return;
+  }
+  
+  // Get current GPS position for heartbeat
+  const currentCoords = state.lastFix;
+  const coords = currentCoords ? {
+    lat: currentCoords.coords.latitude,
+    lon: currentCoords.coords.longitude,
+    timestamp: Math.floor(Date.now() / 1000)
+  } : null;
+  
+  // Build heartbeat payload
+  const payload = {
+    key: MESHMAPPER_API_KEY,
+    session_id: state.wardriveSessionId,
+    heartbeat: true,
+    coords
+  };
+  
+  debugLog(`[HEARTBEAT] Sending heartbeat: session_id=${state.wardriveSessionId}, coords=${coords ? `${coords.lat.toFixed(5)},${coords.lon.toFixed(5)}` : 'null'}`);
+  
+  // Attempt heartbeat with single retry
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(WARDRIVE_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
+      debugLog(`[HEARTBEAT] Response status: ${response.status} (attempt ${attempt})`);
+      
+      // Parse response
+      const data = await response.json();
+      debugLog(`[HEARTBEAT] Response data: ${JSON.stringify(data)}`);
+      
+      // Check for success
+      if (data.success === true) {
+        debugLog(`[HEARTBEAT] Heartbeat successful`);
+        
+        // Schedule next heartbeat if expires_at is provided
+        if (data.expires_at) {
+          scheduleHeartbeat(data.expires_at);
+        }
+        
+        return; // Success - exit
+      }
+      
+      // Handle error response
+      if (data.success === false) {
+        debugError(`[HEARTBEAT] Heartbeat failed: ${data.reason || 'unknown'} - ${data.message || ''}`);
+        handleWardriveApiError(data.reason, data.message);
+        return;
+      }
+      
+      // Unexpected response format
+      debugError(`[HEARTBEAT] Unexpected response format: ${JSON.stringify(data)}`);
+      lastError = new Error("Unexpected response format");
+      
+    } catch (error) {
+      debugError(`[HEARTBEAT] Heartbeat failed (attempt ${attempt}): ${error.message}`);
+      lastError = error;
+      
+      // If first attempt failed, wait before retry
+      if (attempt === 1) {
+        debugLog(`[HEARTBEAT] Retrying in ${WARDRIVE_RETRY_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, WARDRIVE_RETRY_DELAY_MS));
+      }
+    }
+  }
+  
+  // Both attempts failed
+  debugError(`[HEARTBEAT] Heartbeat failed after 2 attempts: ${lastError?.message}`);
+  // Don't disconnect on heartbeat failure - the next data submission will also schedule a heartbeat
+  // Just log the error and let the session expire naturally if needed
+}
+
+// ---- Wardrive API Error Handler ----
+
+/**
+ * Centralized error handler for wardrive API errors
+ * Handles session expiry, revocation, and other error conditions
+ * @param {string} reason - Error reason code from API
+ * @param {string} message - Human-readable error message
+ */
+function handleWardriveApiError(reason, message) {
+  debugError(`[WARDRIVE API] Error: reason=${reason}, message=${message}`);
+  
+  switch (reason) {
+    case "session_expired":
+    case "session_invalid":
+    case "session_revoked":
+    case "bad_session":
+      // Session is no longer valid - disconnect immediately
+      // Error message will be shown by BLE disconnect handler using REASON_MESSAGES
+      debugError(`[WARDRIVE API] Session error (${reason}): triggering disconnect`);
+      state.disconnectReason = reason;
+      disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      break;
+      
+    case "invalid_key":
+    case "unauthorized":
+    case "bad_key":
+      // API key issue - disconnect immediately
+      debugError(`[WARDRIVE API] Authorization error (${reason}): triggering disconnect`);
+      state.disconnectReason = reason;
+      disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      break;
+      
+    case "session_id_missing":
+      // Missing session - disconnect immediately
+      debugError(`[WARDRIVE API] Missing session_id: triggering disconnect`);
+      state.disconnectReason = "session_id_error";
+      disconnect().catch(err => debugError(`[BLE] Disconnect after missing session_id failed: ${err.message}`));
+      break;
+    
+    case "outside_zone":
+      // User has moved outside their assigned zone - disconnect immediately
+      debugError(`[WARDRIVE API] Outside zone: triggering disconnect`);
+      state.disconnectReason = reason;
+      disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      break;
+    
+    case "zone_full":
+      // Zone capacity changed during active session - disconnect immediately
+      debugError(`[WARDRIVE API] Zone full during wardrive: triggering disconnect`);
+      state.disconnectReason = reason;
+      disconnect().catch(err => debugError(`[BLE] Disconnect after ${reason} failed: ${err.message}`));
+      break;
+      
+    case "rate_limited":
+      // Rate limited - show warning but don't disconnect
+      debugWarn(`[WARDRIVE API] Rate limited: ${message}`);
+      setDynamicStatus("Rate limited - slow down", STATUS_COLORS.warning);
+      break;
+      
+    default:
+      // Unknown error - log to error log but don't disconnect
+      debugError(`[WARDRIVE API] Unknown error: ${reason} - ${message}`);
+      setDynamicStatus(`API error: ${message || reason}`, STATUS_COLORS.error);
+      break;
+  }
 }
 
 // ---- Repeater Echo Tracking ----
@@ -2078,18 +3034,42 @@ function getPrintableRatio(str) {
  */
 function parseAdvertName(payload) {
   try {
-    // ADVERT structure: [32 bytes pubkey][4 bytes timestamp][64 bytes signature][1 byte flags][name...]
+    // ADVERT structure: [32 bytes pubkey][4 bytes timestamp][64 bytes signature][appData...]
+    // appData structure: [1 byte flags][optional 8 bytes lat/lon if flag set][name if flag set]
     const PUBKEY_SIZE = 32;
     const TIMESTAMP_SIZE = 4;
     const SIGNATURE_SIZE = 64;
-    const FLAGS_SIZE = 1;
-    const NAME_OFFSET = PUBKEY_SIZE + TIMESTAMP_SIZE + SIGNATURE_SIZE + FLAGS_SIZE;
+    const APP_DATA_OFFSET = PUBKEY_SIZE + TIMESTAMP_SIZE + SIGNATURE_SIZE; // 100
     
-    if (payload.length <= NAME_OFFSET) {
+    if (payload.length <= APP_DATA_OFFSET) {
+      return { valid: false, name: '', reason: 'payload too short for appData' };
+    }
+    
+    // Read flags byte from appData
+    const flags = payload[APP_DATA_OFFSET];
+    debugLog(`[RX FILTER] ADVERT flags: 0x${flags.toString(16).padStart(2, '0')}`);
+    
+    // Flag masks (from advert.js)
+    const ADV_LATLON_MASK = 0x10;
+    const ADV_NAME_MASK = 0x80;
+    
+    // Check if name is present
+    if (!(flags & ADV_NAME_MASK)) {
+      return { valid: false, name: '', reason: 'no name in advert' };
+    }
+    
+    // Calculate name offset: skip flags byte and optional lat/lon
+    let nameOffset = APP_DATA_OFFSET + 1; // +1 for flags byte (offset 101)
+    if (flags & ADV_LATLON_MASK) {
+      nameOffset += 8; // Skip 4 bytes lat + 4 bytes lon (offset 109)
+      debugLog(`[RX FILTER] ADVERT has lat/lon, skipping 8 bytes`);
+    }
+    
+    if (payload.length <= nameOffset) {
       return { valid: false, name: '', reason: 'payload too short for name' };
     }
     
-    const nameBytes = payload.slice(NAME_OFFSET);
+    const nameBytes = payload.slice(nameOffset);
     const decoder = new TextDecoder('utf-8', { fatal: false });
     const name = decoder.decode(nameBytes).replace(/\0+$/, '').trim();
     
@@ -2493,9 +3473,8 @@ async function handleRxLogging(metadata, data) {
     // A packet's path array contains the sequence of repeater IDs that forwarded the message.
     // Packets with no path are direct transmissions (node-to-node) and don't provide
     // information about repeater coverage, so we skip them for RX wardriving purposes.
+    // NOTE: This is NOT a drop - direct packets are valid, just not useful for wardriving.
     if (metadata.pathLength === 0) {
-      rxLogState.dropCount++;
-      updateRxLogSummary();
       debugLog(`[RX LOG] Ignoring: no path (direct transmission, not via repeater)`);
       return;
     }
@@ -2602,24 +3581,6 @@ function stopUnifiedRxListening() {
 }
 
 
-
-/**
- * Future: Post RX log data to MeshMapper API
- * @param {Array} entries - Array of RX log entries
- */
-async function postRxLogToMeshMapperAPI(entries) {
-  if (!MESHMAPPER_RX_LOG_API_URL) {
-    debugLog('[RX LOG] RX Log API posting not configured yet');
-    return;
-  }
-  
-  // Future implementation:
-  // - Batch post accumulated RX log entries
-  // - Include session_id from state.wardriveSessionId
-  // - Format: { observations: [{ repeaterId, snr, lat, lon, timestamp }] }
-  debugLog(`[RX LOG] Would post ${entries.length} RX log entries to API (not implemented yet)`);
-}
-
 // ---- Passive RX Batch API Integration ----
 
 /**
@@ -2640,7 +3601,7 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
   if (!buffer) {
     // First time hearing this repeater - create new entry
     buffer = {
-      firstLocation: { lat: currentLocation.lat, lng: currentLocation.lon },
+      firstLocation: { lat: currentLocation.lat, lon: currentLocation.lon },
       bestObservation: {
         snr,
         rssi,
@@ -2648,12 +3609,21 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
         header,
         lat: currentLocation.lat,
         lon: currentLocation.lon,
-        timestamp: Date.now(),
+        noisefloor: state.lastNoiseFloor ?? null,
+        timestamp: Math.floor(Date.now() / 1000),
         metadata: metadata  // Store full metadata for debug mode
-      }
+      },
+      timeoutId: null  // Timer ID for 30-second timeout flush
     };
     state.rxBatchBuffer.set(repeaterId, buffer);
-    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}`);
+    debugLog(`[RX BATCH] First observation for repeater ${repeaterId}: SNR=${snr}, noisefloor=${buffer.bestObservation.noisefloor}`);
+    
+    // Start 30-second timeout timer for this repeater
+    buffer.timeoutId = setTimeout(() => {
+      debugLog(`[RX BATCH] 30s timeout triggered for repeater ${repeaterId}`);
+      flushRepeater(repeaterId);
+    }, RX_BATCH_TIMEOUT_MS);
+    debugLog(`[RX BATCH] Started 30s timeout timer for repeater ${repeaterId}`);
   } else {
     // Already tracking this repeater - check if new SNR is better
     if (snr > buffer.bestObservation.snr) {
@@ -2665,7 +3635,8 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
         header,
         lat: currentLocation.lat,
         lon: currentLocation.lon,
-        timestamp: Date.now(),
+        noisefloor: state.lastNoiseFloor ?? null,
+        timestamp: Math.floor(Date.now() / 1000),
         metadata: metadata  // Store full metadata for debug mode
       };
     } else {
@@ -2678,7 +3649,7 @@ function handleRxBatching(repeaterId, snr, rssi, pathLength, header, currentLoca
     currentLocation.lat,
     currentLocation.lon,
     buffer.firstLocation.lat,
-    buffer.firstLocation.lng
+    buffer.firstLocation.lon
   );
   
   debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}: ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
@@ -2709,7 +3680,7 @@ function checkAllRxBatchesForDistanceTrigger(currentLocation) {
       currentLocation.lat,
       currentLocation.lon,
       buffer.firstLocation.lat,
-      buffer.firstLocation.lng
+      buffer.firstLocation.lon
     );
     
     debugLog(`[RX BATCH] Distance check for repeater ${repeaterId}:  ${distance.toFixed(2)}m from first observation (threshold=${RX_BATCH_DISTANCE_M}m)`);
@@ -2743,16 +3714,24 @@ function flushRepeater(repeaterId) {
     return;
   }
   
+  // Clear timeout timer if it exists
+  if (buffer.timeoutId) {
+    clearTimeout(buffer.timeoutId);
+    buffer.timeoutId = null;
+    debugLog(`[RX BATCH] Cleared timeout timer for repeater ${repeaterId}`);
+  }
+  
   const best = buffer.bestObservation;
   
   // Build API entry using BEST observation's location
   const entry = {
     repeater_id: repeaterId,
-    location: { lat: best.lat, lng: best.lon },  // Location of BEST SNR packet
+    location: { lat: best.lat, lon: best.lon },  // Location of BEST SNR packet
     snr: best.snr,
     rssi: best.rssi,
     pathLength: best.pathLength,
     header: best.header,
+    noisefloor: best.noisefloor,  // Noisefloor captured at observation time
     timestamp: best.timestamp,
     metadata: best.metadata  // For debug mode
   };
@@ -2760,7 +3739,7 @@ function flushRepeater(repeaterId) {
   debugLog(`[RX BATCH] Posting repeater ${repeaterId}: snr=${best.snr}, location=${best.lat.toFixed(5)},${best.lon.toFixed(5)}`);
   
   // Queue for API posting
-  queueRxApiPost(entry);
+  queueRxEntry(entry);
   
   // Remove from buffer
   state.rxBatchBuffer.delete(repeaterId);
@@ -2793,7 +3772,7 @@ function flushAllRxBatches(trigger = 'session_end') {
  * Uses the batch queue system to aggregate RX messages
  * @param {Object} entry - The entry to post (with best observation data)
  */
-function queueRxApiPost(entry) {
+function queueRxEntry(entry) {
   // Validate session_id exists
   if (!state.wardriveSessionId) {
     debugWarn(`[RX BATCH API] Cannot queue: no session_id available`);
@@ -2804,18 +3783,14 @@ function queueRxApiPost(entry) {
   // Use absolute value and format with one decimal place
   const heardRepeats = `${entry.repeater_id}(${Math.abs(entry.snr).toFixed(1)})`;
   
-  const payload = {
-    key: MESHMAPPER_API_KEY,
+  // Build entry-only payload (wrapper added by submitWardriveData)
+  const rxEntry = {
+    type: "RX",
     lat: entry.location.lat,
-    lon: entry.location.lng,
-    who: getDeviceIdentifier(),
-    power: getCurrentPowerSetting(),
-    external_antenna: getExternalAntennaSetting(),
+    lon: entry.location.lon,
+    noisefloor: entry.noisefloor ?? null,
     heard_repeats: heardRepeats,
-    ver: APP_VERSION,
-    test: 0,
-    iata: WARDIVE_IATA_CODE,
-    session_id: state.wardriveSessionId
+    timestamp: entry.timestamp
   };
   
   // Add debug data if debug mode is enabled
@@ -2827,14 +3802,14 @@ function queueRxApiPost(entry) {
     const heardByte = lastHopId.toString(16).padStart(2, '0').toUpperCase();
     
     const debugData = buildDebugData(entry.metadata, heardByte, entry.repeater_id);
-    payload.debug_data = debugData;
+    rxEntry.debug_data = debugData;
     
-    debugLog(`[RX BATCH API] 🐛 RX payload includes debug_data for repeater ${entry.repeater_id}`);
+    debugLog(`[RX BATCH API] 🐛 RX entry includes debug_data for repeater ${entry.repeater_id}`);
   }
   
-  // Queue message instead of posting immediately
-  queueApiMessage(payload, "RX");
-  debugLog(`[RX BATCH API] RX message queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lng.toFixed(5)}`);
+  // Queue entry for batch submission
+  queueWardriveEntry(rxEntry);
+  debugLog(`[RX BATCH API] RX entry queued: repeater=${entry.repeater_id}, snr=${entry.snr.toFixed(1)}, location=${entry.location.lat.toFixed(5)},${entry.location.lon.toFixed(5)}`);
 }
 
 // ---- Mobile Session Log Bottom Sheet ----
@@ -2978,7 +3953,7 @@ function updateTxLogSummary() {
   if (!txLogCount || !txLogLastTime || !txLogLastSnr) return;
   
   const count = txLogState.entries.length;
-  txLogCount.textContent = count === 1 ? '1 ping' : `${count} pings`;
+  txLogCount.textContent = `Pings: ${count}`;
   
   if (count === 0) {
     txLogLastTime.textContent = 'No data';
@@ -3167,9 +4142,7 @@ function updateRxLogSummary() {
   if (!rxLogCount || !rxLogLastTime || !rxLogLastRepeater) return;
   
   const count = rxLogState.entries.length;
-  const dropText = `${rxLogState.dropCount} dropped`;
-  const obsText = count === 1 ? '1 observation' : `${count} observations`;
-  rxLogCount.textContent = `${obsText}, ${dropText}`;
+  rxLogCount.textContent = `Handled: ${count}  Drop: ${rxLogState.dropCount}`;
   
   if (count === 0) {
     rxLogLastTime.textContent = 'No data';
@@ -3392,7 +4365,7 @@ function updateErrorLogSummary() {
   const count = errorLogState.entries.length;
   
   if (count === 0) {
-    errorLogCount.textContent = '0 errors';
+    errorLogCount.textContent = 'Events: 0';
     errorLogLastTime.textContent = 'No errors';
     errorLogLastTime.classList.add('hidden');
     if (errorLogLastError) {
@@ -3403,7 +4376,7 @@ function updateErrorLogSummary() {
   }
   
   const lastEntry = errorLogState.entries[errorLogState.entries.length - 1];
-  errorLogCount.textContent = `${count} error${count !== 1 ? 's' : ''}`;
+  errorLogCount.textContent = `Events: ${count}`;
   
   const date = new Date(lastEntry.timestamp);
   errorLogLastTime.textContent = date.toLocaleTimeString();
@@ -3825,10 +4798,6 @@ function logTxPingToUI(payload, lat, lon) {
   // Use ISO format for data storage but user-friendly format for display
   const now = new Date();
   const isoStr = now.toISOString();
-  
-  if (lastPingEl) {
-    lastPingEl.textContent = `${now.toLocaleString()} — ${payload}`;
-  }
 
   // Create log entry with placeholder for repeater data
   const logData = {
@@ -3907,12 +4876,21 @@ function updateCurrentTxLogEntryWithLiveRepeaters() {
  */
 async function sendPing(manual = false) {
   debugLog(`[PING] sendPing called (manual=${manual})`);
+  
+  // Early guard: prevent concurrent ping execution (critical for preventing BLE GATT errors)
+  if (state.pingInProgress) {
+    debugLog("[PING] Ping already in progress, ignoring duplicate call");
+    return;
+  }
+  state.pingInProgress = true;
+  
   try {
     // Check cooldown only for manual pings
     if (manual && isInCooldown()) {
       const remainingSec = getRemainingCooldownSeconds();
       debugLog(`[PING] Manual ping blocked by cooldown (${remainingSec}s remaining)`);
       setDynamicStatus(`Wait ${remainingSec}s before sending another ping`, STATUS_COLORS.warning);
+      state.pingInProgress = false;
       return;
     }
 
@@ -3930,6 +4908,25 @@ async function sendPing(manual = false) {
       // Manual ping when auto is not running
       setDynamicStatus("Sending manual ping", STATUS_COLORS.info);
     }
+    // Refresh radio stats (noise floor) before attempting ping so UI shows fresh value
+    if (state.connection && state.lastNoiseFloor !== null) {
+      // Only attempt refresh if firmware supports it (detected on connect)
+      debugLog("[PING] Refreshing radio stats before ping");
+      try {
+        // Don't pass timeout - avoids library timeout bug
+        const stats = await state.connection.getRadioStats(null);
+        debugLog(`[PING] getRadioStats returned: ${JSON.stringify(stats)}`);
+        if (stats && typeof stats.noiseFloor !== 'undefined') {
+          state.lastNoiseFloor = stats.noiseFloor;
+          debugLog(`[PING] Radio stats refreshed before ping: noiseFloor=${state.lastNoiseFloor}`);
+        } else {
+          debugWarn(`[PING] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
+        }
+      } catch (e) {
+        // Silently skip on error - firmware might not support it
+        debugLog(`[PING] getRadioStats skipped: ${e && e.message ? e.message : String(e)}`);
+      }
+    }
 
     // Get GPS coordinates
     const coords = await getGpsCoordinatesForPing(!manual && state.txRxAutoRunning);
@@ -3943,34 +4940,14 @@ async function sendPing(manual = false) {
       if (manual) {
         handleManualPingBlockedDuringAutoMode();
       }
+      state.pingInProgress = false;
       return;
     }
     
     const { lat, lon, accuracy } = coords;
 
-    // VALIDATION 1: Geofence check (FIRST - must be within Ottawa 150km)
-    debugLog("[PING] Starting geofence validation");
-    if (!validateGeofence(lat, lon)) {
-      debugLog("[PING] Ping blocked: outside geofence");
-      
-      // Set skip reason for auto mode countdown display
-      state.skipReason = "outside geofence";
-      
-      if (manual) {
-        // Manual ping: show skip message that persists
-        setDynamicStatus("Ping skipped, outside of geofenced region", STATUS_COLORS.warning);
-        // If auto mode is running, resume the paused countdown
-        handleManualPingBlockedDuringAutoMode();
-      } else if (state.txRxAutoRunning) {
-        // Auto ping: schedule next ping and show countdown with skip message
-        scheduleNextAutoPing();
-      }
-      
-      return;
-    }
-    debugLog("[PING] Geofence validation passed");
-
-    // VALIDATION 2: Distance check (SECOND - must be ≥ 25m from last successful ping)
+    // VALIDATION: Distance check (must be ≥ 25m from last successful ping)
+    // Note: Zone validation happens server-side via /wardrive endpoint (Phase 4.4)
     debugLog("[PING] Starting distance validation");
     if (!validateMinimumDistance(lat, lon)) {
       debugLog("[PING] Ping blocked: too close to last ping");
@@ -3988,6 +4965,7 @@ async function sendPing(manual = false) {
         scheduleNextAutoPing();
       }
       
+      state.pingInProgress = false;
       return;
     }
     debugLog("[PING] Distance validation passed");
@@ -3995,8 +4973,7 @@ async function sendPing(manual = false) {
     // Both validations passed - execute ping operation (Mesh + API)
     debugLog("[PING] All validations passed, executing ping operation");
     
-    // Lock ping controls for the entire ping lifecycle (until API post completes)
-    state.pingInProgress = true;
+    // pingInProgress already set at function start - just update UI controls
     updateControlsForCooldown();
     debugLog("[PING] Ping controls locked (pingInProgress=true)");
     
@@ -4006,8 +4983,14 @@ async function sendPing(manual = false) {
     const ch = await ensureChannel();
     
     // Capture GPS coordinates at ping time - these will be used for API post after 10s delay
-    state.capturedPingCoords = { lat, lon, accuracy };
-    debugLog(`[PING] GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m`);
+    state.capturedPingCoords = { 
+      lat, 
+      lon, 
+      accuracy, 
+      noisefloor: state.lastNoiseFloor ?? null,
+      timestamp: Math.floor(Date.now() / 1000)
+    };
+    debugLog(`[PING] GPS coordinates captured at ping time: lat=${lat.toFixed(5)}, lon=${lon.toFixed(5)}, accuracy=${accuracy}m, noisefloor=${state.capturedPingCoords.noisefloor}, timestamp=${state.capturedPingCoords.timestamp}`);
     
     // Start repeater echo tracking BEFORE sending the ping
     debugLog(`[PING] Channel ping transmission: timestamp=${new Date().toISOString()}, channel=${ch.channelIdx}, payload="${payload}"`);
@@ -4074,15 +5057,12 @@ async function sendPing(manual = false) {
       // This is the key change: we don't wait for API to complete
       if (state.connection) {
         if (state.txRxAutoRunning) {
-          // Check if we should resume a paused auto countdown (manual ping during auto mode)
-          const resumed = resumeAutoCountdown();
-          if (!resumed) {
-            // No paused timer to resume, schedule new auto ping (this was an auto ping)
-            debugLog("[TX/RX AUTO] Scheduling next auto ping immediately after RX window");
-            scheduleNextAutoPing();
-          } else {
-            debugLog("[TX/RX AUTO] Resumed auto countdown after manual ping");
-          }
+          // Always schedule a fresh auto ping from the full interval
+          // (whether this was a manual or auto ping, the timer restarts)
+          debugLog("[TX/RX AUTO] Scheduling next auto ping after ping completion");
+          // Clear any paused timer state since we're restarting fresh
+          state.pausedAutoTimerRemainingMs = null;
+          scheduleNextAutoPing();
         } else {
           debugLog("[UI] Setting dynamic status to Idle (manual mode)");
           setDynamicStatus("Idle");
@@ -4092,31 +5072,17 @@ async function sendPing(manual = false) {
       // Unlock ping controls immediately (don't wait for API)
       unlockPingControls("after RX listening window completion");
       
-      // Background the API posting (runs asynchronously, doesn't block)
-      // Use captured coordinates for API post (not current GPS position)
+      // Queue TX entry for batch submission (uses captured coordinates, not current GPS position)
       if (capturedCoords) {
-        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy } = capturedCoords;
-        debugLog(`[API QUEUE] Backgrounding API post for coordinates: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m`);
+        const { lat: apiLat, lon: apiLon, accuracy: apiAccuracy, noisefloor: apiNoisefloor, timestamp: apiTimestamp } = capturedCoords;
+        debugLog(`[WARDRIVE QUEUE] Queueing TX entry: lat=${apiLat.toFixed(5)}, lon=${apiLon.toFixed(5)}, accuracy=${apiAccuracy}m, noisefloor=${apiNoisefloor}, timestamp=${apiTimestamp}`);
         
-        // Post to API in background and track the promise
-        const apiPromise = postApiInBackground(apiLat, apiLon, apiAccuracy, heardRepeatsStr).catch(error => {
-          debugError(`[API QUEUE] Background API post failed: ${error.message}`, error);
-          // Show error to user only if API fails
-          setDynamicStatus("Error: API post failed", STATUS_COLORS.error);
-        }).finally(() => {
-          // Remove from pending list when complete
-          const index = state.pendingApiPosts.indexOf(apiPromise);
-          if (index > -1) {
-            state.pendingApiPosts.splice(index, 1);
-          }
-        });
-        
-        // Track this promise so disconnect can wait for it
-        state.pendingApiPosts.push(apiPromise);
+        // Queue TX entry (will be submitted with next batch)
+        queueTxEntry(apiLat, apiLon, apiAccuracy, heardRepeatsStr, apiNoisefloor, apiTimestamp);
       } else {
         // This should never happen as coordinates are always captured before ping
-        debugError(`[API QUEUE] CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
-        debugError(`[API QUEUE] Skipping API post to avoid posting incorrect coordinates`);
+        debugError(`[WARDRIVE QUEUE] CRITICAL: No captured ping coordinates available for API post - this indicates a logic error`);
+        debugError(`[WARDRIVE QUEUE] Skipping TX entry queue to avoid posting incorrect coordinates`);
       }
       
       // Clear timer reference
@@ -4172,6 +5138,11 @@ function stopAutoPing(stopGps = false) {
   updateAutoButton();
   updateControlsForCooldown();  // Re-enable RX Auto button
   releaseWakeLock();
+  
+  // Unlock wardrive settings after auto mode stops
+  unlockWardriveSettings();
+  debugLog("[TX/RX AUTO] Wardrive settings unlocked after auto mode stop");
+  
   debugLog("[TX/RX AUTO] TX/RX Auto stopped");
 }
 
@@ -4204,7 +5175,7 @@ function startRxAuto() {
   
   // Acquire wake lock
   debugLog("[RX AUTO] Acquiring wake lock");
-  acquireWakeLock().catch(console.error);
+  acquireWakeLock().catch((e) => debugWarn("[RX AUTO] Wake lock failed (non-critical):", e?.message || String(e)));
   
   setDynamicStatus("RX Auto started", STATUS_COLORS.success);
   debugLog("[RX AUTO] RX Auto mode started successfully");
@@ -4244,6 +5215,13 @@ function scheduleNextAutoPing() {
     return;
   }
   
+  // Clear any existing timer to prevent accumulation (CRITICAL: prevents duplicate timers)
+  if (state.autoTimerId) {
+    debugLog(`[TX/RX AUTO] Clearing existing timer (id=${state.autoTimerId}) before scheduling new one`);
+    clearTimeout(state.autoTimerId);
+    state.autoTimerId = null;
+  }
+  
   const intervalMs = getSelectedIntervalMs();
   debugLog(`[TX/RX AUTO] Scheduling next auto ping in ${intervalMs}ms`);
   
@@ -4252,13 +5230,25 @@ function scheduleNextAutoPing() {
   
   // Schedule the next ping
   state.autoTimerId = setTimeout(() => {
-    if (state.txRxAutoRunning) {
-      // Clear skip reason before next attempt
-      state.skipReason = null;
-      debugLog("[TX/RX AUTO] Auto ping timer fired, sending ping");
-      sendPing(false).catch(console.error);
+    debugLog(`[TX/RX AUTO] Auto ping timer fired (id=${state.autoTimerId})`);
+    
+    // Double-check guards before sending ping
+    if (!state.txRxAutoRunning) {
+      debugLog("[TX/RX AUTO] Auto mode no longer running, ignoring timer");
+      return;
     }
+    if (state.pingInProgress) {
+      debugLog("[TX/RX AUTO] Ping already in progress, ignoring timer");
+      return;
+    }
+    
+    // Clear skip reason before next attempt
+    state.skipReason = null;
+    debugLog("[TX/RX AUTO] Sending auto ping");
+    sendPing(false).catch((e) => debugError("[TX/RX AUTO] Scheduled auto ping error:", e?.message || String(e)));
   }, intervalMs);
+  
+  debugLog(`[TX/RX AUTO] New timer scheduled (id=${state.autoTimerId})`);
 }
 
 function startAutoPing() {
@@ -4294,6 +5284,10 @@ function startAutoPing() {
     startUnifiedRxListening();
   }
   
+  // Lock wardrive settings during auto mode
+  lockWardriveSettings();
+  debugLog("[TX/RX AUTO] Wardrive settings locked during auto mode");
+  
   // ENABLE RX wardriving
   state.rxTracking.isWardriving = true;
   debugLog("[TX/RX AUTO] RX wardriving enabled");
@@ -4308,11 +5302,139 @@ function startAutoPing() {
 
   // Acquire wake lock for auto mode
   debugLog("[TX/RX AUTO] Acquiring wake lock for auto mode");
-  acquireWakeLock().catch(console.error);
+  acquireWakeLock().catch((e) => debugWarn("[TX/RX AUTO] Wake lock failed (non-critical):", e?.message || String(e)));
 
   // Send first ping immediately
   debugLog("[TX/RX AUTO] Sending initial auto ping");
-  sendPing(false).catch(console.error);
+  sendPing(false).catch((e) => debugError("[TX/RX AUTO] Initial auto ping error:", e?.message || String(e)));
+}
+
+// ---- Device Auto-Power Configuration ----
+
+/**
+ * Automatically configure radio power based on detected device model
+ * Called after deviceQuery() in connect() flow
+ * Updates power radio selection and label based on device database lookup
+ */
+async function autoSetPowerLevel() {
+  debugLog("[DEVICE MODEL] Starting auto-power configuration");
+  
+  // Get power label status element for updating
+  const powerLabelStatus = document.getElementById("powerLabelStatus");
+  
+  if (!state.deviceModel || state.deviceModel === "-") {
+    debugLog("[DEVICE MODEL] No device model available, skipping auto-power");
+    return;
+  }
+  
+  // Parse device model (strip build suffix)
+  const cleanedModel = parseDeviceModel(state.deviceModel);
+  
+  // Look up device in database
+  const deviceConfig = findDeviceConfig(cleanedModel);
+  
+  if (deviceConfig) {
+    // Known device - auto-configure power
+    debugLog(`[DEVICE MODEL] Known device found: ${deviceConfig.shortName}`);
+    debugLog(`[DEVICE MODEL] Auto-configuring power to ${deviceConfig.power.toFixed(1)}w`);
+    
+    // Select the matching power radio button
+    // Format power value to match HTML format exactly (e.g., 1.0 → "1.0w", 0.3 → "0.3w")
+    // Use toFixed(1) to ensure one decimal place
+    const powerValue = `${deviceConfig.power.toFixed(1)}w`;
+    debugLog(`[DEVICE MODEL] Looking for power radio with value: ${powerValue}`);
+    const powerRadio = document.querySelector(`input[name="power"][value="${powerValue}"]`);
+    
+    if (powerRadio) {
+      powerRadio.checked = true;
+      state.autoPowerSet = true;
+      
+      // Show auto-configured power display, hide manual selection and placeholder
+      const powerPlaceholder = document.getElementById("powerPlaceholder");
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
+      const powerAutoValue = document.getElementById("powerAutoValue");
+      
+      if (powerPlaceholder) {
+        powerPlaceholder.style.display = "none";
+      }
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.remove("hidden");
+        powerAutoDisplay.style.display = "flex";
+      }
+      if (powerManualSelection) {
+        powerManualSelection.classList.add("hidden");
+        powerManualSelection.style.display = "none";
+      }
+      if (powerAutoValue) {
+        powerAutoValue.textContent = powerValue;
+      }
+      
+      // Update label to show "⚡ Auto"
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "⚡ Auto";
+        powerLabelStatus.className = "text-emerald-400";
+      }
+      
+      // Show status message
+      setDynamicStatus(`Auto-configured: ${deviceConfig.shortName} at ${deviceConfig.power}w`, STATUS_COLORS.success);
+      
+      // Update controls to enable ping buttons now that power is selected
+      updateControlsForCooldown();
+      
+      debugLog(`[DEVICE MODEL] ✅ Auto-power configuration complete: ${powerValue}`);
+    } else {
+      debugError(`[DEVICE MODEL] Power radio button not found for value: ${powerValue}`);
+      debugLog(`[DEVICE MODEL] Available power buttons:`);
+      document.querySelectorAll('input[name="power"]').forEach(radio => {
+        debugLog(`[DEVICE MODEL]   - ${radio.value}`);
+      });
+      state.autoPowerSet = false;
+    }
+    
+    // Update device model display to show short name
+    if (deviceModelEl) {
+      deviceModelEl.textContent = deviceConfig.shortName;
+    }
+    
+  } else {
+    // Unknown device - log to error log and require manual selection
+    debugLog(`[DEVICE MODEL] Unknown device: ${state.deviceModel}`);
+    addErrorLogEntry(`Unknown device: ${state.deviceModel}`, "DEVICE MODEL");
+    state.autoPowerSet = false;
+    
+    // Hide auto-configured power display and placeholder, show manual selection
+    const powerPlaceholder = document.getElementById("powerPlaceholder");
+    const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+    const powerManualSelection = document.getElementById("powerManualSelection");
+    
+    if (powerPlaceholder) {
+      powerPlaceholder.style.display = "none";
+    }
+    if (powerAutoDisplay) {
+      powerAutoDisplay.classList.add("hidden");
+      powerAutoDisplay.style.display = "none";
+    }
+    if (powerManualSelection) {
+      powerManualSelection.classList.remove("hidden");
+      powerManualSelection.style.display = "flex";
+    }
+    
+    // Update label to show "⚠️ Required"
+    if (powerLabelStatus) {
+      powerLabelStatus.textContent = "⚠️ Required";
+      powerLabelStatus.className = "text-amber-400";
+    }
+    
+    // Update device model display to show "Unknown"
+    if (deviceModelEl) {
+      deviceModelEl.textContent = "Unknown";
+    }
+    
+    // Don't show status message here - will be shown after connection completes
+    
+    debugLog("[DEVICE MODEL] Auto-power skipped, user must select power manually");
+  }
 }
 
 // ---- BLE connect / disconnect ----
@@ -4323,7 +5445,26 @@ async function connect() {
     alert("Web Bluetooth not supported in this browser.");
     return;
   }
-  connectBtn.disabled = true;
+  setConnectButtonDisabled(true);
+  
+  // CLEAR all logs immediately on connect (new session)
+  txLogState.entries = [];
+  renderTxLogEntries(true);
+  updateTxLogSummary();
+  
+  rxLogState.entries = [];
+  rxLogState.dropCount = 0;
+  renderRxLogEntries(true);
+  updateRxLogSummary();
+  
+  errorLogState.entries = [];
+  renderErrorLogEntries(true);
+  updateErrorLogSummary();
+  
+  debugLog("[BLE] All logs cleared on connect start (new session)");
+  
+  // Clear any previous disconnect reason so error status doesn't persist
+  state.disconnectReason = null;
   
   // Set connection bar to "Connecting" - will remain until GPS init completes
   setConnStatus("Connecting", STATUS_COLORS.info);
@@ -4341,7 +5482,7 @@ async function connect() {
       // Keep "Connecting" status visible during the full connection process
       // Don't show "Connected" until everything is complete
       setConnectButton(true);
-      connectBtn.disabled = false;
+      setConnectButtonDisabled(false);
       const selfInfo = await conn.getSelfInfo();
       debugLog(`[BLE] Device info: ${selfInfo?.name || "[No device]"}`);
       
@@ -4361,7 +5502,58 @@ async function connect() {
       state.devicePublicKey = BufferUtils.bytesToHex(selfInfo.publicKey);
       debugLog(`[BLE] Device public key stored: ${state.devicePublicKey.substring(0, 16)}...`);
       
-      deviceInfoEl.textContent = selfInfo?.name || "[No device]";
+      // Store device name from selfInfo
+      state.deviceName = selfInfo?.name || "[No device]";
+      debugLog(`[BLE] Device name stored: ${state.deviceName}`);
+      
+      // Get device model from deviceQuery (contains manufacturerModel)
+      debugLog("[BLE] Requesting device info via deviceQuery");
+      try {
+        const deviceInfo = await conn.deviceQuery(1);
+        debugLog(`[BLE] deviceQuery response received: firmwareVer=${deviceInfo?.firmwareVer}, model=${deviceInfo?.manufacturerModel}`);
+        state.deviceModel = deviceInfo?.manufacturerModel || "-";
+        debugLog(`[BLE] Device model stored: ${state.deviceModel}`);
+        // Don't update deviceModelEl here - autoSetPowerLevel() will set it to shortName or "Unknown"
+      } catch (e) {
+        debugError(`[BLE] deviceQuery failed: ${e && e.message ? e.message : e}`);
+        state.deviceModel = "-";
+        if (deviceModelEl) deviceModelEl.textContent = "-";
+      }
+      
+      // Auto-configure radio power based on device model
+      await autoSetPowerLevel();
+      
+      // Immediately attempt to read radio stats (noise floor) on connect
+      debugLog("[BLE] Requesting radio stats on connect");
+      try {
+        // Don't pass timeout - avoids library timeout bug
+        const stats = await conn.getRadioStats(null);
+        debugLog(`[BLE] getRadioStats returned: ${JSON.stringify(stats)}`);
+        if (stats && typeof stats.noiseFloor !== 'undefined') {
+          state.lastNoiseFloor = stats.noiseFloor;
+          debugLog(`[BLE] Radio stats acquired on connect: noiseFloor=${state.lastNoiseFloor}`);
+        } else {
+          debugWarn(`[BLE] Radio stats response missing noiseFloor field: ${JSON.stringify(stats)}`);
+          state.lastNoiseFloor = null;
+        }
+      } catch (e) {
+        // Timeout likely means firmware doesn't support GetStats command yet
+        if (e && e.message && e.message.includes('timeout')) {
+          debugLog(`[BLE] getRadioStats not supported by companion firmware (timeout)`);
+        } else {
+          debugWarn(`[BLE] getRadioStats failed on connect: ${e && e.message ? e.message : String(e)}`);
+        }
+        state.lastNoiseFloor = null; // Show '--' instead of 'ERR' for unsupported feature
+      }
+      
+      // Start periodic noise floor updates if feature is supported
+      if (state.lastNoiseFloor !== null) {
+        startNoiseFloorUpdates();
+        debugLog("[BLE] Started periodic noise floor updates (5s interval)");
+      } else {
+        debugLog("[BLE] Noise floor updates not started (feature unsupported by firmware)");
+      }
+      
       updateAutoButton();
       try { 
         await conn.syncDeviceTime?.(); 
@@ -4370,22 +5562,29 @@ async function connect() {
         debugLog("[BLE] Device time sync not available or failed");
       }
       try {
-        // Check capacity immediately after time sync, before channel setup and GPS init
-        const allowed = await checkCapacity("connect");
+        // Request auth immediately after time sync, before channel setup and GPS init
+        // Note: requestAuth acquires fresh GPS internally
+        const allowed = await requestAuth("connect");
         if (!allowed) {
-          debugWarn("[CAPACITY] Capacity check denied, disconnecting");
-          // disconnectReason already set by checkCapacity()
+          debugWarn("[AUTH] Auth request denied, disconnecting");
+          // disconnectReason already set by requestAuth()
           // Status message will be set by disconnected event handler based on disconnectReason
           // Disconnect after a brief delay to ensure "Acquiring wardriving slot" is visible
           setTimeout(() => {
-            disconnect().catch(err => debugError(`[BLE] Disconnect after capacity denial failed: ${err.message}`));
+            disconnect().catch(err => debugError(`[BLE] Disconnect after auth denial failed: ${err.message}`));
           }, 1500);
           return;
         }
         
-        // Capacity check passed
-        setDynamicStatus("Acquired wardriving slot", STATUS_COLORS.success);
-        debugLog("[BLE] Wardriving slot acquired successfully");
+        // Auth passed - check if full access or RX-only
+        if (state.txAllowed && state.rxAllowed) {
+          setDynamicStatus("Acquired wardriving slot", STATUS_COLORS.success);
+          debugLog("[AUTH] Full access granted (TX + RX)");
+        } else if (state.rxAllowed) {
+          setDynamicStatus("TX slots full - RX only", STATUS_COLORS.warning);
+          debugLog("[AUTH] RX-only access granted (TX slots full)");
+        }
+        debugLog(`[AUTH] Session acquired: tx=${state.txAllowed}, rx=${state.rxAllowed}`);
         
         // Proceed with channel setup and GPS initialization
         await ensureChannel();
@@ -4394,33 +5593,41 @@ async function connect() {
         startUnifiedRxListening();
         debugLog("[BLE] Unified RX listener started on connect");
         
-        // CLEAR all logs on connect (new session)
-        txLogState.entries = [];
-        renderTxLogEntries(true);
-        updateTxLogSummary();
-        
-        rxLogState.entries = [];
-        rxLogState.dropCount = 0;
-        renderRxLogEntries(true);
-        updateRxLogSummary();
-        
-        errorLogState.entries = [];
-        renderErrorLogEntries(true);
-        updateErrorLogSummary();
-        
-        debugLog("[BLE] All logs cleared on connect (new session)");
-        
-        // GPS initialization
-        setDynamicStatus("Priming GPS", STATUS_COLORS.info);
-        debugLog("[BLE] Starting GPS initialization");
+        // GPS initialization (primeGpsOnce for watch mode)
+        // Note: Fresh GPS was already acquired by requestAuth, this starts continuous watching
+        debugLog("[BLE] Starting GPS watch mode");
         await primeGpsOnce();
         
-        // Connection complete, show Connected status in connection bar
-        setConnStatus("Connected", STATUS_COLORS.success);
-        setDynamicStatus("Idle"); // Clear dynamic status to em dash
+        // Connection complete - show status based on TX+RX vs RX-only
+        if (state.txAllowed && state.rxAllowed) {
+          setConnStatus("Connected", STATUS_COLORS.success);
+        } else if (state.rxAllowed) {
+          setConnStatus("Connected (RX Only)", STATUS_COLORS.warning);
+        }
         
-        // Lock wardrive settings after successful connection
-        lockWardriveSettings();
+        // If device is unknown and power not selected, show warning message
+        if (!state.autoPowerSet && !getCurrentPowerSetting()) {
+          setDynamicStatus("Unknown device - select power manually", STATUS_COLORS.warning, true);
+          debugLog("[BLE] Connection complete - showing unknown device warning");
+        } else {
+          setDynamicStatus("Idle"); // Clear dynamic status to em dash
+        }
+        
+        // Note: Settings are NOT locked on connect - only when auto mode starts
+        // This allows users to change power after connection if device was unknown
+        
+        // Immediate zone check after connect to update slot display
+        debugLog("[GEO AUTH] Performing zone check after successful connect");
+        const coords = await getValidGpsForZoneCheck();
+        if (coords) {
+          const result = await checkZoneStatus(coords);
+          if (result.success && result.zone) {
+            state.currentZone = result.zone;
+            state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+            updateZoneStatusUI(result);
+            debugLog(`[GEO AUTH] Post-connect zone check: ${result.zone.name}, slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+          }
+        }
         
         debugLog("[BLE] Full connection process completed successfully");
       } catch (e) {
@@ -4434,6 +5641,12 @@ async function connect() {
       debugLog("[BLE] BLE disconnected event fired");
       debugLog(`[BLE] Disconnect reason: ${state.disconnectReason}`);
       
+      // Guard against duplicate disconnect events - if connection is already null, skip
+      if (state.connection === null) {
+        debugLog("[BLE] Ignoring duplicate disconnect event (connection already null)");
+        return;
+      }
+      
       // Always set connection bar to "Disconnected"
       setConnStatus("Disconnected", STATUS_COLORS.error);
       
@@ -4442,37 +5655,70 @@ async function connect() {
       if (state.disconnectReason && REASON_MESSAGES[state.disconnectReason]) {
         debugLog(`[BLE] Branch: known reason code (${state.disconnectReason})`);
         const errorMsg = REASON_MESSAGES[state.disconnectReason];
+        addErrorLogEntry(`Disconnected: ${errorMsg} (reason: ${state.disconnectReason})`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog(`[BLE] Setting terminal status for reason: ${state.disconnectReason}`);
       } else if (state.disconnectReason === "capacity_full") {
         debugLog("[BLE] Branch: capacity_full");
+        addErrorLogEntry("Disconnected: MeshMapper server at capacity - too many active connections", "CONNECTION");
         setDynamicStatus("MeshMapper at capacity", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
         debugLog("[BLE] Branch: app_down");
+        addErrorLogEntry("Disconnected: MeshMapper server unavailable - check service status", "CONNECTION");
         setDynamicStatus("MeshMapper unavailable", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
         debugLog("[BLE] Branch: slot_revoked");
+        addErrorLogEntry("Disconnected: Wardriving slot revoked by server - exceeded limits or policy violation", "CONNECTION");
         setDynamicStatus("MeshMapper slot revoked", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "session_id_error") {
         debugLog("[BLE] Branch: session_id_error");
+        addErrorLogEntry("Disconnected: Session ID error - failed to establish valid wardrive session", "CONNECTION");
         setDynamicStatus("Session error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for session_id error");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("[BLE] Branch: public_key_error");
+        addErrorLogEntry("Disconnected: Device public key error - invalid or missing key from companion", "CONNECTION");
         setDynamicStatus("Device key error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for public key error");
+      } else if (state.disconnectReason === "zone_disabled") {
+        debugLog("[GEO AUTH] Branch: zone_disabled");
+        addErrorLogEntry("Disconnected: Zone disabled - wardriving not allowed in this area", "CONNECTION");
+        setDynamicStatus("Zone disabled", STATUS_COLORS.error, true);
+        debugLog("[GEO AUTH] Setting terminal status for zone disabled");
+      } else if (state.disconnectReason === "outside_zone") {
+        debugLog("[GEO AUTH] Branch: outside_zone");
+        addErrorLogEntry("Disconnected: Outside zone - moved outside wardriving zone boundary", "CONNECTION");
+        setDynamicStatus("Outside zone", STATUS_COLORS.error, true);
+        debugLog("[GEO AUTH] Setting terminal status for outside zone");
+      } else if (state.disconnectReason === "at_capacity") {
+        debugLog("[GEO AUTH] Branch: at_capacity");
+        addErrorLogEntry("Disconnected: Zone at capacity - too many active wardrivers in this zone", "CONNECTION");
+        setDynamicStatus("Zone at capacity", STATUS_COLORS.error, true);
+        debugLog("[GEO AUTH] Setting terminal status for zone at capacity");
+      } else if (state.disconnectReason === "gps_unavailable") {
+        debugLog("[GEO AUTH] Branch: gps_unavailable");
+        addErrorLogEntry("Disconnected: GPS unavailable - could not acquire valid GPS coordinates for zone check", "CONNECTION");
+        setDynamicStatus("GPS unavailable", STATUS_COLORS.error, true);
+        debugLog("[GEO AUTH] Setting terminal status for GPS unavailable");
+      } else if (state.disconnectReason === "zone_check_failed") {
+        debugLog("[GEO AUTH] Branch: zone_check_failed");
+        addErrorLogEntry("Disconnected: Zone check failed - unable to verify wardriving zone", "CONNECTION");
+        setDynamicStatus("Zone check failed", STATUS_COLORS.error, true);
+        debugLog("[GEO AUTH] Setting terminal status for zone check failed");
       } else if (state.disconnectReason === "channel_setup_error") {
         debugLog("[BLE] Branch: channel_setup_error");
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
+        addErrorLogEntry(`Disconnected: #wardriving channel setup failed - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for channel setup error");
         state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("[BLE] Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
+        addErrorLogEntry(`Disconnected: BLE connection error - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for BLE disconnect error");
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
@@ -4483,20 +5729,63 @@ async function connect() {
         debugLog(`[BLE] Branch: else (unknown reason: ${state.disconnectReason})`);
         // For unknown disconnect reasons from API, show a generic message
         debugLog(`[BLE] Showing generic error for unknown reason: ${state.disconnectReason}`);
-        setDynamicStatus(`Connection not allowed: ${state.disconnectReason}`, STATUS_COLORS.error, true);
+        const errorMsg = `Connection not allowed: ${state.disconnectReason}`;
+        addErrorLogEntry(`Disconnected: Connection not allowed by server (reason: ${state.disconnectReason})`, "CONNECTION");
+        setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
       }
       
       setConnectButton(false);
-      deviceInfoEl.textContent = "—";
+      if (deviceModelEl) deviceModelEl.textContent = "-";
+      
+      // Stop periodic noise floor updates
+      stopNoiseFloorUpdates();
+      
+      debugLog("[BLE] Clearing device model and noise floor on disconnect");
+      state.deviceModel = null;
+      state.deviceName = null;
+      state.lastNoiseFloor = null;
       state.connection = null;
       state.channel = null;
       state.devicePublicKey = null; // Clear public key
       state.wardriveSessionId = null; // Clear wardrive session ID
+      state.txAllowed = false; // Clear TX permission
+      state.rxAllowed = false; // Clear RX permission
+      state.sessionExpiresAt = null; // Clear session expiration
       state.debugMode = false; // Clear debug mode
       state.tempTxRepeaterData = null; // Clear temp TX data
-      state.disconnectReason = null; // Reset disconnect reason
+      // NOTE: state.disconnectReason is NOT cleared here - it's cleared in connect() 
+      // so error status persists until user starts a new connection
       state.channelSetupErrorMessage = null; // Clear error message
       state.bleDisconnectErrorMessage = null; // Clear error message
+      state.autoPowerSet = false; // Reset auto-power flag
+      
+      // Show placeholder, hide both power displays and clear label
+      const powerPlaceholder = document.getElementById("powerPlaceholder");
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      
+      if (powerPlaceholder) {
+        powerPlaceholder.style.display = "flex";
+      }
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.add("hidden");
+        powerAutoDisplay.style.display = "none";
+      }
+      if (powerManualSelection) {
+        powerManualSelection.classList.add("hidden");
+        powerManualSelection.style.display = "none";
+      }
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "";
+        powerLabelStatus.className = "";
+      }
+      
+      // Uncheck all power radio buttons
+      const powerInputs = document.querySelectorAll('input[name="power"]');
+      powerInputs.forEach(input => {
+        input.checked = false;
+      });
       
       // Unlock wardrive settings after disconnect
       unlockWardriveSettings();
@@ -4518,18 +5807,12 @@ async function connect() {
       // Flush all pending RX batch data before cleanup
       flushAllRxBatches('disconnect');
       
-      // Clear API queue messages (timers already stopped in cleanupAllTimers)
-      apiQueue.messages = [];
-      debugLog(`[API QUEUE] Queue cleared on disconnect`);
+      // Clear wardrive queue messages (timers already stopped in cleanupAllTimers)
+      wardriveQueue.messages = [];
+      debugLog(`[WARDRIVE QUEUE] Queue cleared on disconnect`);
       
       // Clean up all timers
       cleanupAllTimers();
-      
-      // Clear RX log entries on disconnect
-      rxLogState.entries = [];
-      renderRxLogEntries(true); // Full render to show placeholder
-      updateRxLogSummary();
-      debugLog("[BLE] RX log cleared on disconnect");
       
       state.lastFix = null;
       state.lastSuccessfulPingLocation = null;
@@ -4543,7 +5826,10 @@ async function connect() {
     debugError(`[BLE] BLE connection failed: ${e.message}`, e);
     setConnStatus("Disconnected", STATUS_COLORS.error);
     setDynamicStatus("Connection failed", STATUS_COLORS.error);
-    connectBtn.disabled = false;
+    updateConnectButtonState();  // Re-check zone and antenna requirements
+    
+    // Restart slot refresh timer since connection failed
+    startSlotRefreshTimer();
   }
 }
 async function disconnect() {
@@ -4553,7 +5839,7 @@ async function disconnect() {
     return;
   }
 
-  connectBtn.disabled = true;
+  setConnectButtonDisabled(true);
   
   // Set disconnectReason to "normal" if not already set (for user-initiated disconnects)
   if (state.disconnectReason === null || state.disconnectReason === undefined) {
@@ -4572,21 +5858,21 @@ async function disconnect() {
     debugLog(`[BLE] All pending background API posts completed`);
   }
 
-  // 2. Flush API queue (session_id still valid)
-  if (apiQueue.messages.length > 0) {
-    debugLog(`[BLE] Flushing ${apiQueue.messages.length} queued messages before disconnect`);
-    await flushApiQueue();
+  // 2. Flush wardrive queue (session_id still valid)
+  if (wardriveQueue.messages.length > 0) {
+    debugLog(`[BLE] Flushing ${wardriveQueue.messages.length} queued messages before disconnect`);
+    await submitWardriveData();
   }
-  stopFlushTimers();
+  stopWardriveTimers();
 
-  // 3. THEN release capacity slot if we have a public key
-  if (state.devicePublicKey) {
+  // 3. THEN release session via auth API if we have a public key
+  if (state.devicePublicKey && state.wardriveSessionId) {
     try {
-      debugLog("[BLE] Releasing capacity slot");
-      await checkCapacity("disconnect");
+      debugLog("[AUTH] Releasing session via /auth disconnect");
+      await requestAuth("disconnect");
     } catch (e) {
-      debugWarn(`[CAPACITY] Failed to release capacity slot: ${e.message}`);
-      // Don't fail disconnect if capacity release fails
+      debugWarn(`[AUTH] Failed to release session: ${e.message}`);
+      // Don't fail disconnect if auth release fails
     }
   }
 
@@ -4617,12 +5903,34 @@ async function disconnect() {
     } else {
       debugWarn("[BLE] No known disconnect method on connection object");
     }
+    
+    // Restart 30s slot refresh timer
+    startSlotRefreshTimer();
+    
+    // Immediate zone check after disconnect to update slot display
+    debugLog("[GEO AUTH] Performing zone check after disconnect");
+    const coords = await getValidGpsForZoneCheck();
+    if (coords) {
+      const result = await checkZoneStatus(coords);
+      if (result.success && result.zone) {
+        state.currentZone = result.zone;
+        state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+        updateZoneStatusUI(result);
+        debugLog(`[GEO AUTH] Post-disconnect zone check: ${result.zone.name}, slots: ${result.zone.slots_available}/${result.zone.slots_max}`);
+      } else if (result.success && !result.in_zone) {
+        state.currentZone = null;
+        state.lastZoneCheckCoords = { lat: coords.lat, lon: coords.lon };
+        updateZoneStatusUI(result);
+        debugLog(`[GEO AUTH] Post-disconnect zone check: outside zone, nearest: ${result.nearest_zone?.name}`);
+      }
+    }
+    
   } catch (e) {
     debugError(`[BLE] BLE disconnect failed: ${e.message}`, e);
     state.disconnectReason = "ble_disconnect_error"; // Mark specific disconnect reason
     state.bleDisconnectErrorMessage = e.message || "Disconnect failed"; // Store error message
   } finally {
-    connectBtn.disabled = false;
+    updateConnectButtonState();  // Re-check zone and antenna requirements
   }
 }
 
@@ -4668,30 +5976,42 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 /**
- * Update Connect button state based on radio power and external antenna selection
+ * Update Connect button state based on external antenna selection AND zone status
+ * Connect requires: external antenna selected AND in valid zone (no persistent error)
  */
 function updateConnectButtonState() {
-  const radioPowerSelected = getCurrentPowerSetting() !== "";
   const externalAntennaSelected = getExternalAntennaSetting() !== "";
   const isConnected = !!state.connection;
+  const hasZoneError = !!statusMessageState.outsideZoneError;
+  const inValidZone = !!state.currentZone;
   
   if (!isConnected) {
-    // Only enable Connect if both settings are selected
-    connectBtn.disabled = !radioPowerSelected || !externalAntennaSelected;
+    // Enable Connect only if: antenna selected AND in valid zone AND no persistent error
+    const canConnect = externalAntennaSelected && inValidZone && !hasZoneError;
+    setConnectButtonDisabled(!canConnect);
     
-    // Update dynamic status based on selections
-    if (!radioPowerSelected && !externalAntennaSelected) {
-      debugLog("[UI] Radio power and external antenna not selected - showing message in status bar");
-      setDynamicStatus("Select radio power and external antenna to connect", STATUS_COLORS.warning);
-    } else if (!radioPowerSelected) {
-      debugLog("[UI] Radio power not selected - showing message in status bar");
-      setDynamicStatus("Select radio power to connect", STATUS_COLORS.warning);
+    // Update dynamic status based on what's blocking connection
+    // Priority: zone error > antenna not selected > ready
+    if (hasZoneError) {
+      // Zone error already shown as persistent message, don't override
+      debugLog("[UI] Connect blocked by zone error (persistent message already shown)");
     } else if (!externalAntennaSelected) {
       debugLog("[UI] External antenna not selected - showing message in status bar");
       setDynamicStatus("Select external antenna to connect", STATUS_COLORS.warning);
+    } else if (!inValidZone) {
+      debugLog("[UI] Not in valid zone - waiting for zone check");
+      // Don't show message here, zone check will update status
     } else {
-      debugLog("[UI] Radio power and external antenna selected - clearing message from status bar");
-      setDynamicStatus("Idle");
+      debugLog("[UI] External antenna selected and in valid zone - ready to connect");
+      // Only set Idle if not showing a disconnect error
+      const isErrorDisconnect = state.disconnectReason && 
+        state.disconnectReason !== "normal" && 
+        state.disconnectReason !== null;
+      if (!isErrorDisconnect) {
+        setDynamicStatus("Idle", STATUS_COLORS.idle);
+      } else {
+        debugLog(`[UI] Preserving disconnect error status (reason: ${state.disconnectReason})`);
+      }
     }
   }
 }
@@ -4712,6 +6032,14 @@ function lockWardriveSettings() {
       label.style.opacity = "0.5";
     }
   });
+  
+  // Lock Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.disabled = true;
+    powerOverrideBtn.classList.add("cursor-not-allowed", "pointer-events-none");
+    powerOverrideBtn.style.opacity = "0.5";
+  }
   
   // Lock all external antenna inputs and labels
   const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
@@ -4742,6 +6070,14 @@ function unlockWardriveSettings() {
     }
   });
   
+  // Unlock Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.disabled = false;
+    powerOverrideBtn.classList.remove("cursor-not-allowed", "pointer-events-none");
+    powerOverrideBtn.style.opacity = "";
+  }
+  
   // Unlock all external antenna inputs and labels
   const antennaInputs = document.querySelectorAll('input[name="externalAntenna"]');
   antennaInputs.forEach(input => {
@@ -4757,9 +6093,31 @@ function unlockWardriveSettings() {
 // ---- Bind UI & init ----
 export async function onLoad() {
   debugLog("[INIT] wardrive.js onLoad() called - initializing");
+  
+  // Initialize double-buffered iframe references (in case module loaded before DOM)
+  if (!coverageFrameA) coverageFrameA = document.getElementById("coverageFrameA");
+  if (!coverageFrameB) coverageFrameB = document.getElementById("coverageFrameB");
+  if (coverageFrameA && !activeFrame) activeFrame = coverageFrameA;
+  debugLog(`[INIT] Coverage iframes: A=${!!coverageFrameA}, B=${!!coverageFrameB}, active=${activeFrame?.id || 'none'}`);
+  
   setConnStatus("Disconnected", STATUS_COLORS.error);
   enableControls(false);
   updateAutoButton();
+  
+  // Load device models database
+  try {
+    debugLog("[INIT] Loading device models database from device-models.json");
+    const response = await fetch('content/device-models.json');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    const data = await response.json();
+    DEVICE_MODELS = data.devices || [];
+    debugLog(`[INIT] ✅ Loaded ${DEVICE_MODELS.length} device models from database`);
+  } catch (e) {
+    debugError(`[INIT] Failed to load device-models.json: ${e.message}`);
+    DEVICE_MODELS = []; // Ensure it's an empty array on failure
+  }
   
   // Disable RX Auto button (backend API not ready)
   rxAutoBtn.disabled = true;
@@ -4783,7 +6141,7 @@ export async function onLoad() {
   });
   txPingBtn.addEventListener("click", () => {
     debugLog("[UI] Manual ping button clicked");
-    sendPing(true).catch(console.error);
+    sendPing(true).catch((e) => debugError("[PING] Manual ping error:", e?.message || String(e)));
   });
   txRxAutoBtn.addEventListener("click", () => {
     debugLog("[UI] Auto toggle button clicked");
@@ -4840,11 +6198,122 @@ export async function onLoad() {
     });
   }
 
-  // Add event listeners to radio power options to update Connect button state
+  // Add event listeners to radio power options
   const powerRadios = document.querySelectorAll('input[name="power"]');
+  let previousPowerValue = null; // Track previous selection for revert on cancel
+  
+  // Add event listener to Override button
+  const powerOverrideBtn = document.getElementById("powerOverrideBtn");
+  if (powerOverrideBtn) {
+    powerOverrideBtn.addEventListener("click", () => {
+      debugLog("[UI] Override button clicked");
+      
+      // Show custom confirmation modal
+      const modal = document.getElementById("overrideModal");
+      debugLog(`[UI] Modal element lookup result: ${modal ? 'found' : 'NOT FOUND'}`);
+      if (modal) {
+        debugLog(`[UI] Modal current display: ${modal.style.display}, classes: ${modal.className}`);
+        modal.classList.remove("hidden");
+        modal.style.display = "flex";
+        debugLog(`[UI] Modal after show - display: ${modal.style.display}, classes: ${modal.className}`);
+      } else {
+        debugError("[UI] overrideModal element not found in DOM!");
+      }
+    });
+  } else {
+    debugError("[UI] powerOverrideBtn element not found!");
+  }
+  
+  // Add event listeners to modal buttons
+  const overrideModalConfirm = document.getElementById("overrideModalConfirm");
+  const overrideModalCancel = document.getElementById("overrideModalCancel");
+  const overrideModal = document.getElementById("overrideModal");
+  
+  if (overrideModalConfirm && overrideModal) {
+    overrideModalConfirm.addEventListener("click", () => {
+      debugLog("[UI] Override confirmed via custom modal");
+      
+      // Hide modal
+      overrideModal.classList.add("hidden");
+      
+      // Hide auto display, show manual selection
+      const powerAutoDisplay = document.getElementById("powerAutoDisplay");
+      const powerManualSelection = document.getElementById("powerManualSelection");
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      
+      if (powerAutoDisplay) {
+        powerAutoDisplay.classList.add("hidden");
+        powerAutoDisplay.style.display = "none";
+      }
+      if (powerManualSelection) {
+        powerManualSelection.classList.remove("hidden");
+        powerManualSelection.style.display = "flex";
+      }
+      
+      // Update state and label
+      state.autoPowerSet = false;
+      if (powerLabelStatus) {
+        powerLabelStatus.textContent = "⚙️ Manual";
+        powerLabelStatus.className = "text-slate-400";
+      }
+      
+      debugLog("[UI] Power override confirmed, switched to manual selection");
+    });
+  }
+  
+  if (overrideModalCancel && overrideModal) {
+    overrideModalCancel.addEventListener("click", () => {
+      debugLog("[UI] Override canceled via custom modal");
+      overrideModal.classList.add("hidden");
+      overrideModal.style.display = "none";
+    });
+  }
+  
+  // Close modal when clicking backdrop
+  if (overrideModal) {
+    overrideModal.addEventListener("click", (e) => {
+      if (e.target === overrideModal) {
+        debugLog("[UI] Override modal closed via backdrop click");
+        overrideModal.classList.add("hidden");
+        overrideModal.style.display = "none";
+      }
+    });
+  }
+  
   powerRadios.forEach(radio => {
-    radio.addEventListener("change", () => {
-      debugLog(`[UI] Radio power changed to: ${getCurrentPowerSetting()}`);
+    radio.addEventListener("change", (e) => {
+      const newValue = getCurrentPowerSetting();
+      debugLog(`[UI] Radio power changed to: ${newValue}`);
+      
+      const powerLabelStatus = document.getElementById("powerLabelStatus");
+      
+      // If user is selecting after Override button was clicked (autoPowerSet is false after override)
+      // Update label to show "⚙️ Manual"
+      if (!state.autoPowerSet && state.connection) {
+        if (powerLabelStatus) {
+          // Check if this was an unknown device (label is "⚠️ Required")
+          const wasUnknown = powerLabelStatus.textContent === "⚠️ Required";
+          
+          if (wasUnknown) {
+            // Clear the "Required" warning for unknown device
+            powerLabelStatus.textContent = "⚙️ Manual";
+            powerLabelStatus.className = "text-slate-400";
+            setDynamicStatus("Idle");
+            debugLog("[UI] Cleared unknown device status after manual power selection");
+          } else {
+            // This was an override, show Manual indicator
+            powerLabelStatus.textContent = "⚙️ Manual";
+            powerLabelStatus.className = "text-slate-400";
+            debugLog("[UI] Manual power selection after override");
+          }
+        }
+      }
+      
+      // Store current value as previous for next change
+      previousPowerValue = newValue;
+      
+      // Update controls to enable/disable ping buttons based on power selection
+      updateControlsForCooldown();
       updateConnectButtonState();
     });
   });
@@ -4915,5 +6384,9 @@ export async function onLoad() {
   } catch (e) { 
     debugLog(`[GPS] Initial location permission not granted: ${e.message}`);
   }
+  
+  // Perform app launch zone check
+  await performAppLaunchZoneCheck();
+  
   debugLog("[INIT] wardrive.js initialization complete");
 }

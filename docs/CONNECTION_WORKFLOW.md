@@ -66,6 +66,8 @@
 10. **GPS Init** → Starts GPS tracking
 11. **Connected** → Enables all controls, ready for wardriving
 
+> **Note:** Zone validation happens server-side via `/auth` endpoint (Phase 4.2). The preflight zone check (Phase 4.1) only updates UI before connect.
+
 ### Detailed Connection Steps
 
 See `content/wardrive.js` lines 2020-2150 for the main `connect()` function.
@@ -113,15 +115,37 @@ connectBtn.addEventListener("click", async () => {
    - **Connection Status**: `"Connecting"` (blue, maintained)
    - **Dynamic Status**: `"—"` (em dash)
 
-5. **Get Device Info**
+5. **Get Device Info & Auto-Power Configuration**
    - Retrieves device name, public key (32 bytes), settings
    - **CRITICAL**: Validates public key length
    - Converts to hex string
    - Stores in `state.devicePublicKey`
    - Updates UI with device name
+   - **NEW: Device Model Query & Auto-Power**:
+     - Calls `deviceQuery(1)` to get manufacturer model string
+     - Example: `"Ikoka Stick-E22-30dBm (Xiao_nrf52)nightly-e31c46f"`
+     - Stores full string in `state.deviceModel`
+     - Calls `autoSetPowerLevel()`:
+       - Parses model (strips build suffix like "nightly-e31c46f")
+       - Looks up in `DEVICE_MODELS` database (loaded from `device-models.json` at startup)
+       - **If known device found**:
+         - Automatically selects matching power radio button (0.3w/0.6w/1.0w/2.0w)
+         - Updates power label: "Radio Power ⚡ Auto" (emerald text)
+         - Displays shortName in connection bar (e.g., "Ikoka Stick 1w")
+         - Shows status: "Auto-configured: [shortName] at X.Xw" (green, 500ms min)
+         - Enables ping controls (calls `updateControlsForCooldown()`)
+         - Sets `state.autoPowerSet = true`
+       - **If unknown device**:
+         - Leaves power unselected
+         - Displays "Unknown" in connection bar
+         - Logs error: `"[DEVICE MODEL] Unknown device: [full model string]"`
+         - Shows status: "Unknown device - select power manually" (yellow, persistent until power selected)
+         - Ping controls remain disabled
+         - Sets `state.autoPowerSet = false`
+   - Requests radio statistics from the companion (noise floor, last RSSI, SNR) and stores the result in application state. The connection bar displays `Noise: <value>`. If stats fetch fails, an error marker is shown (`Noise: ERR`) but connection proceeds.
    - Changes button to "Disconnect" (red)
    - **Connection Status**: `"Connecting"` (blue, maintained)
-   - **Dynamic Status**: `"—"` (em dash)
+   - **Dynamic Status**: Auto-power status message (green) or unknown device warning (yellow)
 
 6. **Sync Device Time**
    - Sends current Unix timestamp
@@ -206,11 +230,12 @@ connectBtn.addEventListener("click", async () => {
     - Refreshes coverage map if accuracy < 100m
 
 11. **Connection Complete**
-    - **Connection Status**: `"Connected"` (green) - **NOW shown after GPS init**
+    - **Connection Status**: `"Connected"` (green)
     - **Dynamic Status**: `"—"` (em dash - cleared to show empty state)
     - Enables all UI controls
     - Ready for wardriving operations
     - Passive RX listening running in background
+    - **Note**: Zone validation happens server-side via `/auth` endpoint (Phase 4.2) and ongoing `/wardrive` posts (Phase 4.4). Phase 4.1 only provides preflight zone status UI before user clicks Connect.
 
 ## Disconnection Workflow
 
@@ -223,9 +248,10 @@ connectBtn.addEventListener("click", async () => {
 5. **Capacity Release** → Returns API slot to MeshMapper
 6. **Channel Deletion** → Removes #wardriving channel from device
 7. **BLE Disconnect** → Closes GATT connection
-8. **Cleanup** → Stops timers, GPS, wake locks, clears queue
-9. **State Reset** → Clears all connection state
-10. **Disconnected** → Connection Status shows "Disconnected", Dynamic Status shows em dash or error message
+8. **Zone Status Update** → Shows zone status, triggers zone recheck, starts 30s slot refresh timer
+9. **Cleanup** → Stops timers, GPS, wake locks, clears queue
+10. **State Reset** → Clears all connection state
+11. **Disconnected** → Connection Status shows "Disconnected", Dynamic Status shows em dash or error message
 
 ### Detailed Disconnection Steps
 
@@ -238,6 +264,7 @@ See `content/wardrive.js` for the main `disconnect()` function.
 - Channel setup failure
 - BLE connection lost (device out of range)
 - Slot revocation during active session
+- **Phase 4.2+**: Zone validation failures (server-side via `/auth` or `/wardrive` endpoints)
 
 **Disconnection Sequence:**
 
@@ -283,7 +310,22 @@ See `content/wardrive.js` for the main `disconnect()` function.
    - Last resort: `device.gatt.disconnect()`
    - Triggers "gattserverdisconnected" event
 
-9. **Disconnected Event Handler**
+9. **Zone Status Update (Post-BLE Close)**
+   - **Purpose**: Show zone status display and restart 30s slot refresh timer (Phase 4.1 - UI only)
+   - **Actions**:
+     - Shows zone status in connection bar (unhides `#zoneStatus` element)
+     - Starts 30s disconnected mode slot refresh timer
+   - **Zone Status Display**:
+     - Connection bar shows: `"Zone: [code]"` (green) or error text (red)
+     - Settings panel shows: Full zone name (white) or error text (red)
+     - Slots display shows: Available slots (green), "Full" (red), or "N/A" (gray)
+   - **Notes**:
+     - **No immediate zone recheck** - current zone status from `state.currentZone` is displayed
+     - Next zone check happens via 30s slot refresh timer or 100m GPS movement (if disconnected)
+     - Server-side validation will occur on next connect via `/auth` endpoint (Phase 4.2)
+   - Debug: `[GEO AUTH] Showing zone status after disconnect, starting 30s refresh timer`
+
+10. **Disconnected Event Handler**
    - Fires on BLE disconnect
    - **Connection Status**: `"Disconnected"` (red) - ALWAYS set regardless of reason
    - **Dynamic Status**: Set based on `state.disconnectReason` (WITHOUT "Disconnected:" prefix):
@@ -295,6 +337,11 @@ See `content/wardrive.js` for the main `disconnect()` function.
      - `session_id_error` → `"Session error - reconnect"` (red)
      - `channel_setup_error` → Error message (red)
      - `ble_disconnect_error` → Error message (red)
+     - `zone_disabled` → `"Zone disabled"` (red) - **Phase 4.2+ only** (server-side validation)
+     - `outside_zone` → `"Outside zone"` (red) - **Phase 4.2+ only** (server-side validation)
+     - `at_capacity` → `"Zone at capacity"` (red) - **Phase 4.2+ only** (server-side validation)
+     - `gps_unavailable` → `"GPS unavailable"` (red) - Phase 4.1 (client-side GPS failure)
+     - `zone_check_failed` → `"Zone check failed"` (red) - Phase 4.1 (preflight network error)
      - `normal` / `null` / `undefined` → `"—"` (em dash)
      - Unknown reason codes → `"Connection not allowed: [reason]"` (red)
    - Runs comprehensive cleanup:
@@ -311,21 +358,21 @@ See `content/wardrive.js` for the main `disconnect()` function.
      - Clears connection state
      - Clears device public key
 
-10. **UI Cleanup**
+11. **UI Cleanup**
     - Disables all controls except "Connect"
     - Clears device info display
     - Clears GPS display
     - Clears distance display
     - Changes button to "Connect" (green)
 
-11. **State Reset**
+12. **State Reset**
     - `state.connection = null`
     - `state.channel = null`
     - `state.lastFix = null`
     - `state.lastSuccessfulPingLocation = null`
     - `state.gpsState = "idle"`
 
-12. **Disconnected Complete**
+13. **Disconnected Complete**
     - **Connection Status**: `"Disconnected"` (red)
     - **Dynamic Status**: `"—"` (em dash) or error message based on disconnect reason
     - All resources released
@@ -503,6 +550,195 @@ stateDiagram-v2
     
     Disconnecting --> Disconnected: Cleanup complete
 ```
+
+## Geo-Auth Zone Check System (Phase 4.1 - Preflight UI Only)
+
+### Overview
+
+**Phase 4.1 Scope**: The Geo-Auth system provides **preflight UI feedback** about zone status to inform users before they click Connect. It does NOT enforce zone validation client-side.
+
+**Server-Side Validation** (Phase 4.2+):
+- `/auth` endpoint (Phase 4.2): Validates zone on connect
+- `/wardrive` endpoint (Phase 4.4): Validates zone on every ping with GPS coordinates
+- Heartbeat (Phase 4.3): Maintains server-side session state
+
+Client-side zone checks are for **UI display only** - real enforcement happens server-side.
+
+### Zone Check Triggers (Disconnected Mode Only)
+
+Phase 4.1 performs zone checks only while disconnected to update UI:
+
+1. **App Launch Check**
+   - **When**: Immediately after initial GPS permission granted on page load
+   - **Function**: `performAppLaunchZoneCheck()`
+   - **Behavior**:
+     - Disables Connect button initially
+     - Shows "Checking zone..." status in connection bar
+     - Gets GPS coordinates via `getValidGpsForZoneCheck()`
+     - Calls `checkZoneStatus(coords)` API
+     - Updates UI with zone name/code
+     - Enables Connect button ONLY if in valid, enabled zone with available capacity
+     - Starts 30s slot refresh timer (disconnected mode)
+   - **On Failure**: Connect button remains disabled, error shown in connection bar and settings panel
+   - **Notes**: Provides immediate feedback to user about wardriving availability at current location
+
+2. **100m GPS Movement Recheck (Disconnected Only)**
+   - **When**: While disconnected, triggered when user moves ≥100m from last zone check location
+   - **Function**: `handleZoneCheckOnMove(newCoords)` called from GPS watch callback (only if `!state.connection`)
+   - **Behavior**:
+     - Calculates distance from `state.lastZoneCheckCoords` using Haversine formula
+     - If distance ≥ `ZONE_CHECK_DISTANCE_M` (100m):
+       - Calls `checkZoneStatus(newCoords)` API
+       - Updates `state.currentZone` and `state.lastZoneCheckCoords`
+       - Updates UI with new zone status (connection bar, settings panel)
+       - Centers map on new location
+   - **On Success**: Updates zone display, updates Connect button enabled/disabled state
+   - **On Failure**: Shows error in connection bar and settings panel, disables Connect button
+   - **Notes**: Keeps zone status fresh as user moves around while disconnected. Does NOT run while connected (server validates via `/wardrive` posts).
+
+### Zone Validation Logic
+
+**API Endpoint**: `POST https://yow.meshmapper.net/status`
+
+**Request Payload**:
+```json
+{
+  "lat": 45.4215,
+  "lon": -75.6972,
+  "apikey": "...",
+  "apiver": "1.6.0"
+}
+```
+
+**Response Payload**:
+```json
+{
+  "valid": true,
+  "in_zone": true,
+  "zone": {
+    "name": "Ottawa, ON",
+    "code": "YOW",
+    "enabled": true,
+    "at_capacity": false,
+    "slots_available": 8,
+    "slots_max": 10
+  }
+}
+```
+
+**Validation Requirements** (for successful zone check):
+- `valid === true` - API accepted the request
+- `in_zone === true` - GPS coordinates within a zone boundary
+- `zone.enabled === true` - Zone is enabled for wardriving
+- `zone.at_capacity === false` - Zone has available capacity
+
+**GPS Requirements**:
+- **Freshness**: < 60 seconds old
+- **Accuracy**: < 50 meters
+- **Retry Logic**: Up to 3 attempts with exponential backoff (100ms, 200ms, 400ms delays)
+- **Function**: `getValidGpsForZoneCheck()` validates GPS before zone API call
+
+### Slot Refresh Timers (Phase 4.1 - Disconnected Mode Only)
+
+**Disconnected Mode (30s interval)**:
+- Started after: App launch zone check success
+- Stopped when: Connect button pressed
+- Purpose: Keep slot availability fresh while user is deciding whether to connect
+- Behavior: Re-calls `checkZoneStatus()` every 30s, updates `#slotsDisplay` in settings panel
+- Shown after: Disconnect completes (30s timer restarted)
+
+**Phase 4.2+ (Connected Mode)**:
+- Server-side only - no client-side refresh timer needed
+- Slot capacity validated by `/auth` on connect and `/wardrive` on each ping
+
+### UI Display Behavior
+
+**Connection Bar (`#zoneStatus` element)**:
+- **When Disconnected**: Visible, shows zone status (green "Zone: YOW" or red error)
+- **When Connected**: Hidden (makes room for device name and noise floor)
+- **When Disconnect Completes**: Shown again (zone status display, 30s timer restarts)
+- **Color Coding**:
+  - Green: In valid, enabled zone
+  - Amber/Orange: "Checking zone..." during validation
+  - Red: Outside zone, zone disabled, at capacity, GPS unavailable, or check failed
+
+**Settings Panel (`#locationDisplay` and `#slotsDisplay` elements)**:
+- **Location Display**:
+  - Always visible regardless of connection state
+  - Shows full zone name (e.g., "Ottawa, ON") in white on success
+  - Shows error text (e.g., "Outside zone", "GPS unavailable") in red on failure
+- **Slots Display**:
+  - Shows available slots: "8 available" (green)
+  - Shows capacity reached: "Full (0/10)" (red)
+  - Shows unavailable: "N/A" (gray) when zone check not performed or failed
+- **Update Frequency**: 30s while disconnected (Phase 4.1)
+
+**Connect Button State**:
+- Disabled during: App launch zone check, zone check failures, GPS unavailable
+- Enabled only when: Zone check succeeds AND zone enabled AND not at capacity AND in_zone
+- Behavior: Provides clear feedback about wardriving availability at current location
+
+### Error Handling (Phase 4.1 - UI Display Only)
+
+**Note**: These disconnect reasons are placeholders for Phase 4.2+ server-side validation. In Phase 4.1, they appear only in UI when preflight zone checks fail (preventing connect).
+
+**Disconnect Reasons** (server-side validation in Phase 4.2+):
+- `zone_disabled` → Will be set by server `/auth` or `/wardrive` response (Phase 4.2+)
+- `outside_zone` → Will be set by server `/auth` or `/wardrive` response (Phase 4.2+)
+- `at_capacity` → Will be set by server `/auth` or `/wardrive` response (Phase 4.2+)
+- `gps_unavailable` → Client-side GPS acquisition failure (Phase 4.1)
+- `zone_check_failed` → Network/API error during preflight zone check (Phase 4.1)
+
+**Phase 4.1 Behavior** (no automatic disconnects):
+- App launch check fails → Connect button disabled, error shown in UI
+- 100m movement check fails while disconnected → Error shown in UI, Connect button disabled
+- User can retry after GPS available or zone status changes (30s refresh timer)
+
+**Error Recovery**:
+- GPS can be re-acquired if permissions are granted
+- Zone may become enabled/available again (detected by 30s refresh timer)
+- Connect button re-enabled when zone check succeeds
+
+### State Management
+
+**Global State Properties**:
+- `state.currentZone` - Currently validated zone object (null if no zone or check failed)
+- `state.lastZoneCheckCoords` - `{lat, lon}` of last successful zone check (for 100m movement detection)
+- `state.zoneCheckInProgress` - Boolean flag prevents concurrent zone checks
+- `state.slotRefreshTimerId` - Timer ID for 30s slot refresh interval (disconnected mode only)
+
+**State Lifecycle**:
+- Initialized to null on page load
+- Set after successful zone check (app launch, disconnected movement recheck)
+- Cleared on zone check failure
+- Persists across connection/disconnection (allows comparison for movement detection)
+
+### Debug Logging
+
+All zone check operations use the `[GEO AUTH]` debug tag:
+- `[GEO AUTH] [INIT]` - App launch zone check
+- `[GEO AUTH] [GPS MOVEMENT]` - 100m movement recheck (disconnected mode only)
+- `[GEO AUTH] [SLOT REFRESH]` - Periodic slot availability updates (30s disconnected)
+
+Example log sequence (app launch):
+```
+[GEO AUTH] [INIT] Performing app launch zone check
+[GEO AUTH] [INIT] Getting valid GPS coordinates for zone check
+[GPS] GPS fix acquired: lat=45.42150, lon=-75.69720, accuracy=12m
+[GEO AUTH] [INIT] Valid GPS acquired: 45.421500, -75.697200
+[GEO AUTH] [INIT] Calling checkZoneStatus()
+[GEO AUTH] Zone check API request: {"lat":45.4215,"lon":-75.6972,"apikey":"...","apiver":"1.6.0"}
+[GEO AUTH] Zone check API response: {"valid":true,"in_zone":true,"zone":{...}}
+[GEO AUTH] [INIT] ✅ Zone check successful: Ottawa, ON (YOW)
+[GEO AUTH] [INIT] In zone: true, At capacity: false
+[GEO AUTH] [INIT] ✅ Connect button enabled (in valid zone)
+[GEO AUTH] [INIT] Started 30s slot refresh timer
+```
+
+**Phase 4.2+ Tags** (not yet implemented):
+- `[GEO AUTH] [CONNECT]` - Server-side validation via `/auth` endpoint
+- `[GEO AUTH] [WARDRIVE]` - Server-side validation via `/wardrive` posts
+- `[GEO AUTH] [DISCONNECT]` - Server response handling
 
 ## Code References
 

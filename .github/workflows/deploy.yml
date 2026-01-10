@@ -49,7 +49,7 @@ jobs:
           cp -r main-content/* _site/ 2>/dev/null || true
 
           # MAIN: inject release version into root site
-          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-sm text-slate-400">'"${RELEASE_VERSION}"'</span>|' _site/index.html
+          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-xs bg-slate-800 border border-slate-700 px-3 py-1 rounded-full text-slate-400 flex-shrink-0">'"${RELEASE_VERSION}"'</span>|' _site/index.html
           sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "'"${RELEASE_VERSION}"'";|' _site/content/wardrive.js
 
           # DEV: copy dev site under /dev
@@ -59,7 +59,7 @@ jobs:
 
           # DEV: inject DEV-EPOCH
           DEV_EPOCH=$(date -u +%s)
-          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-sm text-slate-400">DEV-'"${DEV_EPOCH}"'</span>|' _site/dev/index.html
+          sed -i 's|<span id="appVersion"[^>]*>[^<]*</span>|<span id="appVersion" class="text-xs bg-slate-800 border border-slate-700 px-3 py-1 rounded-full text-slate-400 flex-shrink-0">DEV-'"${DEV_EPOCH}"'</span>|' _site/dev/index.html
           sed -i 's|const APP_VERSION = "UNKNOWN";|const APP_VERSION = "DEV-'"${DEV_EPOCH}"'";|' _site/dev/content/wardrive.js
 
           find _site -name ".git" -exec rm -rf {} + 2>/dev/null || true

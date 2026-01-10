@@ -239,7 +239,79 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **When**: GPS data is stale and needs refresh (auto or manual ping modes)
 - **Source**: `content/wardrive.js:getGpsCoordinatesForPing()`
 
-#### 4. Ping Operation Messages
+#### 4. Geo-Auth Zone Check Messages (Phase 4.1 - Preflight UI Only)
+
+**Phase 4.1 Scope**: Zone checks provide **preflight UI feedback** while disconnected. Real validation happens server-side in Phase 4.2+ via `/auth` (connect) and `/wardrive` (ongoing) endpoints.
+
+**Note**: Zone status appears in the **Settings Panel** (`#locationDisplay`) only. Errors (outside zone, outdated app) appear as persistent messages in the **Dynamic Status Bar**.
+
+##### Checking...
+- **Message (Settings Panel)**: `"Checking..."`
+- **Color**: Gray (slate-400)
+- **When** (Phase 4.1 - disconnected mode only): 
+  - During app launch zone check (before Connect button enabled)
+  - After 100m GPS movement while disconnected triggers zone recheck
+- **Source**: `content/wardrive.js:performAppLaunchZoneCheck()`, `handleZoneCheckOnMove()`
+
+##### Zone Code (e.g., YOW)
+- **Message (Settings Panel)**: `"YOW"` (or other zone code)
+- **Color**: Green (emerald-300) when available, Amber (amber-300) when at capacity
+- **When**: Successfully validated location within enabled wardriving zone (Phase 4.1 preflight check)
+- **Source**: `content/wardrive.js:updateZoneStatusUI()`
+
+##### Outside zone (distance to nearest)
+- **Message (Dynamic Status Bar)**: `"Outside zone (Xkm to CODE)"`
+- **Message (Settings Panel)**: `"—"` (dash)
+- **Color**: Red (error) - persistent message
+- **When**: 
+  - **Phase 4.1**: GPS coordinates outside any enabled wardriving zone boundary (preflight check, Connect button disabled)
+- **Terminal State**: Yes (Connect button disabled, persistent error blocks other status messages)
+- **Source**: `content/wardrive.js:updateZoneStatusUI()`
+
+##### GPS/Zone Errors
+- **Message (Settings Panel)**: `"GPS: stale"`, `"GPS: inaccurate"`, `"Unknown"`
+- **Color**: Red (error)
+- **When** (Phase 4.1 client-side GPS failure): 
+  - GPS data too stale (>60s) → "GPS: stale"
+  - GPS accuracy too poor (>50m) → "GPS: inaccurate"
+  - GPS permissions denied or network error → "Unknown"
+- **Terminal State**: Yes (Connect button disabled)
+- **Source**: `content/wardrive.js:updateZoneStatusUI()`
+
+##### App Version Outdated
+- **Message (Dynamic Status Bar)**: API message or `"App version outdated, please update"`
+- **Message (Settings Panel)**: `""` (empty)
+- **Color**: Red (error) - persistent message
+- **When**: Server returns `reason: "outofdate"` during zone check
+- **Terminal State**: Yes (Connect button disabled, persistent error blocks other status messages)
+- **Source**: `content/wardrive.js:updateZoneStatusUI()`
+
+**Slot Availability Display** (Settings Panel only):
+- **Location**: Settings panel "Status Info" section, Slots row
+- **Display Format**:
+  - `"N/A"` (gray) - Zone not checked yet or check failed
+  - `"X available"` (green) - X slots available in zone
+  - `"Full (0/Y)"` (red) - Zone at capacity, Y total slots
+- **Update Frequency** (Phase 4.1):
+  - 30 seconds while disconnected
+  - Immediate when zone check completes
+- **Source**: `content/wardrive.js:updateSlotsDisplay()`
+
+**Zone Check Triggers** (Phase 4.1 - disconnected mode only):
+1. **App Launch**: Automatic check on page load after GPS permission granted
+2. **100m Movement (Disconnected)**: Continuous monitoring during GPS watch while disconnected, triggers recheck if moved ≥100m from last check
+3. **30s Slot Refresh (Disconnected)**: Periodic timer updates slot availability while disconnected
+
+**Phase 4.2+ Server-Side Triggers** (not yet implemented):
+- `/auth` endpoint validation on connect
+- `/wardrive` endpoint validation on every ping with GPS coordinates
+
+**Connect Button Behavior**:
+- Disabled initially during app launch zone check
+- Enabled only if: `zone.enabled === true` AND `in_zone === true` AND `zone.at_capacity === false`
+- Remains disabled on zone check failure or GPS unavailable
+
+#### 6. Ping Operation Messages
 
 ##### Sending manual ping
 - **Message**: `"Sending manual ping"`
@@ -290,7 +362,7 @@ These messages appear in the Dynamic App Status Bar. They NEVER include connecti
 - **When**: User attempts manual ping during 7-second cooldown
 - **Source**: `content/wardrive.js:sendPing()`
 
-#### 5. Countdown Timer Messages
+#### 7. Countdown Timer Messages
 
 These messages use a hybrid approach: **first display respects 500ms minimum**, then updates occur immediately every second.
 
@@ -338,7 +410,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Minimum Visibility**: 500ms for first message, immediate for updates
 - **Source**: `content/wardrive.js:autoCountdownTimer`
 
-#### 6. API and Map Update Messages
+#### 8. API and Map Update Messages
 
 ##### Queued (X/50)
 - **Message**: `"Queued (X/50)"` (X is current queue size)
@@ -362,18 +434,81 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Notes**: As of the batch queue implementation, individual API posts have been replaced by batched posts. Messages are queued and flushed in batches.
 - **Source**: ~~`content/wardrive.js:postApiAndRefreshMap()`~~ Replaced by batch queue system
 
-##### Error: API batch post failed
+##### Error: API batch post failed (DEPRECATED)
 - **Message**: `"Error: API batch post failed"`
 - **Color**: Red (error)
-- **When**: Batch API POST fails during flush operation
-- **Notes**: Batch posting failed, but queue system will continue accepting new messages.
-- **Source**: `content/wardrive.js:flushApiQueue()` error handler
+- **When**: ~~Batch API POST fails during flush operation~~ **REPLACED BY NEW WARDRIVE API**
+- **Notes**: Replaced by "Error: API submission failed" in new wardrive API system.
+- **Source**: ~~`content/wardrive.js:flushApiQueue()`~~ Replaced by `submitWardriveData()`
+
+##### Error: API submission failed
+- **Message**: `"Error: API submission failed"`
+- **Color**: Red (error)
+- **When**: Wardrive data submission fails after 2 retry attempts
+- **Notes**: Entries are re-queued for next submission attempt (unless queue is full). Does not trigger disconnect.
+- **Source**: `content/wardrive.js:submitWardriveData()` error handler
+
+##### Session expired
+- **Message**: `"Session expired"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `session_expired`, `session_invalid`, or `session_revoked`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: Session is no longer valid, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Invalid session
+- **Message**: `"Invalid session"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `bad_session`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: Session ID is invalid or doesn't match API key, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Authorization failed
+- **Message**: `"Authorization failed"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `invalid_key`, `unauthorized`, or `bad_key`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: API key issue, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Outside zone
+- **Message**: `"Outside zone"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `outside_zone`
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: User has moved outside their assigned zone during active wardrive session, triggers automatic disconnect after 1.5 seconds.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Zone capacity changed
+- **Message**: `"Zone capacity changed"`
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with reason `zone_full` during active wardrive session
+- **Terminal State**: Yes (triggers disconnect)
+- **Notes**: Zone TX capacity changed during active session (unexpected mid-session), triggers automatic disconnect after 1.5 seconds. Note: `zone_full` during auth is handled as RX-only mode (partial success), not an error.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### Rate limited - slow down
+- **Message**: `"Rate limited - slow down"`
+- **Color**: Yellow (warning)
+- **When**: Wardrive API returns `success=false` with reason `rate_limited`
+- **Terminal State**: No (does not trigger disconnect)
+- **Notes**: Submitting data too quickly. Does not trigger disconnect, user should slow down pings.
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
+
+##### API error: [message]
+- **Message**: `"API error: [message]"` (where [message] is the API-provided error message)
+- **Color**: Red (error)
+- **When**: Wardrive API returns `success=false` with an unknown reason code
+- **Terminal State**: No (does not trigger disconnect)
+- **Notes**: Fallback message for unknown error codes. Shows raw API message to help with debugging. Logged to Error Log but does not trigger disconnect (allows recovery from transient/unknown errors).
+- **Source**: `content/wardrive.js:handleWardriveApiError()`
 
 ##### Error: API post failed (DEPRECATED)
 - **Message**: `"Error: API post failed"`
 - **Color**: Red (error)
 - **When**: ~~Background API POST fails during asynchronous posting~~ **REPLACED BY BATCH QUEUE**
-- **Notes**: Replaced by "Error: API batch post failed" in batch queue system.
+- **Notes**: Replaced by "Error: API submission failed" in new wardrive API system.
 - **Source**: ~~`content/wardrive.js:postApiInBackground()`~~ Replaced by batch queue system
 
 ##### — (em dash)
@@ -388,7 +523,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **Notes**: With the new ping/repeat listener flow, the em dash appears immediately after the 10-second RX window, not after API posting (which now runs in background)
 - **Source**: Multiple locations - `content/wardrive.js`
 
-#### 7. Auto Mode Messages
+#### 9. Auto Mode Messages
 
 ##### TX/RX Auto stopped
 - **Message**: `"Auto mode stopped"`
@@ -426,7 +561,7 @@ These messages use a hybrid approach: **first display respects 500ms minimum**, 
 - **When**: Browser tab hidden while RX Auto mode running
 - **Source**: `content/wardrive.js:visibilitychange handler`
 
-#### 8. Error Messages
+#### 10. Error Messages
 
 ##### Select radio power to connect
 - **Message**: `"Select radio power to connect"`
@@ -540,10 +675,11 @@ Status messages follow these consistent conventions:
 
 **Connection Status Bar**: 4 fixed messages (Connected, Connecting, Disconnected, Disconnecting)
 
-**Dynamic App Status Bar**: ~30+ unique message patterns covering:
+**Dynamic App Status Bar**: ~40+ unique message patterns covering:
 - Capacity check: 9 messages (including session_id error messages)
 - Channel setup: 4 messages
 - GPS initialization: 3 messages
+- Geo-auth zone check: 7 messages (with dual display in connection bar and settings panel)
 - Ping operations: 6 messages
 - Countdown timers: 6 message patterns
 - API/Map: 2 messages (including em dash placeholder)
@@ -556,3 +692,4 @@ Status messages follow these consistent conventions:
 - Em dash (`—`) placeholder for empty dynamic status
 - Connection words blocked from dynamic bar
 - All error reasons appear WITHOUT "Disconnected:" prefix
+- Zone status has dual display: connection bar (when disconnected) + settings panel (always visible)
