@@ -3466,9 +3466,8 @@ async function handleRxLogging(metadata, data) {
     // A packet's path array contains the sequence of repeater IDs that forwarded the message.
     // Packets with no path are direct transmissions (node-to-node) and don't provide
     // information about repeater coverage, so we skip them for RX wardriving purposes.
+    // NOTE: This is NOT a drop - direct packets are valid, just not useful for wardriving.
     if (metadata.pathLength === 0) {
-      rxLogState.dropCount++;
-      updateRxLogSummary();
       debugLog(`[RX LOG] Ignoring: no path (direct transmission, not via repeater)`);
       return;
     }
