@@ -416,7 +416,7 @@ const APP_VERSION = "UNKNOWN"; // Placeholder - replaced during build
 const REASON_MESSAGES = {
   // Auth/connect errors
   outofdate: "App out of date, please update",
-  unknown_device: "Unknown device - advertise on mesh first",
+  unknown_device: "Device not registered - advertise on mesh first",
   outside_zone: "Outside zone",
   zone_disabled: "Zone is disabled",
   zone_full: "Zone at capacity",
@@ -2486,12 +2486,11 @@ async function requestAuth(reason) {
     // Handle HTTP-level errors with known error codes in body
     if (!response.ok) {
       const serverMsg = data?.message || 'No message';
-      addErrorLogEntry(`API returned error status ${response.status}: ${serverMsg}`, "AUTH");
-      debugError(`[AUTH] API returned error status ${response.status}: ${serverMsg}`);
       
       // Check if server returned a known error code
       if (data && data.reason && REASON_MESSAGES[data.reason]) {
         debugLog(`[AUTH] Known error code: ${data.reason} - ${data.message || REASON_MESSAGES[data.reason]}`);
+        // Don't add error log entry - the specific error will be shown in disconnect UI
         if (reason === "connect") {
           state.disconnectReason = data.reason;
           return false;
@@ -2499,7 +2498,9 @@ async function requestAuth(reason) {
         return true; // Allow disconnect to proceed
       }
       
-      // Unknown error - fail closed for connect, include server message
+      // Unknown error - log to error log and fail closed for connect
+      addErrorLogEntry(`API returned error status ${response.status}: ${serverMsg}`, "AUTH");
+      debugError(`[AUTH] API returned error status ${response.status}: ${serverMsg}`);
       if (reason === "connect") {
         addErrorLogEntry(`Auth failed: ${data?.reason || 'unknown'} - ${serverMsg}`, "AUTH");
         debugError(`[AUTH] Failing closed (denying connection) due to unknown API error: ${data?.reason || 'unknown'}`);
@@ -5791,7 +5792,7 @@ async function autoSetPowerLevel() {
   } else {
     // Unknown device - log to error log and require manual selection
     debugLog(`[DEVICE MODEL] Unknown device: ${state.deviceModel}`);
-    addErrorLogEntry(`Unknown device: ${state.deviceModel}`, "DEVICE MODEL");
+    addErrorLogEntry(`Unrecognized hardware model: ${state.deviceModel}`, "DEVICE MODEL");
     state.autoPowerSet = false;
     
     // Hide auto-configured power display and placeholder, show manual selection
@@ -6061,70 +6062,70 @@ async function connect() {
       if (state.disconnectReason && REASON_MESSAGES[state.disconnectReason]) {
         debugLog(`[BLE] Branch: known reason code (${state.disconnectReason})`);
         const errorMsg = REASON_MESSAGES[state.disconnectReason];
-        addErrorLogEntry(`Disconnected: ${errorMsg} (reason: ${state.disconnectReason})`, "CONNECTION");
+        addErrorLogEntry(errorMsg, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog(`[BLE] Setting terminal status for reason: ${state.disconnectReason}`);
       } else if (state.disconnectReason === "capacity_full") {
         debugLog("[BLE] Branch: capacity_full");
-        addErrorLogEntry("Disconnected: MeshMapper server at capacity - too many active connections", "CONNECTION");
+        addErrorLogEntry("MeshMapper server at capacity - too many active connections", "CONNECTION");
         setDynamicStatus("MeshMapper at capacity", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for capacity full");
       } else if (state.disconnectReason === "app_down") {
         debugLog("[BLE] Branch: app_down");
-        addErrorLogEntry("Disconnected: MeshMapper server unavailable - check service status", "CONNECTION");
+        addErrorLogEntry("MeshMapper server unavailable - check service status", "CONNECTION");
         setDynamicStatus("MeshMapper unavailable", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for app down");
       } else if (state.disconnectReason === "slot_revoked") {
         debugLog("[BLE] Branch: slot_revoked");
-        addErrorLogEntry("Disconnected: Wardriving slot revoked by server - exceeded limits or policy violation", "CONNECTION");
+        addErrorLogEntry("Wardriving slot revoked by server - exceeded limits or policy violation", "CONNECTION");
         setDynamicStatus("MeshMapper slot revoked", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for slot revocation");
       } else if (state.disconnectReason === "session_id_error") {
         debugLog("[BLE] Branch: session_id_error");
-        addErrorLogEntry("Disconnected: Session ID error - failed to establish valid wardrive session", "CONNECTION");
+        addErrorLogEntry("Session ID error - failed to establish valid wardrive session", "CONNECTION");
         setDynamicStatus("Session error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for session_id error");
       } else if (state.disconnectReason === "public_key_error") {
         debugLog("[BLE] Branch: public_key_error");
-        addErrorLogEntry("Disconnected: Device public key error - invalid or missing key from companion", "CONNECTION");
+        addErrorLogEntry("Device public key error - invalid or missing key from companion", "CONNECTION");
         setDynamicStatus("Device key error - reconnect", STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for public key error");
       } else if (state.disconnectReason === "zone_disabled") {
         debugLog("[GEO AUTH] Branch: zone_disabled");
-        addErrorLogEntry("Disconnected: Zone disabled - wardriving not allowed in this area", "CONNECTION");
+        addErrorLogEntry("Zone disabled - wardriving not allowed in this area", "CONNECTION");
         setDynamicStatus("Zone disabled", STATUS_COLORS.error, true);
         debugLog("[GEO AUTH] Setting terminal status for zone disabled");
       } else if (state.disconnectReason === "outside_zone") {
         debugLog("[GEO AUTH] Branch: outside_zone");
-        addErrorLogEntry("Disconnected: Outside zone - moved outside wardriving zone boundary", "CONNECTION");
+        addErrorLogEntry("Outside zone - moved outside wardriving zone boundary", "CONNECTION");
         setDynamicStatus("Outside zone", STATUS_COLORS.error, true);
         debugLog("[GEO AUTH] Setting terminal status for outside zone");
       } else if (state.disconnectReason === "at_capacity") {
         debugLog("[GEO AUTH] Branch: at_capacity");
-        addErrorLogEntry("Disconnected: Zone at capacity - too many active wardrivers in this zone", "CONNECTION");
+        addErrorLogEntry("Zone at capacity - too many active wardrivers in this zone", "CONNECTION");
         setDynamicStatus("Zone at capacity", STATUS_COLORS.error, true);
         debugLog("[GEO AUTH] Setting terminal status for zone at capacity");
       } else if (state.disconnectReason === "gps_unavailable") {
         debugLog("[GEO AUTH] Branch: gps_unavailable");
-        addErrorLogEntry("Disconnected: GPS unavailable - could not acquire valid GPS coordinates for zone check", "CONNECTION");
+        addErrorLogEntry("GPS unavailable - could not acquire valid GPS coordinates for zone check", "CONNECTION");
         setDynamicStatus("GPS unavailable", STATUS_COLORS.error, true);
         debugLog("[GEO AUTH] Setting terminal status for GPS unavailable");
       } else if (state.disconnectReason === "zone_check_failed") {
         debugLog("[GEO AUTH] Branch: zone_check_failed");
-        addErrorLogEntry("Disconnected: Zone check failed - unable to verify wardriving zone", "CONNECTION");
+        addErrorLogEntry("Zone check failed - unable to verify wardriving zone", "CONNECTION");
         setDynamicStatus("Zone check failed", STATUS_COLORS.error, true);
         debugLog("[GEO AUTH] Setting terminal status for zone check failed");
       } else if (state.disconnectReason === "channel_setup_error") {
         debugLog("[BLE] Branch: channel_setup_error");
         const errorMsg = state.channelSetupErrorMessage || "Channel setup failed";
-        addErrorLogEntry(`Disconnected: #wardriving channel setup failed - ${errorMsg}`, "CONNECTION");
+        addErrorLogEntry(`#wardriving channel setup failed - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for channel setup error");
         state.channelSetupErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
       } else if (state.disconnectReason === "ble_disconnect_error") {
         debugLog("[BLE] Branch: ble_disconnect_error");
         const errorMsg = state.bleDisconnectErrorMessage || "BLE disconnect failed";
-        addErrorLogEntry(`Disconnected: BLE connection error - ${errorMsg}`, "CONNECTION");
+        addErrorLogEntry(`BLE connection error - ${errorMsg}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
         debugLog("[BLE] Setting terminal status for BLE disconnect error");
         state.bleDisconnectErrorMessage = null; // Clear after use (also cleared in cleanup as safety net)
@@ -6136,7 +6137,7 @@ async function connect() {
         // For unknown disconnect reasons from API, show a generic message
         debugLog(`[BLE] Showing generic error for unknown reason: ${state.disconnectReason}`);
         const errorMsg = `Connection not allowed: ${state.disconnectReason}`;
-        addErrorLogEntry(`Disconnected: Connection not allowed by server (reason: ${state.disconnectReason})`, "CONNECTION");
+        addErrorLogEntry(`Connection not allowed by server: ${state.disconnectReason}`, "CONNECTION");
         setDynamicStatus(errorMsg, STATUS_COLORS.error, true);
       }
       
@@ -6831,34 +6832,41 @@ export async function onLoad() {
     });
   }
 
-  // Carpeater Info link event listener
-  const carpeaterInfoLink = document.getElementById('carpeaterInfoLink');
-  const carpeaterModal = document.getElementById('carpeaterModal');
-  
-  if (carpeaterInfoLink && carpeaterModal) {
-    carpeaterInfoLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      debugLog('[UI] Carpeater Info link clicked - opening modal');
-      carpeaterModal.classList.remove('hidden');
-    });
+  // Reusable function to setup info modals
+  function setupInfoModal(buttonId, modalId, modalName) {
+    const button = document.getElementById(buttonId);
+    const modal = document.getElementById(modalId);
     
-    // Close modal when clicking close buttons
-    const modalCloseButtons = carpeaterModal.querySelectorAll('[data-modal-close]');
-    modalCloseButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        debugLog('[UI] Carpeater modal close button clicked');
-        carpeaterModal.classList.add('hidden');
+    if (button && modal) {
+      button.addEventListener('click', (e) => {
+        e.preventDefault();
+        debugLog(`[UI] ${modalName} info link clicked - opening modal`);
+        modal.classList.remove('hidden');
       });
-    });
-    
-    // Close modal when clicking backdrop
-    carpeaterModal.addEventListener('click', (e) => {
-      if (e.target === carpeaterModal) {
-        debugLog('[UI] Carpeater modal closed via backdrop click');
-        carpeaterModal.classList.add('hidden');
-      }
-    });
+      
+      const modalCloseButtons = modal.querySelectorAll('[data-modal-close]');
+      modalCloseButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          debugLog(`[UI] ${modalName} modal close button clicked`);
+          modal.classList.add('hidden');
+        });
+      });
+      
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          debugLog(`[UI] ${modalName} modal closed via backdrop click`);
+          modal.classList.add('hidden');
+        }
+      });
+    }
   }
+
+  // Setup all info modals
+  setupInfoModal('intervalInfoLink', 'intervalModal', 'Auto Ping Interval');
+  setupInfoModal('antennaInfoLink', 'antennaModal', 'External Antenna');
+  setupInfoModal('powerInfoLink', 'powerModal', 'Radio Power');
+  setupInfoModal('carpeaterInfoLink', 'carpeaterModal', 'Carpeater');
+
 
   // Prompt location permission early (optional)
   debugLog("[GPS] Requesting initial location permission");
