@@ -6832,34 +6832,41 @@ export async function onLoad() {
     });
   }
 
-  // Carpeater Info link event listener
-  const carpeaterInfoLink = document.getElementById('carpeaterInfoLink');
-  const carpeaterModal = document.getElementById('carpeaterModal');
-  
-  if (carpeaterInfoLink && carpeaterModal) {
-    carpeaterInfoLink.addEventListener('click', (e) => {
-      e.preventDefault();
-      debugLog('[UI] Carpeater Info link clicked - opening modal');
-      carpeaterModal.classList.remove('hidden');
-    });
+  // Reusable function to setup info modals
+  function setupInfoModal(buttonId, modalId, modalName) {
+    const button = document.getElementById(buttonId);
+    const modal = document.getElementById(modalId);
     
-    // Close modal when clicking close buttons
-    const modalCloseButtons = carpeaterModal.querySelectorAll('[data-modal-close]');
-    modalCloseButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        debugLog('[UI] Carpeater modal close button clicked');
-        carpeaterModal.classList.add('hidden');
+    if (button && modal) {
+      button.addEventListener('click', (e) => {
+        e.preventDefault();
+        debugLog(`[UI] ${modalName} info link clicked - opening modal`);
+        modal.classList.remove('hidden');
       });
-    });
-    
-    // Close modal when clicking backdrop
-    carpeaterModal.addEventListener('click', (e) => {
-      if (e.target === carpeaterModal) {
-        debugLog('[UI] Carpeater modal closed via backdrop click');
-        carpeaterModal.classList.add('hidden');
-      }
-    });
+      
+      const modalCloseButtons = modal.querySelectorAll('[data-modal-close]');
+      modalCloseButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+          debugLog(`[UI] ${modalName} modal close button clicked`);
+          modal.classList.add('hidden');
+        });
+      });
+      
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          debugLog(`[UI] ${modalName} modal closed via backdrop click`);
+          modal.classList.add('hidden');
+        }
+      });
+    }
   }
+
+  // Setup all info modals
+  setupInfoModal('intervalInfoLink', 'intervalModal', 'Auto Ping Interval');
+  setupInfoModal('antennaInfoLink', 'antennaModal', 'External Antenna');
+  setupInfoModal('powerInfoLink', 'powerModal', 'Radio Power');
+  setupInfoModal('carpeaterInfoLink', 'carpeaterModal', 'Carpeater');
+
 
   // Prompt location permission early (optional)
   debugLog("[GPS] Requesting initial location permission");

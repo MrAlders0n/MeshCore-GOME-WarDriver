@@ -86,7 +86,14 @@
 
         <!-- Auto Ping Interval -->
         <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">Auto Ping Interval</label>
+          <div class="flex items-center gap-2">
+            <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">Auto Ping Interval</label>
+            <button id="intervalInfoLink" class="flex-shrink-0 text-sky-400 hover:text-sky-300 transition-colors p-1" aria-label="Auto ping interval information">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+          </div>
           <div style="display: flex; gap: 0.5rem;">
             <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
               <input type="radio" name="interval" value="15" class="sr-only">
@@ -105,9 +112,16 @@
 
         <!-- External Antenna -->
         <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
-            External Antenna <span class="text-amber-400">⚠️ Required</span>
-          </label>
+          <div class="flex items-center gap-2">
+            <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
+              External Antenna <span class="text-amber-400">⚠️ Required</span>
+            </label>
+            <button id="antennaInfoLink" class="flex-shrink-0 text-sky-400 hover:text-sky-300 transition-colors p-1" aria-label="External antenna information">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+          </div>
           <div style="display: flex; gap: 0.5rem;">
             <label style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; cursor: pointer;" class="hover:bg-slate-700 has-[:checked]:bg-emerald-600 has-[:checked]:border-emerald-600">
               <input type="radio" name="externalAntenna" value="NO" class="sr-only">
@@ -122,9 +136,16 @@
 
         <!-- Radio Power -->
         <div class="space-y-2">
-          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
-            Radio Power <span id="powerLabelStatus"></span>
-          </label>
+          <div class="flex items-center gap-2">
+            <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
+              Radio Power <span id="powerLabelStatus"></span>
+            </label>
+            <button id="powerInfoLink" class="flex-shrink-0 text-sky-400 hover:text-sky-300 transition-colors p-1" aria-label="Radio power information">
+              <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+              </svg>
+            </button>
+          </div>
           
           <!-- Placeholder when disconnected -->
           <div id="powerPlaceholder" style="display: flex; align-items: center; justify-content: center; padding: 0.5rem 0.75rem; border-radius: 0.5rem; border: 1px solid #475569; background-color: rgba(71, 85, 105, 0.1);">
@@ -443,6 +464,113 @@
           </div>
           
           <p class="text-xs text-slate-400">Enable the checkbox and enter the 2-character hex ID of your carpeater to exclude it from all wardriving data.</p>
+        </div>
+        <button data-modal-close class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+          Got it
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auto Ping Interval Info Modal -->
+  <div id="intervalModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
+      <div class="p-6">
+        <div class="flex justify-between items-start mb-4">
+          <h3 class="text-lg font-semibold text-slate-200">Auto Ping Interval</h3>
+          <button data-modal-close class="text-slate-400 hover:text-slate-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-3 text-sm text-slate-300">
+          <p>Controls how frequently the app automatically sends pings while in TX/RX Auto or RX Auto mode.</p>
+          
+          <div class="bg-slate-900 rounded p-3 border border-slate-700">
+            <p class="font-semibold text-slate-200 mb-2">Interval Options:</p>
+            <ul class="space-y-2 text-xs">
+              <li><span class="text-sky-400">•</span> <strong>15s</strong> — Maximum coverage density, higher mesh load. Best for detailed mapping of small areas or testing specific routes.</li>
+              <li><span class="text-emerald-400">•</span> <strong>30s</strong> — Balanced coverage and mesh load. Recommended for most wardriving sessions.</li>
+              <li><span class="text-amber-400">•</span> <strong>60s</strong> — Lower coverage density, minimal mesh load. Ideal for casual mapping or being respectful during busy network times.</li>
+            </ul>
+          </div>
+          
+          <p class="text-xs text-slate-400"><strong>Tip:</strong> Shorter intervals create more detailed coverage maps but increase traffic on the mesh network. Choose 30s or 60s when the network is actively being used by others.</p>
+        </div>
+        <button data-modal-close class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+          Got it
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- External Antenna Info Modal -->
+  <div id="antennaModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
+      <div class="p-6">
+        <div class="flex justify-between items-start mb-4">
+          <h3 class="text-lg font-semibold text-slate-200">External Antenna</h3>
+          <button data-modal-close class="text-slate-400 hover:text-slate-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-3 text-sm text-slate-300">
+          <p>Indicates whether you have an external antenna mounted on your vehicle (typically on the roof or magnetic-mounted).</p>
+          
+          <div class="bg-slate-900 rounded p-3 border border-slate-700">
+            <p class="font-semibold text-slate-200 mb-2">Why this matters:</p>
+            <p class="text-xs">External antennas outside of your vehicle significantly improve signal propagation and reception range compared to a companion/antenna inside your car. This setting helps correlate coverage data with your actual hardware setup.</p>
+          </div>
+          
+          <div class="space-y-2 text-xs">
+            <p class="font-semibold text-emerald-400">When to select YES:</p>
+            <ul class="space-y-1 ml-3">
+              <li>• You have a roof-mounted or magnetic antenna</li>
+              <li>• You're using an antenna on an extension cable outside your vehicle</li>
+              <li>• Your device is connected to any external antenna system</li>
+            </ul>
+            
+            <p class="font-semibold text-amber-400 mt-3">When to select NO:</p>
+            <ul class="space-y-1 ml-3">
+              <li>• You're using only the device's antenna that's directly connected to your companion</li>
+              <li>• Your device is inside your vehicle without external antenna</li>
+            </ul>
+          </div>
+        </div>
+        <button data-modal-close class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+          Got it
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Radio Power Info Modal -->
+  <div id="powerModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
+      <div class="p-6">
+        <div class="flex justify-between items-start mb-4">
+          <h3 class="text-lg font-semibold text-slate-200">Radio Power Configuration</h3>
+          <button data-modal-close class="text-slate-400 hover:text-slate-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-3 text-sm text-slate-300">
+          <p>We track this for context, allowing us to display the power level of each ping on the map. This is useful for understanding coverage patterns and signal propagation. The app automatically detects your device model and sets the optimal power level based on your hardware capabilities.</p>
+          
+          <div class="bg-slate-900 rounded p-3 border border-slate-700">
+            <p class="font-semibold text-slate-200 mb-2">Auto-Configuration:</p>
+            <p class="text-xs">When connected, the app displays the default power with a <span class="text-emerald-400">green indicator</span>. This is based on your specific device model from the hardware database.</p>
+          </div>
+          
+          <div class="bg-amber-900/20 rounded p-3 border border-amber-700/50">
+            <p class="font-semibold text-amber-400 mb-2">Override:</p>
+            <p class="text-xs">Only manually select power if you have specific hardware knowledge or if your device was not auto-configured — in that case, you must manually select it.</p>
+          </div>
         </div>
         <button data-modal-close class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
           Got it
