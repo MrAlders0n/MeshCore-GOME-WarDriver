@@ -162,6 +162,21 @@
           </div>
         </div>
 
+        <!-- Carpeater Filter -->
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-300 mb-2">Carpeater Filter</label>
+          <div class="flex items-center mb-2">
+            <input type="checkbox" id="carpeaterFilterEnabled" class="mr-2">
+            <label for="carpeaterFilterEnabled" class="text-sm text-gray-300">Ignore specific repeater</label>
+          </div>
+          <div id="carpeaterIdInputContainer" class="mt-2 hidden">
+            <label for="carpeaterIdInput" class="block text-xs text-gray-400 mb-1">Repeater ID (2-char hex, e.g., A3):</label>
+            <input type="text" id="carpeaterIdInput" maxlength="2" placeholder="00" 
+                   class="w-16 px-2 py-1 text-sm bg-gray-700 text-white border border-gray-600 rounded focus:border-blue-500 focus:outline-none uppercase">
+          </div>
+          <p class="text-xs text-gray-500 mt-2">Enable to ignore all packets from a specific repeater. RSSI failsafe (≥ -30 dBm) remains active for other repeaters.</p>
+        </div>
+
         <!-- Status Info -->
         <div class="space-y-2">
           <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">Status Info</label>
