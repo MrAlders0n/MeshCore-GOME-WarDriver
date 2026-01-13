@@ -178,7 +178,7 @@
             <label for="carpeaterFilterEnabled" class="text-sm text-slate-300 cursor-pointer select-none">Ignore ID:</label>
             <input type="text" id="carpeaterIdInput" maxlength="2" placeholder="00" disabled
                    class="w-14 px-2 py-1 text-sm bg-slate-700 text-white border border-slate-600 rounded focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none uppercase font-mono disabled:opacity-50 disabled:cursor-not-allowed">
-            <a href="#" id="carpeaterInfoLink" class="text-xs text-sky-400 hover:text-sky-300 transition-colors ml-1" style="text-decoration: underline;">Info</a>
+            <a href="#" id="carpeaterInfoLink" class="text-xs text-sky-400 hover:text-sky-300 hover:underline transition-colors ml-1">Info</a>
           </div>
         </div>
 
@@ -395,14 +395,14 @@
   </script>
 
   <!-- Override Confirmation Modal -->
-  <div id="overrideModal" class="hidden" style="position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.7); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 1rem;">
-    <div style="background-color: #1e293b; border: 1px solid #475569; border-radius: 0.75rem; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); max-width: 24rem; width: 100%;">
-      <div style="padding: 1.5rem; border-bottom: 1px solid #475569;">
-        <h3 style="font-size: 1.125rem; font-weight: 500; color: #e2e8f0;">Override Auto-Configuration?</h3>
+  <div id="overrideModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-sm w-full border border-slate-600">
+      <div class="p-6 border-b border-slate-600">
+        <h3 class="text-lg font-medium text-slate-200">Override Auto-Configuration?</h3>
       </div>
-      <div style="padding: 1.5rem;">
-        <p style="font-size: 0.875rem; color: #cbd5e1; margin-bottom: 0.5rem;">This will allow you to manually select the radio power setting.</p>
-        <p style="font-size: 0.875rem; color: #94a3b8;">The device was automatically configured based on its hardware profile.</p>
+      <div class="p-6">
+        <p class="text-sm text-slate-300 mb-2">This will allow you to manually select the radio power setting.</p>
+        <p class="text-sm text-slate-400">The device was automatically configured based on its hardware profile.</p>
       </div>
       <div style="padding: 1.5rem; display: flex; gap: 0.75rem; border-top: 1px solid #475569;">
         <button id="overrideModalCancel" style="flex: 1; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 500; color: #cbd5e1; background-color: #475569; border-radius: 0.5rem; border: none; cursor: pointer; transition: background-color 0.2s;">
@@ -416,12 +416,12 @@
   </div>
 
   <!-- Carpeater Info Modal -->
-  <div id="carpeaterModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.5); align-items: center; justify-content: center; z-index: 9999; padding: 1rem;">
-    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700" style="background-color: #1e293b; border-radius: 0.5rem; max-width: 28rem; width: 100%; border: 1px solid #334155; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+  <div id="carpeaterModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
       <div class="p-6">
         <div class="flex justify-between items-start mb-4">
           <h3 class="text-lg font-semibold text-slate-200">What is a Carpeater?</h3>
-          <button onclick="document.getElementById('carpeaterModal').style.display='none';" class="text-slate-400 hover:text-slate-200" data-modal-close>
+          <button data-modal-close class="text-slate-400 hover:text-slate-200">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
@@ -440,7 +440,7 @@
           
           <p class="text-xs text-slate-400">Enable the checkbox and enter the 2-character hex ID of your carpeater to exclude it from all wardriving data.</p>
         </div>
-        <button onclick="document.getElementById('carpeaterModal').style.display='none';" class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors" data-modal-close>
+        <button data-modal-close class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
           Got it
         </button>
       </div>

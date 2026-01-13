@@ -6616,12 +6616,9 @@ export async function onLoad() {
       
       // Show custom confirmation modal
       const modal = document.getElementById("overrideModal");
-      debugLog(`[UI] Modal element lookup result: ${modal ? 'found' : 'NOT FOUND'}`);
       if (modal) {
-        debugLog(`[UI] Modal current display: ${modal.style.display}, classes: ${modal.className}`);
         modal.classList.remove("hidden");
-        modal.style.display = "flex";
-        debugLog(`[UI] Modal after show - display: ${modal.style.display}, classes: ${modal.className}`);
+        debugLog("[UI] Override modal opened");
       } else {
         debugError("[UI] overrideModal element not found in DOM!");
       }
@@ -6671,7 +6668,6 @@ export async function onLoad() {
     overrideModalCancel.addEventListener("click", () => {
       debugLog("[UI] Override canceled via custom modal");
       overrideModal.classList.add("hidden");
-      overrideModal.style.display = "none";
     });
   }
   
@@ -6681,7 +6677,6 @@ export async function onLoad() {
       if (e.target === overrideModal) {
         debugLog("[UI] Override modal closed via backdrop click");
         overrideModal.classList.add("hidden");
-        overrideModal.style.display = "none";
       }
     });
   }
@@ -6844,7 +6839,7 @@ export async function onLoad() {
     carpeaterInfoLink.addEventListener('click', (e) => {
       e.preventDefault();
       debugLog('[UI] Carpeater Info link clicked - opening modal');
-      carpeaterModal.style.display = 'flex';
+      carpeaterModal.classList.remove('hidden');
     });
     
     // Close modal when clicking close buttons
@@ -6852,7 +6847,7 @@ export async function onLoad() {
     modalCloseButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         debugLog('[UI] Carpeater modal close button clicked');
-        carpeaterModal.style.display = 'none';
+        carpeaterModal.classList.add('hidden');
       });
     });
     
@@ -6860,7 +6855,7 @@ export async function onLoad() {
     carpeaterModal.addEventListener('click', (e) => {
       if (e.target === carpeaterModal) {
         debugLog('[UI] Carpeater modal closed via backdrop click');
-        carpeaterModal.style.display = 'none';
+        carpeaterModal.classList.add('hidden');
       }
     });
   }
