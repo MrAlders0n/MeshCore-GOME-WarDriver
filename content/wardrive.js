@@ -328,7 +328,7 @@ const ADVERT_HEADER = 0x11;                   // Header byte for ADVERT packets 
 
 // RX Packet Filter Configuration
 const MAX_RX_PATH_LENGTH = 9;                 // Maximum path length for RX packets (drop if exceeded to filter corrupted packets)
-const MAX_RX_RSSI_THRESHOLD = -30;            // Maximum RSSI (dBm) for RX packets (drop if ≥ -30 to filter "carpeater" - extremely close/interfering repeaters)
+const MAX_RX_RSSI_THRESHOLD = -50;            // Maximum RSSI (dBm) for RX packets (drop if ≥ -30 to filter "carpeater" - extremely close/interfering repeaters)
 const RX_ALLOWED_CHANNELS = ['#wardriving', 'Public', '#testing', '#ottawa']; // Allowed channels for RX wardriving (Public uses fixed key, hashtag channels use SHA-256 derivation)
 const RX_PRINTABLE_THRESHOLD = 0.80;          // Minimum printable character ratio for GRP_TXT (80%)
 
