@@ -2480,7 +2480,7 @@ async function requestAuth(reason) {
         state.disconnectReason = "app_down";
         return false;
       }
-      return true; // Allow disconnect to procee
+      return true; // Allow disconnect to proceed
     }
 
     // Handle HTTP-level errors with known error codes in body
