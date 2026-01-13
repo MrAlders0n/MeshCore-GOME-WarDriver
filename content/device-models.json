@@ -212,6 +212,22 @@
       "notes": "STM32WLE5 integrated LoRa"
     },
     {
+      "manufacturer": "Seeed Wio Tracker L1",
+      "shortName": "Seeed Wio Tracker L1",
+      "power": 0.3,
+      "platform": "nrf52",
+      "txPower": 22,
+      "notes": "Seeed Wio Tracker L1"
+    },
+    {
+      "manufacturer": "Seeed Tracker T1000",
+      "shortName": "Seeed Tracker T1000",
+      "power": 0.3,
+      "platform": "nrf52",
+      "txPower": 22,
+      "notes": "Seeed Tracker T1000"
+    },
+    {
       "manufacturer": "Xiao C3",
       "shortName": "Xiao C3",
       "power": 0.3,
