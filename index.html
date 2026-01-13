@@ -178,7 +178,7 @@
             <label for="carpeaterFilterEnabled" class="text-sm text-slate-300 cursor-pointer select-none">Ignore ID:</label>
             <input type="text" id="carpeaterIdInput" maxlength="2" placeholder="00" disabled
                    class="w-14 px-2 py-1 text-sm bg-slate-700 text-white border border-slate-600 rounded focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none uppercase font-mono disabled:opacity-50 disabled:cursor-not-allowed">
-            <a href="#" id="carpeaterInfoLink" class="text-xs text-sky-400 hover:text-sky-300 transition-colors ml-1" style="text-decoration: underline;" onclick="event.preventDefault(); console.log('Info clicked'); document.getElementById('carpeaterModal').classList.remove('hidden');">Info</a>
+            <a href="#" id="carpeaterInfoLink" class="text-xs text-sky-400 hover:text-sky-300 transition-colors ml-1" style="text-decoration: underline;">Info</a>
           </div>
         </div>
 
@@ -416,12 +416,12 @@
   </div>
 
   <!-- Carpeater Info Modal -->
-  <div id="carpeaterModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+  <div id="carpeaterModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" style="display: none;">
     <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
       <div class="p-6">
         <div class="flex justify-between items-start mb-4">
           <h3 class="text-lg font-semibold text-slate-200">What is a Carpeater?</h3>
-          <button onclick="document.getElementById('carpeaterModal').classList.add('hidden');" class="text-slate-400 hover:text-slate-200">
+          <button onclick="document.getElementById('carpeaterModal').style.display='none';" class="text-slate-400 hover:text-slate-200" data-modal-close>
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
@@ -440,7 +440,7 @@
           
           <p class="text-xs text-slate-400">Enable the checkbox and enter the 2-character hex ID of your carpeater to exclude it from all wardriving data.</p>
         </div>
-        <button onclick="document.getElementById('carpeaterModal').classList.add('hidden');" class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+        <button onclick="document.getElementById('carpeaterModal').style.display='none';" class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors" data-modal-close>
           Got it
         </button>
       </div>

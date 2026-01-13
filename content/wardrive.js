@@ -6836,6 +6836,35 @@ export async function onLoad() {
     });
   }
 
+  // Carpeater Info link event listener
+  const carpeaterInfoLink = document.getElementById('carpeaterInfoLink');
+  const carpeaterModal = document.getElementById('carpeaterModal');
+  
+  if (carpeaterInfoLink && carpeaterModal) {
+    carpeaterInfoLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      debugLog('[UI] Carpeater Info link clicked - opening modal');
+      carpeaterModal.style.display = 'flex';
+    });
+    
+    // Close modal when clicking close buttons
+    const modalCloseButtons = carpeaterModal.querySelectorAll('[data-modal-close]');
+    modalCloseButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        debugLog('[UI] Carpeater modal close button clicked');
+        carpeaterModal.style.display = 'none';
+      });
+    });
+    
+    // Close modal when clicking backdrop
+    carpeaterModal.addEventListener('click', (e) => {
+      if (e.target === carpeaterModal) {
+        debugLog('[UI] Carpeater modal closed via backdrop click');
+        carpeaterModal.style.display = 'none';
+      }
+    });
+  }
+
   // Prompt location permission early (optional)
   debugLog("[GPS] Requesting initial location permission");
   try { 
