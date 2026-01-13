@@ -6735,12 +6735,23 @@ export async function onLoad() {
     carpeaterInput.value = savedId;
     carpeaterInput.disabled = !savedEnabled; // Enable/disable input based on checkbox
     
+    // Update checkmark visibility on load
+    const checkmarkSvg = document.querySelector('.checkmark-svg');
+    if (checkmarkSvg) {
+      checkmarkSvg.style.opacity = savedEnabled ? '1' : '0';
+    }
+    
     // Checkbox toggle event
     carpeaterCheckbox.addEventListener('change', (e) => {
       const isEnabled = e.target.checked;
       carpeaterInput.disabled = !isEnabled;
       localStorage.setItem('carpeaterFilterEnabled', isEnabled);
       debugLog(`[SETTINGS] Carpeater filter ${isEnabled ? 'enabled' : 'disabled'}`);
+      
+      // Update checkmark visibility
+      if (checkmarkSvg) {
+        checkmarkSvg.style.opacity = isEnabled ? '1' : '0';
+      }
       
       // Focus input when enabled
       if (isEnabled) {
