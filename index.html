@@ -163,18 +163,19 @@
         </div>
 
         <!-- Carpeater Filter -->
-        <div class="mb-4">
-          <label class="block text-sm font-medium text-gray-300 mb-2">Carpeater Filter</label>
-          <div class="flex items-center mb-2">
-            <input type="checkbox" id="carpeaterFilterEnabled" class="mr-2">
-            <label for="carpeaterFilterEnabled" class="text-sm text-gray-300">Ignore specific repeater</label>
+        <div class="space-y-2">
+          <label class="block text-xs font-medium text-slate-400 uppercase tracking-wide">
+            <a href="#" id="carpeaterInfoLink" class="hover:text-sky-400 transition-colors" onclick="event.preventDefault(); document.getElementById('carpeaterModal').classList.remove('hidden');">Carpeater</a> Filter
+          </label>
+          <div class="flex items-center gap-3">
+            <input type="checkbox" id="carpeaterFilterEnabled" class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-emerald-600 focus:ring-emerald-500 focus:ring-offset-slate-800">
+            <label for="carpeaterFilterEnabled" class="text-sm text-slate-300">Ignore specific repeater</label>
           </div>
-          <div id="carpeaterIdInputContainer" class="mt-2 hidden">
-            <label for="carpeaterIdInput" class="block text-xs text-gray-400 mb-1">Repeater ID (2-char hex, e.g., A3):</label>
+          <div id="carpeaterIdInputContainer" class="hidden">
+            <label for="carpeaterIdInput" class="block text-xs text-slate-400 mb-1">Repeater ID (2-char hex):</label>
             <input type="text" id="carpeaterIdInput" maxlength="2" placeholder="00" 
-                   class="w-16 px-2 py-1 text-sm bg-gray-700 text-white border border-gray-600 rounded focus:border-blue-500 focus:outline-none uppercase">
+                   class="w-20 px-3 py-2 text-sm bg-slate-700 text-white border border-slate-600 rounded-lg focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none uppercase font-mono">
           </div>
-          <p class="text-xs text-gray-500 mt-2">Enable to ignore all packets from a specific repeater. RSSI failsafe (≥ -30 dBm) remains active for other repeaters.</p>
         </div>
 
         <!-- Status Info -->
@@ -405,6 +406,38 @@
         </button>
         <button id="overrideModalConfirm" style="flex: 1; padding: 0.5rem 1rem; font-size: 0.875rem; font-weight: 500; color: white; background-color: #10b981; border-radius: 0.5rem; border: none; cursor: pointer; transition: background-color 0.2s;">
           Override
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Carpeater Info Modal -->
+  <div id="carpeaterModal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full border border-slate-700">
+      <div class="p-6">
+        <div class="flex justify-between items-start mb-4">
+          <h3 class="text-lg font-semibold text-slate-200">What is a Carpeater?</h3>
+          <button onclick="document.getElementById('carpeaterModal').classList.add('hidden');" class="text-slate-400 hover:text-slate-200">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="space-y-3 text-sm text-slate-300">
+          <p>A <strong class="text-emerald-400">carpeater</strong> is a repeater that's extremely close to you (usually in your vehicle or pocket), causing interference with wardriving data collection.</p>
+          
+          <div class="bg-slate-900 rounded p-3 border border-slate-700">
+            <p class="font-semibold text-slate-200 mb-2">This filter has two modes:</p>
+            <ul class="space-y-2 text-xs">
+              <li><span class="text-emerald-400">•</span> <strong>User-specified ID:</strong> Ignores all packets from a specific repeater you enter (silent drops, no error log)</li>
+              <li><span class="text-amber-400">•</span> <strong>RSSI failsafe:</strong> Automatically drops extremely strong signals (≥ -30 dBm) from other repeaters (shows error log)</li>
+            </ul>
+          </div>
+          
+          <p class="text-xs text-slate-400">Enable the checkbox and enter the 2-character hex ID of your carpeater to exclude it from all wardriving data.</p>
+        </div>
+        <button onclick="document.getElementById('carpeaterModal').classList.add('hidden');" class="mt-4 w-full px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-colors">
+          Got it
         </button>
       </div>
     </div>
