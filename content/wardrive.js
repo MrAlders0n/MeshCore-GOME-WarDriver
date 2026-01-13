@@ -3841,7 +3841,7 @@ async function handleRxLogging(metadata, data) {
       // Special handling for RSSI failsafe carpeater drops (not user-specified drops)
       if (validation.reason === 'carpeater-rssi') {
         rxLogState.carpeaterRssiDropCount++;
-        updateCarpeaterRssiErrorLog();
+        updateCarpeaterErrorLog();
       }
       
       updateRxLogSummary();
